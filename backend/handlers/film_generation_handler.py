@@ -1,0 +1,557 @@
+"""Film shot generation: queue, request adaptation, capabilities.
+
+The film queue sits ON TOP of the host's single-generation-slot pipeline: jobs
+are drained sequentially by one background worker that delegates each job to
+``VideoGenerationHandler.generate`` — so all three execution paths (WanGP
+bridge, forced LTX API, local pipeline), progress reporting and cancellation
+are reused untouched. Job state is persisted on the shot's version record at
+every transition, so a backend restart leaves shots resumable instead of lost.
+"""
+
+from __future__ import annotations
+
+import logging
+from collections import deque
+from dataclasses import dataclass
+from threading import RLock
+
+from _routes._errors import HTTPError
+from api_types import GenerateVideoRequest, VideoCameraMotion
+from film.film_api_types import (
+    BatchGenerateRequest,
+    BatchGenerateResponse,
+    FilmCapabilitiesResponse,
+    FilmModelCapability,
+    FilmQueueResponse,
+    GenerateShotRequest,
+    QueuedJob,
+    QueueShotResponse,
+)
+from film.film_continuity import check_shot_continuity
+from film.film_models import (
+    FilmProject,
+    FilmShot,
+    ShotVersion,
+    VersionKind,
+    now_ms,
+)
+from film.film_prompt import synthesize_negative_prompt, synthesize_prompt
+from handlers.base import StateHandlerBase
+from handlers.film_handler import FilmHandler
+from handlers.generation_handler import GenerationHandler
+from handlers.video_generation_handler import VideoGenerationHandler, get_allowed_durations
+from runtime_config.model_download_specs import MODEL_FILE_ORDER
+from runtime_config.runtime_config import RuntimeConfig
+from services.interfaces import GpuInfo, TaskRunner, VideoProcessor
+from state.app_state_types import AppState
+
+logger = logging.getLogger(__name__)
+
+# Camera moves the host pipeline understands natively; everything else rides
+# in the prompt text (film_prompt already phrases it) with motion "none".
+_CAMERA_MOVE_TO_HOST: dict[str, VideoCameraMotion] = {
+    "static": "static",
+    "push_in": "dolly_in",
+    "pull_out": "dolly_out",
+    "dolly_left": "dolly_left",
+    "dolly_right": "dolly_right",
+    "tilt_up": "jib_up",
+    "tilt_down": "jib_down",
+    "pan_left": "none",
+    "pan_right": "none",
+    "orbit": "none",
+    "follow": "none",
+}
+
+_LOCAL_RESOLUTIONS = ["540p", "720p", "1080p"]
+_FORCED_API_RESOLUTIONS = ["1080p", "1440p", "2160p"]
+
+# Documented figures from this repository's README: the WanGP bridge runs on
+# "as low as 6 GB VRAM"; the native local LTX pipeline needs ~32 GB.
+_WANGP_MIN_VRAM_GB = 6.0
+_NATIVE_LOCAL_MIN_VRAM_GB = 32.0
+
+
+@dataclass(slots=True)
+class _QueuedShotJob:
+    project_id: str
+    scene_id: str
+    shot_id: str
+    shot_title: str
+    kind: VersionKind
+    version_number: int
+
+    def to_payload(self, status: str) -> QueuedJob:
+        return QueuedJob(
+            project_id=self.project_id,
+            scene_id=self.scene_id,
+            shot_id=self.shot_id,
+            shot_title=self.shot_title,
+            kind=self.kind,
+            version_number=self.version_number,
+            status=status,
+        )
+
+
+class FilmGenerationHandler(StateHandlerBase):
+    def __init__(
+        self,
+        state: AppState,
+        lock: RLock,
+        film_handler: FilmHandler,
+        video_generation_handler: VideoGenerationHandler,
+        generation_handler: GenerationHandler,
+        gpu_info: GpuInfo,
+        video_processor: VideoProcessor,
+        task_runner: TaskRunner,
+        config: RuntimeConfig,
+    ) -> None:
+        super().__init__(state, lock)
+        self._film = film_handler
+        self._video_generation = video_generation_handler
+        self._generation = generation_handler
+        self._gpu_info = gpu_info
+        self._video_processor = video_processor
+        self._task_runner = task_runner
+        self._config = config
+        self._queue: deque[_QueuedShotJob] = deque()
+        self._active: _QueuedShotJob | None = None
+        self._worker_running = False
+
+    # ---- Queueing --------------------------------------------------------
+
+    def queue_shot(
+        self, project_id: str, scene_id: str, shot_id: str, req: GenerateShotRequest
+    ) -> QueueShotResponse:
+        with self.lock:
+            project = self._film.store.load(project_id)
+            scene = project.scene(scene_id)
+            if scene is None:
+                raise HTTPError(404, f"Scene not found: {scene_id}")
+            shot = scene.shot(shot_id)
+            if shot is None:
+                raise HTTPError(404, f"Shot not found: {shot_id}")
+            if any(job.shot_id == shot_id for job in self._queue) or (
+                self._active is not None and self._active.shot_id == shot_id
+            ):
+                raise HTTPError(409, "This shot is already queued or generating")
+
+            warnings = check_shot_continuity(project, scene, shot)
+            if warnings and project.settings.strict_continuity:
+                raise HTTPError(
+                    409,
+                    "Strict continuity is enabled and this shot has continuity warnings: "
+                    + "; ".join(w.message for w in warnings),
+                )
+
+            version = self._create_version(project, shot, req.kind)
+            shot.versions.append(version)
+            shot.status = "queued"
+            shot.updated_at = now_ms()
+            self._film.store.save(project)
+
+            job = _QueuedShotJob(
+                project_id=project_id,
+                scene_id=scene_id,
+                shot_id=shot_id,
+                shot_title=shot.title,
+                kind=req.kind,
+                version_number=version.number,
+            )
+            self._queue.append(job)
+            self._ensure_worker()
+            return QueueShotResponse(
+                status="queued", version_number=version.number, warnings=warnings
+            )
+
+    def queue_batch(self, project_id: str, req: BatchGenerateRequest) -> BatchGenerateResponse:
+        with self.lock:
+            project = self._film.store.load(project_id)
+            targets: list[tuple[str, str]] = []  # (scene_id, shot_id)
+            if req.shot_ids:
+                for shot_id in req.shot_ids:
+                    found = project.find_shot(shot_id)
+                    if found is None:
+                        raise HTTPError(404, f"Shot not found: {shot_id}")
+                    targets.append((found[0].id, found[1].id))
+            elif req.scene_id is not None:
+                scene = project.scene(req.scene_id)
+                if scene is None:
+                    raise HTTPError(404, f"Scene not found: {req.scene_id}")
+                targets.extend(
+                    (scene.id, shot.id) for shot in sorted(scene.shots, key=lambda s: s.order)
+                )
+            else:
+                for scene in sorted(project.scenes, key=lambda s: s.order):
+                    targets.extend(
+                        (scene.id, shot.id) for shot in sorted(scene.shots, key=lambda s: s.order)
+                    )
+
+        queued: list[QueuedJob] = []
+        for scene_id, shot_id in targets:
+            try:
+                response = self.queue_shot(
+                    project_id, scene_id, shot_id, GenerateShotRequest(kind=req.kind)
+                )
+            except HTTPError as exc:
+                if exc.status_code == 409:
+                    continue  # already queued/generating, or strict continuity
+                raise
+            queued.append(
+                QueuedJob(
+                    project_id=project_id,
+                    scene_id=scene_id,
+                    shot_id=shot_id,
+                    shot_title="",
+                    kind=req.kind,
+                    version_number=response.version_number,
+                    status="queued",
+                )
+            )
+        return BatchGenerateResponse(status="queued", queued=queued)
+
+    def get_queue(self) -> FilmQueueResponse:
+        with self.lock:
+            active = self._active.to_payload("generating") if self._active is not None else None
+            pending = [job.to_payload("queued") for job in self._queue]
+        return FilmQueueResponse(active=active, pending=pending)
+
+    def cancel_all(self) -> FilmQueueResponse:
+        with self.lock:
+            drained = list(self._queue)
+            self._queue.clear()
+        for job in drained:
+            self._finish_version(job, status="cancelled", error="Cancelled before start")
+        if self._active is not None:
+            self._generation.cancel_generation()
+        return self.get_queue()
+
+    # ---- Version construction -------------------------------------------
+
+    def _create_version(
+        self, project: FilmProject, shot: FilmShot, kind: VersionKind
+    ) -> ShotVersion:
+        settings = project.settings
+        generation = shot.generation
+
+        scene_and_shot = project.find_shot(shot.id)
+        assert scene_and_shot is not None
+        scene = scene_and_shot[0]
+
+        prompt = shot.visual_prompt if shot.prompt_locked and shot.visual_prompt else synthesize_prompt(project, scene, shot)
+        negative = synthesize_negative_prompt(project, shot)
+
+        if kind == "preview":
+            model = "fast"
+            resolution = settings.preview_resolution or "540p"
+            duration = min(shot.duration_seconds, settings.preview_max_seconds or 4.0)
+        else:
+            model = generation.model or settings.default_model or "fast"
+            resolution = generation.resolution or settings.default_resolution or "720p"
+            duration = shot.duration_seconds
+
+        duration_int = max(1, round(duration))
+        if self._config.force_api_generations and not self._config.wangp_enabled:
+            resolution = resolution if resolution in _FORCED_API_RESOLUTIONS else "1080p"
+            allowed = sorted(get_allowed_durations(f"ltx-2-3-{model}", resolution, generation.fps))
+            duration_int = min(allowed, key=lambda d: abs(d - duration_int))
+
+        wardrobe_snapshot: dict[str, str] = {}
+        for shot_character in shot.characters:
+            asset = project.asset(shot_character.asset_id)
+            if asset is not None:
+                wardrobe_snapshot[asset.id] = asset.wardrobe
+
+        capture_path = shot.capture_path if generation.use_capture_as_reference else ""
+
+        return ShotVersion(
+            number=(max((v.number for v in shot.versions), default=0) + 1),
+            kind=kind,
+            status="queued",
+            prompt=prompt,
+            negative_prompt=negative,
+            model=model,
+            resolution=resolution,
+            fps=generation.fps,
+            duration_seconds=float(duration_int),
+            seed=generation.seed,
+            capture_path=capture_path,
+            wardrobe_snapshot=wardrobe_snapshot,
+        )
+
+    # ---- Worker ----------------------------------------------------------
+
+    def _ensure_worker(self) -> None:
+        """Start the drain worker if it isn't running. Caller holds the lock."""
+        if self._worker_running:
+            return
+        self._worker_running = True
+        self._task_runner.run_background(
+            target=self._drain_queue,
+            task_name="film-generation-queue",
+            on_error=lambda exc: self._mark_worker_stopped(),
+        )
+
+    def _mark_worker_stopped(self) -> None:
+        with self.lock:
+            self._worker_running = False
+
+    def _drain_queue(self) -> None:
+        try:
+            while True:
+                with self.lock:
+                    if not self._queue:
+                        self._active = None
+                        self._worker_running = False
+                        return
+                    job = self._queue.popleft()
+                    self._active = job
+                self._run_job(job)
+        finally:
+            with self.lock:
+                if not self._queue:
+                    self._active = None
+                    self._worker_running = False
+
+    def _run_job(self, job: _QueuedShotJob) -> None:
+        prepared = self._prepare_request(job)
+        if prepared is None:
+            return
+        request, seed = prepared
+
+        # A per-shot seed rides through the host's locked-seed mechanism for
+        # exactly this job; the user's own seed settings are restored after.
+        restore_seed: tuple[bool, int] | None = None
+        if seed is not None:
+            with self.lock:
+                settings = self.state.app_settings
+                restore_seed = (settings.seed_locked, settings.locked_seed)
+                settings.seed_locked = True
+                settings.locked_seed = seed
+        try:
+            response = self._video_generation.generate(request)
+        except HTTPError as exc:
+            self._finish_version(job, status="failed", error=str(exc.detail))
+            return
+        except Exception as exc:  # noqa: BLE001 - queue must survive any job failure
+            self._finish_version(job, status="failed", error=str(exc))
+            return
+        finally:
+            if restore_seed is not None:
+                with self.lock:
+                    settings = self.state.app_settings
+                    settings.seed_locked, settings.locked_seed = restore_seed
+        if response.status == "complete" and response.video_path:
+            self._finish_version(job, status="complete", output_path=response.video_path)
+        elif response.status == "cancelled":
+            self._finish_version(job, status="cancelled", error="Cancelled")
+        else:
+            self._finish_version(job, status="failed", error=f"Generation ended with status {response.status}")
+
+    def _prepare_request(self, job: _QueuedShotJob) -> tuple[GenerateVideoRequest, int | None] | None:
+        with self.lock:
+            project = self._film.store.load(job.project_id)
+            found = project.find_shot(job.shot_id)
+            if found is None:
+                return None
+            _, shot = found
+            version = shot.version(job.version_number)
+            if version is None:
+                return None
+            version.status = "generating"
+            shot.status = "generating"
+            shot.updated_at = now_ms()
+            self._film.store.save(project)
+
+            image_path: str | None = None
+            if version.capture_path:
+                capture = self._film.store.resolve_media_path(job.project_id, version.capture_path)
+                if capture.is_file():
+                    image_path = str(capture)
+            if image_path is None and shot.generation.continue_from_previous:
+                image_path = self._extract_previous_frame(project, shot, job)
+
+            camera_motion = _CAMERA_MOVE_TO_HOST.get(shot.camera_move, "none")
+            aspect_ratio = shot.generation.aspect_ratio
+
+        request = GenerateVideoRequest(
+            prompt=version.prompt,
+            resolution=version.resolution,
+            model=version.model,
+            cameraMotion=camera_motion,
+            negativePrompt=version.negative_prompt,
+            duration=str(int(version.duration_seconds)),
+            fps=str(version.fps),
+            audio="false",
+            imagePath=image_path,
+            audioPath=None,
+            aspectRatio=aspect_ratio,
+        )
+        return request, version.seed
+
+    def _extract_previous_frame(
+        self, project: FilmProject, shot: FilmShot, job: _QueuedShotJob
+    ) -> str | None:
+        previous = project.previous_shot(shot.id)
+        if previous is None or previous.current_version is None:
+            return None
+        version = previous.version(previous.current_version)
+        if version is None or not version.output_path:
+            return None
+        try:
+            cap = self._video_processor.open_video(version.output_path)
+            try:
+                info = self._video_processor.get_video_info(cap)
+                last_index = max(0, info["frame_count"] - 1)
+                frame = self._video_processor.read_frame(cap, last_index)
+                if frame is None:
+                    return None
+                jpeg = self._video_processor.encode_frame_jpeg(frame, quality=92)
+            finally:
+                self._video_processor.release(cap)
+            captures = self._film.store.captures_dir(job.project_id)
+            captures.mkdir(parents=True, exist_ok=True)
+            target = captures / f"{shot.id}-continue.jpg"
+            target.write_bytes(jpeg)
+            return str(target)
+        except Exception as exc:  # noqa: BLE001 - continuation is best-effort
+            logger.warning("Could not extract previous-shot frame: %s", exc)
+            return None
+
+    def _finish_version(
+        self,
+        job: _QueuedShotJob,
+        *,
+        status: str,
+        output_path: str = "",
+        error: str = "",
+    ) -> None:
+        with self.lock:
+            project = self._film.store.load(job.project_id)
+            found = project.find_shot(job.shot_id)
+            if found is None:
+                return
+            _, shot = found
+            version = shot.version(job.version_number)
+            if version is None:
+                return
+            version.status = status  # type: ignore[assignment]
+            version.output_path = output_path
+            version.error = error
+            if status == "complete":
+                shot.current_version = version.number
+                shot.status = "review"
+            elif status == "cancelled":
+                shot.status = "ready" if shot.capture_path else "composed"
+            else:
+                shot.status = "ready" if shot.capture_path else "composed"
+            shot.updated_at = now_ms()
+            self._film.store.save(project)
+
+    # ---- Capabilities ----------------------------------------------------
+
+    def capabilities(self) -> FilmCapabilitiesResponse:
+        gpu_name = self._gpu_info.get_device_name()
+        vram_gb_int = self._gpu_info.get_vram_total_gb()
+        vram_gb = float(vram_gb_int) if vram_gb_int is not None else None
+
+        def fits(minimum: float | None) -> bool | None:
+            if minimum is None or vram_gb is None:
+                return None
+            return vram_gb >= minimum
+
+        models: list[FilmModelCapability] = []
+        if self._config.wangp_enabled:
+            execution_mode = "wangp"
+            models.append(
+                FilmModelCapability(
+                    id=self._config.wangp_video_model_type,
+                    label=f"WanGP · {self._config.wangp_video_model_type}",
+                    modes=["video"],
+                    supports_image_to_video=True,
+                    supports_text_to_video=True,
+                    supports_reference_images=True,
+                    supports_audio=True,
+                    downloaded=True,
+                    download_state="managed_by_wangp",
+                    execution="wangp",
+                    estimated_min_vram_gb=_WANGP_MIN_VRAM_GB,
+                    fits_gpu=fits(_WANGP_MIN_VRAM_GB),
+                    supported_resolutions=_LOCAL_RESOLUTIONS,
+                )
+            )
+            models.append(
+                FilmModelCapability(
+                    id=self._config.wangp_image_model_type,
+                    label=f"WanGP · {self._config.wangp_image_model_type}",
+                    modes=["image"],
+                    supports_image_to_video=False,
+                    supports_text_to_video=False,
+                    supports_reference_images=False,
+                    supports_audio=False,
+                    downloaded=True,
+                    download_state="managed_by_wangp",
+                    execution="wangp",
+                    estimated_min_vram_gb=_WANGP_MIN_VRAM_GB,
+                    fits_gpu=fits(_WANGP_MIN_VRAM_GB),
+                    supported_resolutions=[],
+                )
+            )
+        elif self._config.force_api_generations:
+            execution_mode = "api"
+            for api_id, label in (("fast", "LTX-2.3 Fast (API)"), ("pro", "LTX-2.3 Pro (API)")):
+                models.append(
+                    FilmModelCapability(
+                        id=api_id,
+                        label=label,
+                        modes=["video"],
+                        supports_image_to_video=True,
+                        supports_text_to_video=True,
+                        supports_reference_images=True,
+                        supports_audio=(api_id == "pro"),
+                        downloaded=True,
+                        download_state="cloud",
+                        execution="api",
+                        estimated_min_vram_gb=None,
+                        fits_gpu=None,
+                        supported_resolutions=_FORCED_API_RESOLUTIONS,
+                    )
+                )
+        else:
+            execution_mode = "local"
+            available = self.state.available_files
+            for model_type in MODEL_FILE_ORDER:
+                spec = self._config.spec_for(model_type)
+                downloaded = available.get(model_type) is not None
+                is_video = model_type in ("checkpoint", "upsampler", "text_encoder")
+                minimum = _NATIVE_LOCAL_MIN_VRAM_GB if is_video else None
+                models.append(
+                    FilmModelCapability(
+                        id=model_type,
+                        label=spec.description,
+                        modes=["video"] if is_video else ["image"],
+                        supports_image_to_video=is_video,
+                        supports_text_to_video=is_video,
+                        supports_reference_images=is_video,
+                        supports_audio=False,
+                        downloaded=downloaded,
+                        download_state="downloaded" if downloaded else "not_downloaded",
+                        execution="local",
+                        disk_size_gb=round(spec.expected_size_bytes / 1_000_000_000, 1),
+                        estimated_min_vram_gb=minimum,
+                        fits_gpu=fits(minimum),
+                        supported_resolutions=_LOCAL_RESOLUTIONS if is_video else [],
+                    )
+                )
+
+        return FilmCapabilitiesResponse(
+            gpu_name=gpu_name,
+            gpu_vram_gb=vram_gb,
+            execution_mode=execution_mode,
+            models=models,
+            vram_note=(
+                "VRAM figures are from this app's documentation: the WanGP bridge runs on "
+                "as low as 6 GB VRAM; the native local LTX pipeline targets ~32 GB. "
+                "API models run in the cloud and need no local VRAM."
+            ),
+        )

@@ -14,6 +14,9 @@ from fastapi.responses import JSONResponse
 from starlette.responses import Response as StarletteResponse
 
 from _routes._errors import HTTPError
+from _routes.film import router as film_router
+from _routes.film_director import router as film_director_router
+from _routes.film_generation import router as film_generation_router
 from _routes.generation import router as generation_router
 from _routes.health import router as health_router
 from _routes.ic_lora import router as ic_lora_router
@@ -112,5 +115,8 @@ def create_app(
     app.include_router(retake_router)
     app.include_router(ic_lora_router)
     app.include_router(runtime_policy_router)
+    app.include_router(film_router)
+    app.include_router(film_generation_router)
+    app.include_router(film_director_router)
 
     return app

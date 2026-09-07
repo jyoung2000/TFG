@@ -277,7 +277,10 @@ class WanGPBridge:
         if root_str not in sys.path:
             sys.path.insert(0, root_str)
         module = importlib.import_module("shared.api")
-        module_path = Path(module.__file__).resolve()
+        module_file = module.__file__
+        if module_file is None:
+            raise RuntimeError("shared.api has no __file__; cannot verify the WanGP checkout")
+        module_path = Path(module_file).resolve()
         expected_path = (self._root / "shared" / "api.py").resolve()
         if module_path != expected_path:
             raise RuntimeError(f"shared.api resolved to {module_path}, expected {expected_path}")
@@ -317,7 +320,7 @@ class WanGPBridge:
         job = session.submit_manifest(manifest)
         error_lines: deque[str] = deque(maxlen=40)
         cancel_requested = False
-        console_progress = {"phase": "", "progress": -1, "logged_at": 0.0}
+        console_progress: dict[str, object] = {"phase": "", "progress": -1, "logged_at": 0.0}
 
         while True:
             if is_cancelled() and not cancel_requested:
@@ -548,8 +551,10 @@ class WanGPBridge:
         now = time.monotonic()
         progress = max(0, min(100, int(progress)))
         last_phase = str(tracker.get("phase", ""))
-        last_progress = int(tracker.get("progress", -1))
-        last_logged_at = float(tracker.get("logged_at", 0.0))
+        last_progress_raw = tracker.get("progress", -1)
+        last_progress = last_progress_raw if isinstance(last_progress_raw, int) else -1
+        last_logged_at_raw = tracker.get("logged_at", 0.0)
+        last_logged_at = last_logged_at_raw if isinstance(last_logged_at_raw, (int, float)) else 0.0
         if not force and phase == last_phase and progress == last_progress and now - last_logged_at < 1.0:
             return
 

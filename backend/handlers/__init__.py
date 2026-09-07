@@ -12,6 +12,9 @@ from handlers.retake_handler import RetakeHandler
 from handlers.runtime_policy_handler import RuntimePolicyHandler
 from handlers.settings_handler import SettingsHandler
 from handlers.text_handler import TextHandler
+from handlers.film_director_handler import FilmDirectorHandler
+from handlers.film_generation_handler import FilmGenerationHandler
+from handlers.film_handler import FilmHandler
 from handlers.video_generation_handler import VideoGenerationHandler
 
 __all__ = [
@@ -22,6 +25,9 @@ __all__ = [
     "PipelinesHandler",
     "GenerationHandler",
     "VideoGenerationHandler",
+    "FilmHandler",
+    "FilmGenerationHandler",
+    "FilmDirectorHandler",
     "ImageGenerationHandler",
     "HealthHandler",
     "SuggestGapPromptHandler",

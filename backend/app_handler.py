@@ -8,6 +8,9 @@ from dataclasses import dataclass
 from state.app_settings import AppSettings
 from handlers import (
     DownloadHandler,
+    FilmDirectorHandler,
+    FilmGenerationHandler,
+    FilmHandler,
     GenerationHandler,
     HealthHandler,
     IcLoraHandler,
@@ -228,6 +231,32 @@ class AppHandler:
             ic_lora_model_downloader=ic_lora_model_downloader,
             ic_lora_dir=config.ic_lora_dir,
             outputs_dir=config.outputs_dir,
+        )
+
+        self.film = FilmHandler(
+            state=self.state,
+            lock=self._lock,
+            film_root=config.outputs_dir / "film_projects",
+        )
+
+        self.film_generation = FilmGenerationHandler(
+            state=self.state,
+            lock=self._lock,
+            film_handler=self.film,
+            video_generation_handler=self.video_generation,
+            generation_handler=self.generation,
+            gpu_info=gpu_info,
+            video_processor=video_processor,
+            task_runner=task_runner,
+            config=config,
+        )
+
+        self.film_director = FilmDirectorHandler(
+            state=self.state,
+            lock=self._lock,
+            film_handler=self.film,
+            film_generation_handler=self.film_generation,
+            http=http,
         )
 
         self.downloads.cleanup_downloading_dir()
