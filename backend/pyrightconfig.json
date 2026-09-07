@@ -1,0 +1,21 @@
+{
+  "pythonVersion": "3.12",
+  "typeCheckingMode": "strict",
+  "stubPath": "typings",
+  "venvPath": ".",
+  "venv": ".venv",
+  "exclude": [
+    "tests",
+    ".venv",
+    "node_modules",
+    "dist"
+  ],
+  "reportMissingImports": "warning",
+  "reportMissingTypeStubs": false,
+  "reportUnknownMemberType": true,
+  "reportUnknownVariableType": true,
+  "reportUnknownArgumentType": true,
+  "reportUnknownParameterType": true,
+  "reportUnusedImport": "warning",
+  "reportUnusedVariable": "warning"
+}

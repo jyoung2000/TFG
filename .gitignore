@@ -1,0 +1,79 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build outputs
+dist/
+dist-electron/
+.vite/
+release/
+*.tsbuildinfo
+
+# Python
+backend/.venv/
+backend/__pycache__/
+backend/**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+*.egg
+*.egg-info/
+.eggs/
+
+# Claude Code
+.claude/
+
+# IDE
+.idea/
+.vscode/*
+!.vscode/launch.json
+!.vscode/tasks.json
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# Testing
+coverage/
+.nyc_output/
+
+# Misc
+*.local
+.cache/
+
+# Models (too large for git - auto-downloaded on first run)
+# Keep the README but ignore all model files
+models/*
+!models/README.md
+backend/models/
+
+# Generated outputs (videos and images)
+backend/outputs/*.mp4
+backend/outputs/*.png
+backend/generated/
+
+# Build artifacts
+release/
+python-embed/
+Wan2GP/
+
+# Downloaded during CI for Windows NSIS installer
+resources/vc_redist.x64.exe

@@ -1,0 +1,572 @@
+import { ChildProcess, spawn } from 'child_process'
+import crypto from 'crypto'
+import fs from 'fs'
+import path from 'path'
+import { getAppDataDir } from './app-paths'
+import { getCurrentDir, isDev } from './config'
+import { logger, writeLog } from './logger'
+import { getCurrentLogFilename } from './logging-management'
+import { getPythonDir } from './python-setup'
+import { getMainWindow } from './window'
+
+let pythonProcess: ChildProcess | null = null
+let isIntentionalShutdown = false
+let lastCrashTime = 0
+const CRASH_DEBOUNCE_MS = 10_000
+let startPromise: Promise<void> | null = null
+let takeoverInFlight: Promise<void> | null = null
+
+let backendUrl: string | null = null
+let authToken: string | null = null
+
+export function getBackendUrl(): string | null { return backendUrl }
+export function getAuthToken(): string | null { return authToken }
+
+type BackendOwnership = 'managed' | 'adopted' | null
+
+let backendOwnership: BackendOwnership = null
+
+export interface BackendHealthStatus {
+  status: 'alive' | 'restarting' | 'dead'
+  exitCode?: number | null
+}
+
+let latestBackendHealthStatus: BackendHealthStatus | null = null
+
+function publishBackendHealthStatus(status: BackendHealthStatus): void {
+  latestBackendHealthStatus = status
+  getMainWindow()?.webContents.send('backend-health-status', status)
+}
+
+export function getBackendHealthStatus(): BackendHealthStatus | null {
+  return latestBackendHealthStatus
+}
+
+function getBackendPath(): string {
+  if (isDev) {
+    return path.join(getCurrentDir(), 'backend')
+  }
+  return path.join(process.resourcesPath, 'backend')
+}
+
+function isPortConflictOutput(output: string): boolean {
+  const normalizedOutput = output.toLowerCase()
+  return (
+    normalizedOutput.includes('address already in use') ||
+    normalizedOutput.includes('eaddrinuse') ||
+    normalizedOutput.includes('errno 48')
+  )
+}
+
+async function probeBackendHealth(timeoutMs = 1500, probeUrl?: string): Promise<boolean> {
+  const url = probeUrl || backendUrl
+  if (!url) return false
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const headers: Record<string, string> = {}
+    if (authToken) headers['Authorization'] = `Bearer ${authToken}`
+    const response = await fetch(`${url}/health`, {
+      signal: controller.signal,
+      headers,
+    })
+    return response.ok
+  } catch {
+    return false
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+async function requestAdoptedBackendShutdown(timeoutMs = 2000): Promise<boolean> {
+  if (!backendUrl) return false
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const headers: Record<string, string> = {}
+    if (authToken) headers['Authorization'] = `Bearer ${authToken}`
+    const response = await fetch(`${backendUrl}/api/system/shutdown`, {
+      method: 'POST',
+      signal: controller.signal,
+      headers,
+    })
+    return response.ok
+  } catch {
+    return false
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+async function waitUntilBackendDown(timeoutMs = 8000): Promise<boolean> {
+  const startedAt = Date.now()
+  while (Date.now() - startedAt < timeoutMs) {
+    const healthy = await probeBackendHealth(800)
+    if (!healthy) {
+      return true
+    }
+    await new Promise((resolve) => setTimeout(resolve, 250))
+  }
+  return false
+}
+
+function startOwnershipTakeover(): void {
+  if (takeoverInFlight || backendOwnership !== 'adopted') {
+    return
+  }
+
+  takeoverInFlight = (async () => {
+    try {
+      const shutdownRequested = await requestAdoptedBackendShutdown()
+      if (!shutdownRequested) {
+        throw new Error('Failed to request shutdown for adopted backend')
+      }
+
+      const backendStopped = await waitUntilBackendDown()
+      if (!backendStopped) {
+        throw new Error('Timed out waiting for adopted backend shutdown')
+      }
+
+      backendOwnership = null
+      await startPythonBackend()
+    } catch (error) {
+      logger.error(`Failed to reclaim backend process ownership: ${error}`)
+      backendOwnership = null
+      publishBackendHealthStatus({ status: 'dead' })
+    } finally {
+      takeoverInFlight = null
+    }
+  })()
+}
+
+export function getPythonPath(): string {
+  const overridePython = process.env.LTX_BACKEND_PYTHON?.trim()
+  if (overridePython) {
+    if (fs.existsSync(overridePython)) {
+      logger.info(`Using override Python from LTX_BACKEND_PYTHON: ${overridePython}`)
+      return overridePython
+    }
+    logger.warning(`LTX_BACKEND_PYTHON does not exist: ${overridePython}`)
+  }
+
+  // In production, use bundled/downloaded Python first
+  if (!isDev) {
+    const pythonDir = getPythonDir()
+    const bundledPython = process.platform === 'win32'
+      ? path.join(pythonDir, 'python.exe')
+      : path.join(pythonDir, 'bin', 'python3')
+    if (fs.existsSync(bundledPython)) {
+      logger.info(`Using bundled Python: ${bundledPython}`)
+      return bundledPython
+    }
+  }
+
+  // Check for venv in backend directory
+  const backendPath = getBackendPath()
+  const isWindows = process.platform === 'win32'
+  const venvPython = isWindows
+    ? path.join(backendPath, '.venv', 'Scripts', 'python.exe')
+    : path.join(backendPath, '.venv', 'bin', 'python')
+
+  if (fs.existsSync(venvPython)) {
+    logger.info(`Using venv Python: ${venvPython}`)
+    return venvPython
+  }
+
+  if (isDev) {
+    // In development, try common Python paths
+    const pythonPaths = isWindows
+      ? [
+          'python',
+          'python3',
+          path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python', 'Python311', 'python.exe'),
+          path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python', 'Python312', 'python.exe'),
+        ]
+      : [
+          'python3',
+          'python',
+        ]
+
+    for (const p of pythonPaths) {
+      try {
+        if (fs.existsSync(p)) {
+          return p
+        }
+      } catch {
+        continue
+      }
+    }
+    return isWindows ? 'python' : 'python3'
+  }
+
+  // Fallback
+  return 'python'
+}
+
+export async function startPythonBackend(): Promise<void> {
+  if (startPromise) {
+    return startPromise
+  }
+
+  if (pythonProcess && backendOwnership === 'managed') {
+    publishBackendHealthStatus({ status: 'alive' })
+    return
+  }
+
+  if (backendOwnership === 'adopted') {
+    const adoptedHealthy = await probeBackendHealth()
+    if (adoptedHealthy) {
+      publishBackendHealthStatus({ status: 'alive' })
+      return
+    }
+    backendOwnership = null
+  }
+
+  isIntentionalShutdown = false
+
+  startPromise = new Promise((resolve, reject) => {
+    const pythonPath = getPythonPath()
+    const backendPath = getBackendPath()
+    const mainPy = path.join(backendPath, 'ltx2_server.py')
+
+    logger.info(`Starting Python backend: ${pythonPath} ${mainPy}`)
+
+    // Windows embedded Python's ._pth file suppresses normal sys.path setup —
+    // the script's directory isn't added, so sibling packages (e.g. state/)
+    // can't be found. Use a -c wrapper to fix sys.path before running the server.
+    let pythonArgs: string[]
+    if (!isDev && process.platform === 'win32') {
+      const preamble = `import sys; sys.path.insert(0, r"${backendPath}"); import runpy; runpy.run_path(r"${mainPy}", run_name="__main__")`
+      pythonArgs = ['-u', '-c', preamble]
+    } else {
+      pythonArgs = isDev ? ['-Xfrozen_modules=off', '-u', mainPy] : ['-u', mainPy]
+    }
+
+    // Generate auth token for this backend session
+    authToken = crypto.randomBytes(32).toString('base64url')
+
+    pythonProcess = spawn(pythonPath, pythonArgs, {
+      cwd: backendPath,
+      env: {
+        ...process.env,
+        PYTHONUNBUFFERED: '1',
+        PYTHONNOUSERSITE: '1',
+        // Only pass LTX_PORT when the developer explicitly set it
+        ...(process.env.LTX_PORT ? { LTX_PORT: process.env.LTX_PORT } : {}),
+        LTX_AUTH_TOKEN: authToken,
+        LTX_LOG_FILE: getCurrentLogFilename(),
+        LTX_APP_DATA_DIR: getAppDataDir(),
+        PYTORCH_ENABLE_MPS_FALLBACK: '1',
+        // Set PYTHONHOME for bundled Python on macOS so it finds its stdlib
+        ...(!isDev && process.platform !== 'win32' ? {
+          PYTHONHOME: getPythonDir(),
+        } : {}),
+      },
+      stdio: ['ignore', 'pipe', 'pipe']
+    })
+
+    let started = false
+    let startupSettled = false
+    let sawPortConflict = false
+
+    const settleResolve = () => {
+      if (startupSettled) return
+      startupSettled = true
+      resolve()
+    }
+
+    const settleReject = (error: Error) => {
+      if (startupSettled) return
+      startupSettled = true
+      reject(error)
+    }
+
+    const checkStarted = (output: string) => {
+      if (isPortConflictOutput(output)) {
+        sawPortConflict = true
+      }
+
+      // Check if server has started — parse URL from ready message
+      if (!started) {
+        const readyMatch = output.match(/Server running on (http:\/\/\S+)/)
+        if (readyMatch) {
+          backendUrl = readyMatch[1]
+          started = true
+          backendOwnership = 'managed'
+          publishBackendHealthStatus({ status: 'alive' })
+          settleResolve()
+        } else if (output.includes('Uvicorn running')) {
+          // Fallback for legacy/dev uvicorn output
+          started = true
+          backendOwnership = 'managed'
+          publishBackendHealthStatus({ status: 'alive' })
+          settleResolve()
+        }
+      }
+    }
+
+    let stdoutBuffer = ''
+    let stderrBuffer = ''
+    type ConsoleChannel = 'stdout' | 'stderr'
+    type PythonLogLevel = 'INFO' | 'WARNING' | 'ERROR'
+    const inlineState: Record<ConsoleChannel, { active: boolean, width: number, text: string, level: PythonLogLevel }> = {
+      stdout: { active: false, width: 0, text: '', level: 'INFO' },
+      stderr: { active: false, width: 0, text: '', level: 'ERROR' },
+    }
+
+    const getWriter = (channel: ConsoleChannel) => channel === 'stdout' ? process.stdout : process.stderr
+
+    const isProgressLine = (line: string): boolean =>
+      /\d{1,3}%\|/.test(line) || (/\|\s*\d+(?:\.\d+)?[KMG]?\/\d+(?:\.\d+)?[KMG]?/.test(line) && line.includes('['))
+
+    const isWarningLine = (line: string): boolean => {
+      const lowered = line.toLowerCase()
+      return (
+        lowered.includes('warning') ||
+        lowered.includes('futurewarning') ||
+        lowered.includes('deprecationwarning') ||
+        lowered.includes("falling back to regular http download") ||
+        lowered.includes("'hf_xet' package is not installed")
+      )
+    }
+
+    const isInfoLine = (line: string): boolean => {
+      const lowered = line.toLowerCase()
+      return lowered.startsWith('info:') || lowered.includes(' info:')
+    }
+
+    const classifyPythonLine = (stream: 'stdout' | 'stderr', line: string): { level: PythonLogLevel, prefix: string, channel: ConsoleChannel } => {
+      if (stream === 'stdout') {
+        if (isWarningLine(line)) {
+          return { level: 'WARNING', prefix: '[Python WARNING]', channel: 'stdout' }
+        }
+        return { level: 'INFO', prefix: '[Python]', channel: 'stdout' }
+      }
+      if (isProgressLine(line)) {
+        return { level: 'INFO', prefix: '[Python]', channel: 'stdout' }
+      }
+      if (isWarningLine(line)) {
+        return { level: 'WARNING', prefix: '[Python WARNING]', channel: 'stdout' }
+      }
+      if (isInfoLine(line)) {
+        return { level: 'INFO', prefix: '[Python]', channel: 'stdout' }
+      }
+      return { level: 'ERROR', prefix: '[Python STDERR]', channel: 'stderr' }
+    }
+
+    const finalizeInline = (channel: ConsoleChannel) => {
+      const state = inlineState[channel]
+      if (!state.active) return
+      getWriter(channel).write('\n')
+      if (state.text) {
+        writeLog(state.level, 'Backend', state.text)
+        checkStarted(state.text)
+      }
+      state.active = false
+      state.width = 0
+      state.text = ''
+      state.level = channel === 'stdout' ? 'INFO' : 'ERROR'
+    }
+
+    const finalizeInlineIfNeeded = (channel?: ConsoleChannel) => {
+      if (channel) {
+        finalizeInline(channel)
+        return
+      }
+      finalizeInline('stdout')
+      finalizeInline('stderr')
+    }
+
+    const writeConsoleLine = (stream: 'stdout' | 'stderr', line: string) => {
+      if (!line) return
+      const classification = classifyPythonLine(stream, line)
+      finalizeInlineIfNeeded()
+      getWriter(classification.channel).write(`${classification.prefix} ${line}\n`)
+      writeLog(classification.level, 'Backend', line)
+      checkStarted(line)
+    }
+
+    const writeInlineProgress = (stream: 'stdout' | 'stderr', line: string) => {
+      if (!line) return
+      const classification = classifyPythonLine(stream, line)
+      const otherChannel: ConsoleChannel = classification.channel === 'stdout' ? 'stderr' : 'stdout'
+      finalizeInline(otherChannel)
+      const state = inlineState[classification.channel]
+      const rendered = `${classification.prefix} ${line}`
+      const pad = state.width > rendered.length ? ' '.repeat(state.width - rendered.length) : ''
+      getWriter(classification.channel).write(`\r${rendered}${pad}`)
+      state.active = true
+      state.width = rendered.length
+      state.text = line
+      state.level = classification.level
+      checkStarted(line)
+    }
+
+    const handlePythonOutput = (chunk: string, stream: 'stdout' | 'stderr') => {
+      let buffer = (stream === 'stdout' ? stdoutBuffer : stderrBuffer) + chunk
+      let segmentStart = 0
+
+      for (let index = 0; index < buffer.length; index += 1) {
+        const char = buffer[index]
+        if (char !== '\n' && char !== '\r') continue
+
+        const line = buffer.slice(segmentStart, index).trimEnd()
+        const isCrlf = char === '\r' && buffer[index + 1] === '\n'
+        if (char === '\r' && !isCrlf) {
+          writeInlineProgress(stream, line)
+        } else if (line) {
+          writeConsoleLine(stream, line)
+        } else {
+          finalizeInline(stream)
+        }
+
+        if (isCrlf) {
+          index += 1
+        }
+        segmentStart = index + 1
+      }
+
+      buffer = buffer.slice(segmentStart)
+      if (stream === 'stdout') {
+        stdoutBuffer = buffer
+      } else {
+        stderrBuffer = buffer
+      }
+      checkStarted(chunk)
+    }
+
+    const flushPythonOutput = () => {
+      for (const [stream, buffer] of [['stdout', stdoutBuffer], ['stderr', stderrBuffer]] as const) {
+        const line = buffer.trimEnd()
+        if (line) {
+          writeConsoleLine(stream, line)
+        }
+      }
+      finalizeInlineIfNeeded()
+      stdoutBuffer = ''
+      stderrBuffer = ''
+    }
+
+    pythonProcess.stdout?.on('data', (data: Buffer) => {
+      handlePythonOutput(data.toString(), 'stdout')
+    })
+
+    pythonProcess.stderr?.on('data', (data: Buffer) => {
+      handlePythonOutput(data.toString(), 'stderr')
+    })
+
+    pythonProcess.on('error', (error) => {
+      logger.error(`Failed to start Python backend: ${error}`)
+      if (!started) {
+        backendOwnership = null
+        publishBackendHealthStatus({ status: 'dead' })
+        settleReject(error)
+      }
+    })
+
+    pythonProcess.on('exit', async (code) => {
+      flushPythonOutput()
+      logger.info(`Python backend exited with code ${code}`)
+      pythonProcess = null
+      backendUrl = null
+      authToken = null
+
+      if (!started) {
+        if (isIntentionalShutdown) {
+          isIntentionalShutdown = false
+          backendOwnership = null
+          settleReject(new Error('Python backend stopped during startup'))
+          return
+        }
+
+        if (sawPortConflict && process.env.LTX_PORT) {
+          const explicitUrl = `http://127.0.0.1:${process.env.LTX_PORT}`
+          const healthyExistingBackend = await probeBackendHealth(1500, explicitUrl)
+          if (healthyExistingBackend) {
+            backendUrl = explicitUrl
+            backendOwnership = 'adopted'
+            publishBackendHealthStatus({ status: 'alive' })
+            settleResolve()
+            startOwnershipTakeover()
+            return
+          }
+        }
+
+        backendOwnership = null
+        publishBackendHealthStatus({ status: 'dead', exitCode: code })
+        settleReject(new Error(`Python backend exited during startup with code ${code}`))
+        return
+      }
+
+      if (isIntentionalShutdown) {
+        isIntentionalShutdown = false
+        backendOwnership = null
+        return
+      }
+
+      backendOwnership = 'managed'
+      const now = Date.now()
+      if (now - lastCrashTime < CRASH_DEBOUNCE_MS) {
+        publishBackendHealthStatus({ status: 'dead', exitCode: code })
+        return
+      }
+
+      lastCrashTime = now
+      publishBackendHealthStatus({ status: 'restarting', exitCode: code })
+      try {
+        await startPythonBackend()
+      } catch {
+        publishBackendHealthStatus({ status: 'dead', exitCode: code })
+      }
+    })
+
+    // Timeout after 5 minutes (model loading can take a while on first run)
+    setTimeout(() => {
+      if (startupSettled || started) {
+        return
+      }
+
+      try {
+        pythonProcess?.kill('SIGTERM')
+      } catch {
+        // Process may already be dead.
+      }
+      backendOwnership = null
+      publishBackendHealthStatus({ status: 'dead' })
+      settleReject(new Error('Python backend failed to start within 5 minutes'))
+    }, 300000)
+  })
+
+  try {
+    await startPromise
+  } finally {
+    startPromise = null
+  }
+}
+
+export function stopPythonBackend(): void {
+  if (pythonProcess) {
+    isIntentionalShutdown = true
+    logger.info('Stopping Python backend...')
+    const pid = pythonProcess.pid
+    pythonProcess.kill('SIGTERM')
+    pythonProcess = null
+    // Force kill after 5 seconds if SIGTERM didn't work (PyTorch/uvicorn threads)
+    if (pid) {
+      setTimeout(() => {
+        try {
+          process.kill(pid, 0) // Check if still alive (throws if dead)
+          process.kill(pid, 'SIGKILL')
+        } catch {
+          // Already dead
+        }
+      }, 5000)
+    }
+    return
+  }
+
+  if (backendOwnership === 'adopted') {
+    backendOwnership = null
+    latestBackendHealthStatus = null
+  }
+}

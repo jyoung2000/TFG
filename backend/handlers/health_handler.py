@@ -1,0 +1,161 @@
+"""Health and startup lifecycle handler."""
+
+from __future__ import annotations
+
+from threading import RLock
+from typing import TYPE_CHECKING
+
+from api_types import GpuInfoResponse, GpuTelemetry, HealthResponse, ModelStatusItem
+from handlers.base import StateHandlerBase, with_state_lock
+from handlers.models_handler import ModelsHandler
+from handlers.pipelines_handler import PipelinesHandler
+from logging_policy import log_background_exception
+from services.interfaces import GpuInfo
+from services.wangp_bridge import WanGPBridge
+from state.app_state_types import AppState, GpuSlot, StartupError, StartupLoading, StartupPending, StartupReady, VideoPipelineState, VideoPipelineWarmth
+
+if TYPE_CHECKING:
+    from runtime_config.runtime_config import RuntimeConfig
+
+
+class HealthHandler(StateHandlerBase):
+    def __init__(
+        self,
+        state: AppState,
+        lock: RLock,
+        models_handler: ModelsHandler,
+        pipelines_handler: PipelinesHandler,
+        gpu_info: GpuInfo,
+        config: RuntimeConfig,
+        use_sage_attention: bool,
+        wangp_bridge: WanGPBridge,
+    ) -> None:
+        super().__init__(state, lock)
+        self._models = models_handler
+        self._pipelines = pipelines_handler
+        self._gpu_info = gpu_info
+        self._config = config
+        self._use_sage_attention = use_sage_attention
+        self._wangp_bridge = wangp_bridge
+
+    def get_health(self) -> HealthResponse:
+        if self._config.wangp_enabled:
+            bridge = self._wangp_bridge.get_status()
+            return HealthResponse(
+                status="ok",
+                models_loaded=bridge.available,
+                active_model="wangp" if bridge.available else None,
+                gpu_info=GpuTelemetry(**self._gpu_info.get_gpu_info()),
+                sage_attention=self._use_sage_attention,
+                models_status=[
+                    ModelStatusItem(
+                        id="fast",
+                        name="WanGP LTX-2.3 Distilled",
+                        loaded=bridge.available,
+                        downloaded=bridge.available,
+                    ),
+                ],
+            )
+
+        active_model: str | None = None
+        models_loaded = False
+
+        with self._lock:
+            match self.state.gpu_slot:
+                case GpuSlot(active_pipeline=VideoPipelineState(pipeline=pipeline)):
+                    active_model = pipeline.pipeline_kind
+                    models_loaded = True
+                case _:
+                    pass
+
+        files = self._models.refresh_available_files()
+
+        return HealthResponse(
+            status="ok",
+            models_loaded=models_loaded,
+            active_model=active_model,
+            gpu_info=GpuTelemetry(**self._gpu_info.get_gpu_info()),
+            sage_attention=self._use_sage_attention,
+            models_status=[
+                ModelStatusItem(
+                    id="fast",
+                    name="LTX-2 Fast (Distilled)",
+                    loaded=models_loaded,
+                    downloaded=files["checkpoint"] is not None,
+                ),
+            ],
+        )
+
+    def get_gpu_info(self) -> GpuInfoResponse:
+        return GpuInfoResponse(
+            cuda_available=self._gpu_info.get_cuda_available(),
+            mps_available=self._gpu_info.get_mps_available(),
+            gpu_available=self._gpu_info.get_gpu_available(),
+            gpu_name=self._gpu_info.get_device_name(),
+            vram_gb=self._gpu_info.get_vram_total_gb(),
+            gpu_info=GpuTelemetry(**self._gpu_info.get_gpu_info()),
+        )
+
+    @with_state_lock
+    def set_startup_pending(self, message: str) -> None:
+        self.state.startup = StartupPending(message=message)
+
+    @with_state_lock
+    def set_startup_loading(self, step: str, progress: float) -> None:
+        self.state.startup = StartupLoading(current_step=step, progress=progress)
+
+    @with_state_lock
+    def set_startup_ready(self) -> None:
+        self.state.startup = StartupReady()
+
+    @with_state_lock
+    def set_startup_error(self, error: str) -> None:
+        self.state.startup = StartupError(error=error)
+
+    def default_warmup(self) -> None:
+        try:
+            if self._config.wangp_enabled:
+                status = self._wangp_bridge.get_status()
+                if status.available:
+                    self.set_startup_ready()
+                else:
+                    self.set_startup_error(status.reason or "WanGP bridge is unavailable")
+                return
+
+            self.set_startup_loading("Checking models", 5)
+            status = self._models.get_models_status()
+            if not status.all_downloaded:
+                self.set_startup_pending("Models not downloaded. User needs to download via app.")
+                return
+
+            if not self.state.app_settings.load_on_startup:
+                self.set_startup_ready()
+                return
+
+            if self._config.force_api_generations:
+                self.set_startup_ready()
+                return
+
+            self.set_startup_loading("Loading Fast pipeline", 30)
+            self._pipelines.load_gpu_pipeline("fast", should_warm=False)
+
+            self.set_startup_loading("Warming Fast pipeline", 60)
+            self._pipelines.warmup_pipeline("fast")
+            with self._lock:
+                match self.state.gpu_slot:
+                    case GpuSlot(active_pipeline=VideoPipelineState() as state):
+                        state.warmth = VideoPipelineWarmth.WARM
+                    case _:
+                        pass
+
+            zit_models_path = self._config.model_path("zit")
+            zit_exists = zit_models_path.exists() and any(zit_models_path.iterdir())
+            if zit_exists:
+                self.set_startup_loading("Preloading Z-Image-Turbo to CPU", 85)
+                if self.state.cpu_slot is None:
+                    self._pipelines.preload_zit_to_cpu()
+
+            self.set_startup_ready()
+        except Exception as exc:
+            log_background_exception("health-default-warmup", exc)
+            self.set_startup_error(str(exc))
