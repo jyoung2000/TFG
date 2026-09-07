@@ -38,6 +38,13 @@ DEFAULT_ALLOWED_ORIGINS: list[str] = [
 ]
 
 
+def _is_media_path(path: str) -> bool:
+    """True for the read-only film media endpoints that <img>/<video> load."""
+    if path == "/api/film/output":
+        return True
+    return path.startswith("/api/film/projects/") and path.endswith("/media")
+
+
 def create_app(
     *,
     handler: "AppHandler",
@@ -73,6 +80,11 @@ def create_app(
             if _token_matches(request.query_params.get("token", "")):
                 return await call_next(request)
             return JSONResponse(status_code=401, content={"error": "Unauthorized"})
+        # Read-only media GETs are loaded via <img>/<video> tags, which cannot
+        # send an Authorization header — accept the query token there only.
+        if request.method == "GET" and _is_media_path(request.url.path):
+            if _token_matches(request.query_params.get("token", "")):
+                return await call_next(request)
         # HTTP: Bearer or Basic auth
         auth_header = request.headers.get("authorization", "")
         if auth_header.startswith("Bearer ") and _token_matches(auth_header[7:]):

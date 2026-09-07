@@ -1,8 +1,9 @@
-import { ArrowLeft, Sparkles, Film } from 'lucide-react'
+import { ArrowLeft, Clapperboard, Sparkles, Film } from 'lucide-react'
 import { useProjects } from '../contexts/ProjectContext'
 import { LtxLogo } from '../components/LtxLogo'
 import { Button } from '../components/ui/button'
 import { GenSpace } from './GenSpace'
+import { FilmSpace } from './film/FilmSpace'
 import { VideoEditor } from './VideoEditor'
 import type { ProjectTab } from '../types/project'
 
@@ -22,6 +23,7 @@ export function Project() {
   
   const tabs: { id: ProjectTab; label: string; icon: React.ReactNode }[] = [
     { id: 'gen-space', label: 'Gen Space', icon: <Sparkles className="h-4 w-4" /> },
+    { id: 'storyboard', label: 'Storyboard', icon: <Clapperboard className="h-4 w-4" /> },
     { id: 'video-editor', label: 'Video Editor', icon: <Film className="h-4 w-4" /> },
   ]
   
@@ -70,6 +72,9 @@ export function Project() {
       <main className="flex-1 overflow-hidden relative">
         <div className={`absolute inset-0 ${currentTab === 'gen-space' ? '' : 'invisible pointer-events-none'}`}>
           <GenSpace />
+        </div>
+        <div className={`absolute inset-0 ${currentTab === 'storyboard' ? '' : 'invisible pointer-events-none'}`}>
+          <FilmSpace />
         </div>
         <div className={`absolute inset-0 ${currentTab === 'video-editor' ? '' : 'invisible pointer-events-none'}`}>
           <VideoEditor />

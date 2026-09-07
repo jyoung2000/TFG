@@ -72,3 +72,42 @@ def test_websocket_with_token_query_param(test_state):
         )
         # The route may not exist, but auth should pass (not 401)
         assert response.status_code != 401
+
+
+class TestMediaQueryToken:
+    """Film media GETs are loaded via <img>/<video> tags, which cannot send an
+    Authorization header — they accept the shared token as a query param."""
+
+    def test_media_get_accepts_query_token(self, test_state):
+        app = create_app(handler=test_state, auth_token="test-secret")
+        with TestClient(app) as client:
+            response = client.get(
+                "/api/film/projects/p1/media",
+                params={"path": "captures/none.png", "token": "test-secret"},
+            )
+            # Authenticated (404 = passed auth, media simply doesn't exist).
+            assert response.status_code == 404
+
+    def test_media_get_rejects_wrong_query_token(self, test_state):
+        app = create_app(handler=test_state, auth_token="test-secret")
+        with TestClient(app) as client:
+            response = client.get(
+                "/api/film/projects/p1/media",
+                params={"path": "captures/none.png", "token": "wrong"},
+            )
+            assert response.status_code == 401
+
+    def test_query_token_not_accepted_on_other_routes(self, test_state):
+        app = create_app(handler=test_state, auth_token="test-secret")
+        with TestClient(app) as client:
+            response = client.get("/api/film/queue", params={"token": "test-secret"})
+            assert response.status_code == 401
+
+    def test_output_route_accepts_query_token(self, test_state):
+        app = create_app(handler=test_state, auth_token="test-secret")
+        with TestClient(app) as client:
+            response = client.get(
+                "/api/film/output",
+                params={"path": str(test_state.config.outputs_dir / "missing.mp4"), "token": "test-secret"},
+            )
+            assert response.status_code == 404

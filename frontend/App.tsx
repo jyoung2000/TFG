@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Loader2, AlertCircle, Settings, FileText } from 'lucide-react'
 import { backendFetch } from './lib/backend'
 import { ProjectProvider, useProjects } from './contexts/ProjectContext'
+import { FilmProvider } from './contexts/FilmContext'
 import { KeyboardShortcutsProvider } from './contexts/KeyboardShortcutsContext'
 import { AppSettingsProvider, useAppSettings } from './contexts/AppSettingsContext'
 import { KeyboardShortcutsModal } from './components/KeyboardShortcutsModal'
@@ -523,12 +524,14 @@ function AppContent() {
 export default function App() {
   return (
     <ProjectProvider>
-      <KeyboardShortcutsProvider>
-        <AppSettingsProvider>
-          <AppContent />
-          <KeyboardShortcutsModal />
-        </AppSettingsProvider>
-      </KeyboardShortcutsProvider>
+      <FilmProvider>
+        <KeyboardShortcutsProvider>
+          <AppSettingsProvider>
+            <AppContent />
+            <KeyboardShortcutsModal />
+          </AppSettingsProvider>
+        </KeyboardShortcutsProvider>
+      </FilmProvider>
     </ProjectProvider>
   )
 }
