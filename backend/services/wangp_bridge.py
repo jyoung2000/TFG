@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib
+import json
 import logging
 import re
 import sys
@@ -12,7 +13,7 @@ from collections import deque
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 logger = logging.getLogger(__name__)
 
@@ -130,6 +131,58 @@ class WanGPBridge:
             root=self._root,
             python_executable=self._python,
         )
+
+    def list_model_definitions(self) -> list[dict[str, object]]:
+        """Model definitions from the WanGP checkout (``defaults/*.json``) —
+        the same files WanGP itself loads — plus whether their weights are
+        already present under ``ckpts``. Never a hardcoded catalog."""
+        if self._root is None:
+            return []
+        defaults = self._root / "defaults"
+        if not defaults.is_dir():
+            return []
+        ckpts = self._root / "ckpts"
+        existing: set[str] = set()
+        if ckpts.is_dir():
+            try:
+                existing = {p.name for p in ckpts.rglob("*") if p.is_file()}
+            except OSError:
+                existing = set()
+        definitions: list[dict[str, object]] = []
+        for path in sorted(defaults.glob("*.json")):
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if not isinstance(raw, dict):
+                continue
+            model = cast(dict[str, object], raw).get("model")
+            if not isinstance(model, dict):
+                continue
+            model_dict = cast(dict[str, object], model)
+            urls_raw = model_dict.get("URLs", [])
+            urls: list[str] = []
+            if isinstance(urls_raw, list):
+                urls = [str(u) for u in cast(list[object], urls_raw) if isinstance(u, str)]
+            elif isinstance(urls_raw, str):
+                urls = [urls_raw]
+            filenames = [u.rsplit("/", 1)[-1] for u in urls]
+            installed = any(name in existing for name in filenames) if filenames else False
+            architecture = str(model_dict.get("architecture", "") or "")
+            definitions.append(
+                {
+                    "id": path.stem,
+                    "name": str(model_dict.get("name", path.stem) or path.stem),
+                    "architecture": architecture,
+                    "description": str(model_dict.get("description", "") or ""),
+                    "urls": urls,
+                    "installed": installed,
+                    "quantized_variants": sorted({"int8" if "int8" in n else "fp8" if "fp8" in n else "nvfp4" if "nvfp4" in n else "" for n in filenames} - {""}),
+                    "default_resolution": str(cast(dict[str, object], raw).get("resolution", "") or ""),
+                    "default_steps": cast(dict[str, object], raw).get("num_inference_steps"),
+                }
+            )
+        return definitions
 
     def generate_video(
         self,

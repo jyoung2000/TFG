@@ -249,6 +249,7 @@ class AppHandler:
             video_processor=video_processor,
             task_runner=task_runner,
             config=config,
+            wangp_bridge=self.wangp_bridge,
         )
 
         self.film_director = FilmDirectorHandler(

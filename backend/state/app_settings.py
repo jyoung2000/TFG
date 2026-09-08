@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, Field, create_model, field_validator
 # not to persist the key on disk.
 OPENROUTER_API_KEY_ENV = "OPENROUTER_API_KEY"
 
-DirectorProvider = Literal["auto", "gemini", "openrouter"]
+DirectorProvider = Literal["auto", "gemini", "openrouter", "openai_compatible"]
 
 
 def _to_camel_case(field_name: str) -> str:
@@ -98,6 +98,11 @@ class AppSettings(SettingsBaseModel):
     openrouter_api_key: str = ""
     director_provider: DirectorProvider = "auto"
     openrouter_models: OpenRouterRoleModels = Field(default_factory=OpenRouterRoleModels)
+    # Any OpenAI-compatible endpoint (LM Studio, vLLM, gateways). The key is
+    # optional because local servers usually need none.
+    openai_compatible_base_url: str = ""
+    openai_compatible_api_key: str = ""
+    openai_compatible_model: str = ""
     seed_locked: bool = False
     locked_seed: int = 42
 
@@ -187,6 +192,9 @@ class SettingsResponse(SettingsBaseModel):
     openrouter_key_source: str = "none"
     director_provider: DirectorProvider = "auto"
     openrouter_models: OpenRouterRoleModels = Field(default_factory=OpenRouterRoleModels)
+    openai_compatible_base_url: str = ""
+    has_openai_compatible_api_key: bool = False
+    openai_compatible_model: str = ""
     seed_locked: bool = False
     locked_seed: int = 42
 
@@ -197,6 +205,8 @@ def to_settings_response(settings: AppSettings) -> SettingsResponse:
     fal_key = data.pop("fal_api_key", "")
     gemini_key = data.pop("gemini_api_key", "")
     data.pop("openrouter_api_key", "")
+    openai_key = data.pop("openai_compatible_api_key", "")
+    data["has_openai_compatible_api_key"] = bool(openai_key)
     data["has_ltx_api_key"] = bool(ltx_key)
     data["has_fal_api_key"] = bool(fal_key)
     data["has_gemini_api_key"] = bool(gemini_key)

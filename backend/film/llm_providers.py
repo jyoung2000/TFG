@@ -258,13 +258,46 @@ def openrouter_validate_key(http: HTTPClient, api_key: str, *, timeout: int = 20
         raise HTTPError(502, "OpenRouter returned an unexpected key payload") from exc
 
 
-class OpenRouterProvider(LLMProvider):
-    name = "openrouter"
+class OpenAICompatibleProvider(LLMProvider):
+    """Chat-completions provider for any OpenAI-compatible endpoint (OpenRouter,
+    LM Studio, vLLM, local gateways). ``base_url`` is the ``/v1`` root."""
 
-    def __init__(self, http: HTTPClient, api_key: str, model: str) -> None:
+    name = "openai_compatible"
+
+    def __init__(self, http: HTTPClient, api_key: str, model: str, *, base_url: str, name: str | None = None) -> None:
         self._http = http
         self._api_key = api_key
         self.model = model
+        self.base_url = base_url.rstrip("/")
+        if name:
+            self.name = name
+
+    @property
+    def chat_url(self) -> str:
+        return f"{self.base_url}/chat/completions"
+
+    def _headers(self) -> dict[str, str]:
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+        return headers
+
+    def _require_key(self) -> None:
+        # Local OpenAI-compatible servers often need no key; only OpenRouter insists.
+        return
+
+    def _raise_for_status(self, status_code: int, text: str) -> None:
+        if status_code == 200:
+            return
+        detail = text.strip()[:400]
+        label = self.name.upper()
+        if status_code == 401:
+            raise HTTPError(401, f"{label}_KEY_INVALID: the provider rejected the API key")
+        if status_code == 404:
+            raise HTTPError(404, f"{label}_MODEL_NOT_FOUND: {detail or 'model not available'}")
+        if status_code == 429:
+            raise HTTPError(429, f"{label}_RATE_LIMITED: rate limit hit, retry shortly")
+        raise HTTPError(502 if status_code >= 500 else status_code, f"{self.name} API error ({status_code}): {detail}")
 
     @staticmethod
     def _encode_messages(messages: Sequence[LLMMessage]) -> list[JSONValue]:
@@ -293,6 +326,33 @@ class OpenRouterProvider(LLMProvider):
             encoded.append(item)
         return encoded
 
+    def list_models(self, *, timeout: int = 30) -> list[OpenRouterModel]:
+        try:
+            response = self._http.get(f"{self.base_url}/models", headers=self._headers(), timeout=timeout)
+        except HttpTimeoutError as exc:
+            raise HTTPError(504, f"{self.name} model list request timed out") from exc
+        except Exception as exc:
+            raise HTTPError(502, f"{self.name} unreachable: {exc}") from exc
+        self._raise_for_status(response.status_code, response.text)
+        try:
+            parsed = _ORModelsResponse.model_validate(response.json())
+        except (ValidationError, ValueError) as exc:
+            raise HTTPError(502, f"{self.name} returned an unexpected model list payload") from exc
+        models = [
+            OpenRouterModel(
+                id=entry.id,
+                name=entry.name or entry.id,
+                context_length=entry.context_length,
+                prompt_price=entry.pricing.prompt,
+                completion_price=entry.pricing.completion,
+                supports_tools="tools" in set(entry.supported_parameters) or "tool_choice" in set(entry.supported_parameters),
+                supports_json="response_format" in set(entry.supported_parameters) or "structured_outputs" in set(entry.supported_parameters),
+            )
+            for entry in parsed.data
+        ]
+        models.sort(key=lambda m: m.id)
+        return models
+
     def chat(
         self,
         messages: Sequence[LLMMessage],
@@ -301,8 +361,7 @@ class OpenRouterProvider(LLMProvider):
         json_mode: bool = False,
         timeout: int = 90,
     ) -> LLMReply:
-        if not self._api_key:
-            raise HTTPError(400, "OPENROUTER_KEY_MISSING: no OpenRouter API key configured")
+        self._require_key()
         payload: dict[str, JSONValue] = {
             "model": self.model,
             "messages": self._encode_messages(messages),
@@ -324,25 +383,20 @@ class OpenRouterProvider(LLMProvider):
         elif json_mode:
             payload["response_format"] = {"type": "json_object"}
         try:
-            response = self._http.post(
-                OPENROUTER_CHAT_URL,
-                headers=_openrouter_headers(self._api_key),
-                json_payload=payload,
-                timeout=timeout,
-            )
+            response = self._http.post(self.chat_url, headers=self._headers(), json_payload=payload, timeout=timeout)
         except HttpTimeoutError as exc:
-            raise HTTPError(504, "OpenRouter request timed out") from exc
+            raise HTTPError(504, f"{self.name} request timed out") from exc
         except Exception as exc:
-            raise HTTPError(502, f"OpenRouter unreachable: {exc}") from exc
-        _raise_for_openrouter_status(response.status_code, response.text)
+            raise HTTPError(502, f"{self.name} unreachable: {exc}") from exc
+        self._raise_for_status(response.status_code, response.text)
         try:
             parsed = _ORChatResponse.model_validate(response.json())
         except (ValidationError, ValueError) as exc:
-            raise HTTPError(502, "OpenRouter returned an unexpected chat payload") from exc
+            raise HTTPError(502, f"{self.name} returned an unexpected chat payload") from exc
         if parsed.error is not None and parsed.error.message:
-            raise HTTPError(502, f"OpenRouter error: {parsed.error.message[:300]}")
+            raise HTTPError(502, f"{self.name} error: {parsed.error.message[:300]}")
         if not parsed.choices:
-            raise HTTPError(502, "OpenRouter returned no choices")
+            raise HTTPError(502, f"{self.name} returned no choices")
         message = parsed.choices[0].message
         calls = [
             LLMToolCall(
@@ -359,6 +413,23 @@ class OpenRouterProvider(LLMProvider):
             else None
         )
         return LLMReply(text=message.content or "", tool_calls=calls, model=parsed.model or self.model, usage=usage)
+
+
+class OpenRouterProvider(OpenAICompatibleProvider):
+    name = "openrouter"
+
+    def __init__(self, http: HTTPClient, api_key: str, model: str) -> None:
+        super().__init__(http, api_key, model, base_url=OPENROUTER_BASE_URL, name="openrouter")
+
+    def _headers(self) -> dict[str, str]:
+        return _openrouter_headers(self._api_key)
+
+    def _require_key(self) -> None:
+        if not self._api_key:
+            raise HTTPError(400, "OPENROUTER_KEY_MISSING: no OpenRouter API key configured")
+
+    def _raise_for_status(self, status_code: int, text: str) -> None:
+        _raise_for_openrouter_status(status_code, text)
 
 
 # ---------------------------------------------------------------------------

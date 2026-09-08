@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 from collections.abc import Callable
 from threading import RLock
@@ -64,6 +65,10 @@ from film.film_models import (
     CAMERA_MOVE_LABELS,
     COMPOSITION_LABELS,
     SHOT_SIZE_LABELS,
+    CompositionKeyframe,
+    CompositionObject,
+    CompositionScene,
+    CompositionTransform,
     FilmAsset,
     FilmProject,
     FilmScene,
@@ -80,6 +85,7 @@ from film.llm_providers import (
     LLMMessage,
     LLMProvider,
     LLMReply,
+    OpenAICompatibleProvider,
     OpenRouterModel,
     OpenRouterProvider,
     ToolSpec,
@@ -411,6 +417,133 @@ def _build_tool_specs() -> list[ToolSpec]:
             "Alias of generate_shot.",
             _schema({"shot_id": shot_id, "kind": _s("preview or final", ["preview", "final"])}, ["shot_id"]),
         ),
+        ToolSpec("generate_preview", "Queue a fast preview render of a shot.", _schema({"shot_id": shot_id}, ["shot_id"])),
+        ToolSpec("generate_final", "Queue a final-quality render of a shot.", _schema({"shot_id": shot_id}, ["shot_id"])),
+        ToolSpec("duplicate_shot", "Duplicate a shot (composition copied, versions reset).", _schema({"shot_id": shot_id}, ["shot_id"])),
+        ToolSpec("get_composition", "Alias of get_shot_composition.", _schema({"shot_id": shot_id}, ["shot_id"])),
+        ToolSpec("update_character", "Update a character asset (alias of update_asset).", _schema({"asset_id": _s("Asset id"), **_ASSET_PROPS}, ["asset_id"])),
+        ToolSpec("update_location", "Update a location asset (alias of update_asset).", _schema({"asset_id": _s("Asset id"), **_ASSET_PROPS}, ["asset_id"])),
+        ToolSpec("update_prop", "Update a prop asset (alias of update_asset).", _schema({"asset_id": _s("Asset id"), **_ASSET_PROPS}, ["asset_id"])),
+        ToolSpec(
+            "assign_prop",
+            "Put a prop in a shot (by name or asset_id); a placeholder appears in the composer.",
+            _schema({"shot_id": shot_id, "name": _s("Prop name"), "asset_id": _s("Prop asset id")}, ["shot_id"]),
+        ),
+        ToolSpec("assign_location", "Alias of set_location.", _schema({"shot_id": shot_id, "name": _s("Location name"), "asset_id": _s("Location asset id")}, ["shot_id"])),
+        ToolSpec("set_shot_type", "Set the shot size.", _schema({"shot_id": shot_id, "shot_size": _s("Shot size", _SHOT_SIZES)}, ["shot_id", "shot_size"])),
+        ToolSpec("set_camera_angle", "Set the camera angle.", _schema({"shot_id": shot_id, "camera_angle": _s("Camera angle", _ANGLES)}, ["shot_id", "camera_angle"])),
+        ToolSpec("set_camera_elevation", "Set the camera elevation.", _schema({"shot_id": shot_id, "camera_elevation": _s("Camera elevation", _ELEVATIONS)}, ["shot_id", "camera_elevation"])),
+        ToolSpec("set_composition", "Set the frame composition.", _schema({"shot_id": shot_id, "composition": _s("Composition", _COMPOSITIONS)}, ["shot_id", "composition"])),
+        ToolSpec(
+            "set_ots",
+            "Configure an over-the-shoulder relationship: which character is foreground, which is the subject, and which shoulder.",
+            _schema(
+                {
+                    "shot_id": shot_id,
+                    "foreground": _s("Foreground character name or asset_id (camera behind them)"),
+                    "subject": _s("Subject character name or asset_id (looked toward)"),
+                    "shoulder": _s("Shoulder the camera looks over", ["left", "right"]),
+                },
+                ["shot_id", "foreground", "subject"],
+            ),
+        ),
+        ToolSpec(
+            "set_negative_prompt",
+            "Set the negative prompt for a shot.",
+            _schema({"shot_id": shot_id, "negative_prompt": _s("Negative prompt")}, ["shot_id", "negative_prompt"]),
+        ),
+        ToolSpec(
+            "position_object",
+            "Place a composer object (character by name/asset_id, or object id) on the ground plane. x = screen right/left in metres, z = toward camera; hints like 'foreground left' are accepted.",
+            _schema(
+                {
+                    "shot_id": shot_id,
+                    "target": _s("Character name, asset_id, or object id"),
+                    "x": _n("X position (metres)"),
+                    "y": _n("Y position (metres, usually 0)"),
+                    "z": _n("Z position (metres)"),
+                    "hint": _s("Placement hint", ["foreground left", "foreground right", "background left", "background right", "center", "left", "right"]),
+                },
+                ["shot_id", "target"],
+            ),
+        ),
+        ToolSpec(
+            "rotate_object",
+            "Rotate a composer object around the vertical axis (degrees; 0 faces the front camera).",
+            _schema({"shot_id": shot_id, "target": _s("Character name, asset_id, or object id"), "yaw_degrees": _n("Yaw in degrees")}, ["shot_id", "target", "yaw_degrees"]),
+        ),
+        ToolSpec(
+            "scale_object",
+            "Uniformly scale a composer object.",
+            _schema({"shot_id": shot_id, "target": _s("Character name, asset_id, or object id"), "scale": _n("Uniform scale factor")}, ["shot_id", "target", "scale"]),
+        ),
+        ToolSpec(
+            "update_pose",
+            "Set individual joint rotations (degrees) on a character in the composer.",
+            _schema(
+                {
+                    "shot_id": shot_id,
+                    "target": _s("Character name, asset_id, or object id"),
+                    "joints": {"type": "object", "description": "joint name -> [x, y, z] degrees", "additionalProperties": {"type": "array", "items": {"type": "number"}}},
+                },
+                ["shot_id", "target", "joints"],
+            ),
+        ),
+        ToolSpec(
+            "set_camera",
+            "Manually position the shot camera (switches the shot to manual camera mode).",
+            _schema(
+                {
+                    "shot_id": shot_id,
+                    "x": _n("Camera X"),
+                    "y": _n("Camera Y (height)"),
+                    "z": _n("Camera Z"),
+                    "look_at": _s("Character name / asset_id / object id to aim at"),
+                    "fov_deg": _n("Field of view in degrees"),
+                },
+                ["shot_id", "x", "y", "z"],
+            ),
+        ),
+        ToolSpec(
+            "add_keyframe",
+            "Add a motion keyframe for the camera or an object at a time (seconds).",
+            _schema(
+                {
+                    "shot_id": shot_id,
+                    "target": _s("'camera', or a character name / asset_id / object id"),
+                    "time": _n("Time in seconds"),
+                    "x": _n("X"),
+                    "y": _n("Y"),
+                    "z": _n("Z"),
+                    "yaw_degrees": _n("Yaw in degrees (objects) / rotation Y (camera)"),
+                    "fov_deg": _n("Camera FOV at this keyframe"),
+                },
+                ["shot_id", "target", "time"],
+            ),
+        ),
+        ToolSpec(
+            "update_keyframe",
+            "Update an existing keyframe by id.",
+            _schema(
+                {
+                    "shot_id": shot_id,
+                    "keyframe_id": _s("Keyframe id"),
+                    "time": _n("Time in seconds"),
+                    "x": _n("X"),
+                    "y": _n("Y"),
+                    "z": _n("Z"),
+                    "yaw_degrees": _n("Yaw in degrees"),
+                    "fov_deg": _n("FOV"),
+                },
+                ["shot_id", "keyframe_id"],
+            ),
+        ),
+        ToolSpec("delete_keyframe", "Delete a keyframe by id.", _schema({"shot_id": shot_id, "keyframe_id": _s("Keyframe id")}, ["shot_id", "keyframe_id"])),
+        ToolSpec(
+            "capture_shot",
+            "Report the shot's capture state. Rendering a new capture needs the Shot Composer viewport (GPU/WebGL), which the director cannot drive; tell the user to press Capture there.",
+            _schema({"shot_id": shot_id}, ["shot_id"]),
+        ),
     ]
 
 
@@ -461,6 +594,30 @@ class FilmDirectorHandler(StateHandlerBase):
             "check_continuity": self._cmd_check_continuity,
             "generate_shot": self._cmd_generate_shot,
             "queue_shot": self._cmd_generate_shot,
+            "generate_preview": self._cmd_generate_preview,
+            "generate_final": self._cmd_generate_final,
+            "duplicate_shot": self._cmd_duplicate_shot,
+            "get_composition": self._cmd_get_shot_composition,
+            "update_character": self._cmd_update_asset,
+            "update_location": self._cmd_update_asset,
+            "update_prop": self._cmd_update_asset,
+            "assign_prop": self._cmd_assign_prop,
+            "assign_location": self._cmd_set_location,
+            "set_shot_type": self._cmd_set_framing,
+            "set_camera_angle": self._cmd_set_framing,
+            "set_camera_elevation": self._cmd_set_framing,
+            "set_composition": self._cmd_set_framing,
+            "set_ots": self._cmd_set_ots,
+            "set_negative_prompt": self._cmd_set_negative_prompt,
+            "position_object": self._cmd_position_object,
+            "rotate_object": self._cmd_rotate_object,
+            "scale_object": self._cmd_scale_object,
+            "update_pose": self._cmd_update_pose,
+            "set_camera": self._cmd_set_camera,
+            "add_keyframe": self._cmd_add_keyframe,
+            "update_keyframe": self._cmd_update_keyframe,
+            "delete_keyframe": self._cmd_delete_keyframe,
+            "capture_shot": self._cmd_capture_shot,
         }
         missing = {spec.name for spec in _TOOL_SPECS} ^ set(self._commands)
         assert not missing, f"tool specs and command registry differ: {missing}"
@@ -479,13 +636,16 @@ class FilmDirectorHandler(StateHandlerBase):
             settings = self.state.app_settings.model_copy(deep=True)
         openrouter_key = settings.resolved_openrouter_api_key()
         gemini_key = settings.gemini_api_key.strip()
-        active = self._active_provider_name(settings.director_provider, bool(openrouter_key), bool(gemini_key))
+        has_openai = bool(settings.openai_compatible_base_url.strip() and settings.openai_compatible_model.strip())
+        active = self._active_provider_name(settings.director_provider, bool(openrouter_key), bool(gemini_key), has_openai)
         roles: list[DirectorRoleModel] = []
         for role in _ROLES:
             if active == "openrouter":
                 roles.append(DirectorRoleModel(role=role, provider="openrouter", model=settings.openrouter_models.for_role(role)))
             elif active == "gemini":
                 roles.append(DirectorRoleModel(role=role, provider="gemini", model=GEMINI_DEFAULT_MODEL))
+            elif active == "openai_compatible":
+                roles.append(DirectorRoleModel(role=role, provider="openai_compatible", model=settings.openai_compatible_model.strip()))
             else:
                 roles.append(DirectorRoleModel(role=role, provider="none", model=""))
         message = ""
@@ -498,6 +658,7 @@ class FilmDirectorHandler(StateHandlerBase):
             active_provider=active,
             gemini_configured=bool(gemini_key),
             openrouter_configured=bool(openrouter_key),
+            openai_compatible_configured=has_openai,
             openrouter_key_source=settings.openrouter_key_source(),
             roles=roles,
             tools=[DirectorToolInfo(name=spec.name, description=spec.description) for spec in _TOOL_SPECS],
@@ -517,6 +678,18 @@ class FilmDirectorHandler(StateHandlerBase):
         self._openrouter_models_cache = (now, models)
         return OpenRouterModelsResponse(
             models=[OpenRouterModelInfo(**m.model_dump()) for m in models], fetched_at_ms=now, cached=False
+        )
+
+    def openai_compatible_models(self) -> OpenRouterModelsResponse:
+        with self.lock:
+            settings = self.state.app_settings.model_copy(deep=True)
+        base = settings.openai_compatible_base_url.strip()
+        if not base:
+            raise HTTPError(400, "OPENAI_COMPATIBLE_NOT_CONFIGURED: set the endpoint base URL first")
+        provider = OpenAICompatibleProvider(self._http, settings.openai_compatible_api_key.strip(), "", base_url=base)
+        models = provider.list_models()
+        return OpenRouterModelsResponse(
+            models=[OpenRouterModelInfo(**m.model_dump()) for m in models], fetched_at_ms=now_ms(), cached=False
         )
 
     def validate_openrouter_key(self) -> OpenRouterValidateResponse:
@@ -542,15 +715,19 @@ class FilmDirectorHandler(StateHandlerBase):
     # ---- Provider resolution --------------------------------------------
 
     @staticmethod
-    def _active_provider_name(setting: str, has_openrouter: bool, has_gemini: bool) -> str:
+    def _active_provider_name(setting: str, has_openrouter: bool, has_gemini: bool, has_openai: bool = False) -> str:
         if setting == "openrouter":
             return "openrouter" if has_openrouter else "none"
         if setting == "gemini":
             return "gemini" if has_gemini else "none"
+        if setting == "openai_compatible":
+            return "openai_compatible" if has_openai else "none"
         if has_openrouter:
             return "openrouter"
         if has_gemini:
             return "gemini"
+        if has_openai:
+            return "openai_compatible"
         return "none"
 
     def _provider(self, role: str) -> LLMProvider:
@@ -558,15 +735,24 @@ class FilmDirectorHandler(StateHandlerBase):
             settings = self.state.app_settings.model_copy(deep=True)
         openrouter_key = settings.resolved_openrouter_api_key()
         gemini_key = settings.gemini_api_key.strip()
-        active = self._active_provider_name(settings.director_provider, bool(openrouter_key), bool(gemini_key))
+        openai_base = settings.openai_compatible_base_url.strip()
+        openai_model = settings.openai_compatible_model.strip()
+        has_openai = bool(openai_base and openai_model)
+        active = self._active_provider_name(settings.director_provider, bool(openrouter_key), bool(gemini_key), has_openai)
         if active == "openrouter":
             return OpenRouterProvider(self._http, openrouter_key, settings.openrouter_models.for_role(role))
         if active == "gemini":
             return GeminiProvider(self._http, gemini_key)
+        if active == "openai_compatible":
+            return OpenAICompatibleProvider(
+                self._http, settings.openai_compatible_api_key.strip(), openai_model, base_url=openai_base
+            )
         if settings.director_provider == "openrouter":
             raise HTTPError(400, "OPENROUTER_KEY_MISSING: OpenRouter is selected but no key is configured")
         if settings.director_provider == "gemini":
             raise HTTPError(400, "GEMINI_API_KEY_MISSING: Gemini is selected but no key is configured")
+        if settings.director_provider == "openai_compatible":
+            raise HTTPError(400, "OPENAI_COMPATIBLE_NOT_CONFIGURED: set the endpoint base URL and model in Settings → API Keys")
         raise HTTPError(400, _KEY_MISSING)
 
     @staticmethod
@@ -994,6 +1180,9 @@ class FilmDirectorHandler(StateHandlerBase):
                 fov_deg=_param_float(params, "fov_deg", current.fov_deg),
                 ots_foreground_id=current.ots_foreground_id,
                 ots_subject_id=current.ots_subject_id,
+                ots_shoulder=current.ots_shoulder,
+                # A preset change re-solves the camera from the presets.
+                camera_mode="preset",
             )
         except ValidationError as exc:
             raise HTTPError(400, f"Invalid framing: {exc}") from exc
@@ -1178,6 +1367,333 @@ class FilmDirectorHandler(StateHandlerBase):
             project_id, scene_id, shot_id, GenerateShotRequest(kind=kind)  # type: ignore[arg-type]
         )
         return {"status": response.status, "version_number": response.version_number}
+
+    # ---- Composition tools (the director drives the same CompositionScene the composer edits) ----
+
+    def _cmd_generate_preview(self, project_id: str, params: dict[str, object]) -> object:
+        return self._cmd_generate_shot(project_id, {**params, "kind": "preview"})
+
+    def _cmd_generate_final(self, project_id: str, params: dict[str, object]) -> object:
+        return self._cmd_generate_shot(project_id, {**params, "kind": "final"})
+
+    def _cmd_duplicate_shot(self, project_id: str, params: dict[str, object]) -> object:
+        scene_id, shot_id = self._find_shot(project_id, params)
+        copy = self._film.duplicate_shot(project_id, scene_id, shot_id)
+        return {"id": copy.id, "title": copy.title, "order": copy.order}
+
+    def _cmd_assign_prop(self, project_id: str, params: dict[str, object]) -> object:
+        scene_id, shot_id = self._find_shot(project_id, params)
+        project = self._film.get_project(project_id)
+        asset_id = self._resolve_asset_id(project, params, "prop")
+        found = project.find_shot(shot_id)
+        assert found is not None
+        prop_ids = [p for p in found[1].prop_ids if p != asset_id] + [asset_id]
+        updated = self._film.update_shot(project_id, scene_id, shot_id, UpdateShotRequest(prop_ids=prop_ids))
+        scene = project.scene(scene_id)
+        if scene is not None and asset_id not in scene.prop_ids:
+            self._film.update_scene(project_id, scene_id, UpdateSceneRequest(prop_ids=[*scene.prop_ids, asset_id]))
+        return {"id": updated.id, "prop_ids": updated.prop_ids}
+
+    def _cmd_set_negative_prompt(self, project_id: str, params: dict[str, object]) -> object:
+        scene_id, shot_id = self._find_shot(project_id, params)
+        negative = _param_str(params, "negative_prompt")
+        shot = self._film.update_shot(project_id, scene_id, shot_id, UpdateShotRequest(negative_prompt=negative))
+        return {"id": shot.id, "negative_prompt": shot.negative_prompt}
+
+    def _ensure_composition(self, project: FilmProject, shot: FilmShot) -> CompositionScene:
+        """The composer's scene, created from the cast when the shot has never
+        been opened in the composer (same seeding the UI does)."""
+        if shot.composition is not None:
+            return shot.composition.model_copy(deep=True)
+        objects: list[CompositionObject] = []
+        count = len(shot.characters)
+        for index, shot_character in enumerate(shot.characters):
+            asset = project.asset(shot_character.asset_id)
+            objects.append(
+                CompositionObject(
+                    name=asset.name if asset else f"Character {index + 1}",
+                    type="figure",
+                    asset_id=shot_character.asset_id,
+                    transform=CompositionTransform(position=(index * 1.2 - (count - 1) * 0.6, 0.0, 0.0)),
+                )
+            )
+        camera = CompositionObject(
+            id="shot-camera",
+            name="Shot Camera",
+            type="camera",
+            transform=CompositionTransform(position=(0.0, 1.6, 4.0)),
+            fov=shot.framing.fov_deg,
+        )
+        return CompositionScene(
+            objects=objects,
+            camera=camera,
+            framing=shot.framing.model_copy(deep=True),
+            camera_move=shot.camera_move,
+            duration_seconds=shot.duration_seconds,
+        )
+
+    def _resolve_object(self, project: FilmProject, composition: CompositionScene, target: str) -> CompositionObject:
+        needle = target.strip().lower()
+        for obj in composition.objects:
+            if obj.id == target or (obj.asset_id and obj.asset_id == target):
+                return obj
+        for obj in composition.objects:
+            if obj.name.strip().lower() == needle:
+                return obj
+        for obj in composition.objects:
+            asset = project.asset(obj.asset_id) if obj.asset_id else None
+            if asset is not None and asset.name.strip().lower() == needle:
+                return obj
+        raise HTTPError(404, f"No composer object matches {target!r}. Assign the character to the shot first.")
+
+    def _save_composition(self, project_id: str, scene_id: str, shot_id: str, composition: CompositionScene) -> FilmShot:
+        return self._film.update_shot(project_id, scene_id, shot_id, UpdateShotRequest(composition=composition))
+
+    _PLACEMENT_HINTS: dict[str, tuple[float, float]] = {
+        "foreground left": (-0.9, 1.2),
+        "foreground right": (0.9, 1.2),
+        "background left": (-1.1, -1.6),
+        "background right": (1.1, -1.6),
+        "center": (0.0, 0.0),
+        "left": (-1.2, 0.0),
+        "right": (1.2, 0.0),
+    }
+
+    def _cmd_position_object(self, project_id: str, params: dict[str, object]) -> object:
+        scene_id, shot_id = self._find_shot(project_id, params)
+        project = self._film.get_project(project_id)
+        found = project.find_shot(shot_id)
+        assert found is not None
+        composition = self._ensure_composition(project, found[1])
+        obj = self._resolve_object(project, composition, _param_str(params, "target"))
+        if obj.locked:
+            raise HTTPError(409, f"{obj.name} is locked in the composer")
+        x, y, z = obj.transform.position
+        hint = _param_str(params, "hint", required=False).strip().lower()
+        if hint:
+            if hint not in self._PLACEMENT_HINTS:
+                raise HTTPError(400, f"Unknown placement hint {hint!r}")
+            x, z = self._PLACEMENT_HINTS[hint]
+        x = _param_float(params, "x", x)
+        y = _param_float(params, "y", y)
+        z = _param_float(params, "z", z)
+        obj.transform = CompositionTransform(position=(x, y, z), rotation=obj.transform.rotation, scale=obj.transform.scale)
+        self._save_composition(project_id, scene_id, shot_id, composition)
+        return {"object_id": obj.id, "name": obj.name, "position": [x, y, z]}
+
+    def _cmd_rotate_object(self, project_id: str, params: dict[str, object]) -> object:
+        scene_id, shot_id = self._find_shot(project_id, params)
+        project = self._film.get_project(project_id)
+        found = project.find_shot(shot_id)
+        assert found is not None
+        composition = self._ensure_composition(project, found[1])
+        obj = self._resolve_object(project, composition, _param_str(params, "target"))
+        if obj.locked:
+            raise HTTPError(409, f"{obj.name} is locked in the composer")
+        yaw = math.radians(_param_float(params, "yaw_degrees", 0.0))
+        rx, _, rz = obj.transform.rotation
+        obj.transform = CompositionTransform(position=obj.transform.position, rotation=(rx, yaw, rz), scale=obj.transform.scale)
+        self._save_composition(project_id, scene_id, shot_id, composition)
+        return {"object_id": obj.id, "name": obj.name, "yaw_degrees": math.degrees(yaw)}
+
+    def _cmd_scale_object(self, project_id: str, params: dict[str, object]) -> object:
+        scene_id, shot_id = self._find_shot(project_id, params)
+        project = self._film.get_project(project_id)
+        found = project.find_shot(shot_id)
+        assert found is not None
+        composition = self._ensure_composition(project, found[1])
+        obj = self._resolve_object(project, composition, _param_str(params, "target"))
+        if obj.locked:
+            raise HTTPError(409, f"{obj.name} is locked in the composer")
+        scale = _param_float(params, "scale", 1.0)
+        if not 0.05 <= scale <= 20:
+            raise HTTPError(400, "scale must be between 0.05 and 20")
+        obj.transform = CompositionTransform(position=obj.transform.position, rotation=obj.transform.rotation, scale=(scale, scale, scale))
+        self._save_composition(project_id, scene_id, shot_id, composition)
+        return {"object_id": obj.id, "name": obj.name, "scale": scale}
+
+    def _cmd_update_pose(self, project_id: str, params: dict[str, object]) -> object:
+        scene_id, shot_id = self._find_shot(project_id, params)
+        project = self._film.get_project(project_id)
+        found = project.find_shot(shot_id)
+        assert found is not None
+        composition = self._ensure_composition(project, found[1])
+        obj = self._resolve_object(project, composition, _param_str(params, "target"))
+        if obj.type != "figure":
+            raise HTTPError(400, f"{obj.name} is not a character figure")
+        raw_joints = params.get("joints")
+        if not isinstance(raw_joints, dict):
+            raise HTTPError(400, "joints must be an object of joint -> [x, y, z] degrees")
+        joints: dict[str, tuple[float, float, float]] = dict(obj.pose)
+        for name, value in cast(dict[object, object], raw_joints).items():
+            if not isinstance(value, list) or len(cast(list[object], value)) != 3:
+                raise HTTPError(400, f"joint {name!r} must be [x, y, z]")
+            values = cast(list[object], value)
+            if any(isinstance(v, bool) or not isinstance(v, (int, float)) for v in values):
+                raise HTTPError(400, f"joint {name!r} must contain numbers")
+            joints[str(name)] = (float(cast(float, values[0])), float(cast(float, values[1])), float(cast(float, values[2])))
+        obj.pose = joints
+        self._save_composition(project_id, scene_id, shot_id, composition)
+        return {"object_id": obj.id, "name": obj.name, "joints": sorted(joints)}
+
+    def _cmd_set_ots(self, project_id: str, params: dict[str, object]) -> object:
+        scene_id, shot_id = self._find_shot(project_id, params)
+        project = self._film.get_project(project_id)
+        found = project.find_shot(shot_id)
+        assert found is not None
+        shot = found[1]
+        # Make sure both characters are in the shot (and therefore in the composer).
+        for key in ("foreground", "subject"):
+            target = _param_str(params, key)
+            asset_id = self._resolve_asset_id(project, {"name": target, "asset_id": target if project.asset(target) else ""}, "character")
+            if all(c.asset_id != asset_id for c in shot.characters):
+                shot = self._film.update_shot(
+                    project_id, scene_id, shot_id, UpdateShotRequest(characters=[*shot.characters, ShotCharacter(asset_id=asset_id)])
+                )
+        project = self._film.get_project(project_id)
+        found = project.find_shot(shot_id)
+        assert found is not None
+        composition = self._ensure_composition(project, found[1])
+        foreground = self._resolve_object(project, composition, _param_str(params, "foreground"))
+        subject = self._resolve_object(project, composition, _param_str(params, "subject"))
+        shoulder = _param_str(params, "shoulder", required=False, default="left")
+        if shoulder not in ("left", "right"):
+            raise HTTPError(400, "shoulder must be 'left' or 'right'")
+        composition.framing = composition.framing.model_copy(
+            update={
+                "camera_angle": "ots",
+                "ots_foreground_id": foreground.id,
+                "ots_subject_id": subject.id,
+                "ots_shoulder": shoulder,
+                "camera_mode": "preset",
+            }
+        )
+        updated = self._save_composition(project_id, scene_id, shot_id, composition)
+        return {
+            "id": updated.id,
+            "framing": framing_summary(updated),
+            "foreground": foreground.name,
+            "subject": subject.name,
+            "shoulder": shoulder,
+        }
+
+    def _cmd_set_camera(self, project_id: str, params: dict[str, object]) -> object:
+        scene_id, shot_id = self._find_shot(project_id, params)
+        project = self._film.get_project(project_id)
+        found = project.find_shot(shot_id)
+        assert found is not None
+        composition = self._ensure_composition(project, found[1])
+        camera = composition.camera or CompositionObject(id="shot-camera", name="Shot Camera", type="camera")
+        x = _param_float(params, "x", camera.transform.position[0])
+        y = _param_float(params, "y", camera.transform.position[1])
+        z = _param_float(params, "z", camera.transform.position[2])
+        rotation = camera.transform.rotation
+        look_at = _param_str(params, "look_at", required=False)
+        if look_at:
+            target = self._resolve_object(project, composition, look_at)
+            tx, ty, tz = target.transform.position
+            ty += 1.4 * target.transform.scale[1]  # aim at chest height
+            dx, dy, dz = tx - x, ty - y, tz - z
+            yaw = math.atan2(dx, dz)
+            pitch = math.atan2(dy, math.hypot(dx, dz))
+            rotation = (pitch, yaw + math.pi, 0.0)
+        fov = _param_float(params, "fov_deg", camera.fov or composition.framing.fov_deg)
+        camera.transform = CompositionTransform(position=(x, y, z), rotation=rotation, scale=(1.0, 1.0, 1.0))
+        camera.fov = fov
+        composition.camera = camera
+        composition.framing = composition.framing.model_copy(update={"camera_mode": "manual", "fov_deg": fov})
+        updated = self._save_composition(project_id, scene_id, shot_id, composition)
+        return {"id": updated.id, "camera_position": [x, y, z], "fov_deg": fov, "camera_mode": "manual"}
+
+    def _keyframe_from_params(self, params: dict[str, object], base: CompositionKeyframe | None, default_time: float) -> CompositionKeyframe:
+        current = base or CompositionKeyframe(time=default_time)
+        px, py, pz = current.transform.position
+        rx, ry, rz = current.transform.rotation
+        x = _param_float(params, "x", px)
+        y = _param_float(params, "y", py)
+        z = _param_float(params, "z", pz)
+        yaw_raw = params.get("yaw_degrees")
+        yaw = math.radians(_param_float(params, "yaw_degrees", math.degrees(ry))) if yaw_raw is not None else ry
+        time_value = _param_float(params, "time", current.time)
+        if time_value < 0:
+            raise HTTPError(400, "time must be >= 0")
+        fov_raw = params.get("fov_deg")
+        fov = _param_float(params, "fov_deg", current.fov or 0.0) if fov_raw is not None else current.fov
+        return CompositionKeyframe(
+            id=current.id,
+            time=time_value,
+            transform=CompositionTransform(position=(x, y, z), rotation=(rx, yaw, rz), scale=current.transform.scale),
+            fov=fov,
+        )
+
+    def _cmd_add_keyframe(self, project_id: str, params: dict[str, object]) -> object:
+        scene_id, shot_id = self._find_shot(project_id, params)
+        project = self._film.get_project(project_id)
+        found = project.find_shot(shot_id)
+        assert found is not None
+        composition = self._ensure_composition(project, found[1])
+        target = _param_str(params, "target")
+        if target.strip().lower() == "camera":
+            if composition.camera is None:
+                composition.camera = CompositionObject(id="shot-camera", name="Shot Camera", type="camera")
+            obj = composition.camera
+        else:
+            obj = self._resolve_object(project, composition, target)
+        seed = CompositionKeyframe(time=0.0, transform=obj.transform.model_copy(), fov=obj.fov)
+        keyframe = self._keyframe_from_params(params, seed, 0.0)
+        keyframe.id = CompositionKeyframe().id
+        obj.keyframes = sorted([*obj.keyframes, keyframe], key=lambda k: k.time)
+        self._save_composition(project_id, scene_id, shot_id, composition)
+        return {"keyframe_id": keyframe.id, "target": obj.name, "time": keyframe.time, "count": len(obj.keyframes)}
+
+    def _find_keyframe(self, composition: CompositionScene, keyframe_id: str) -> tuple[CompositionObject, CompositionKeyframe]:
+        candidates = [*composition.objects] + ([composition.camera] if composition.camera else [])
+        for obj in candidates:
+            for keyframe in obj.keyframes:
+                if keyframe.id == keyframe_id:
+                    return obj, keyframe
+        raise HTTPError(404, f"Keyframe not found: {keyframe_id}")
+
+    def _cmd_update_keyframe(self, project_id: str, params: dict[str, object]) -> object:
+        scene_id, shot_id = self._find_shot(project_id, params)
+        project = self._film.get_project(project_id)
+        found = project.find_shot(shot_id)
+        assert found is not None
+        composition = self._ensure_composition(project, found[1])
+        obj, keyframe = self._find_keyframe(composition, _param_str(params, "keyframe_id"))
+        updated = self._keyframe_from_params(params, keyframe, keyframe.time)
+        obj.keyframes = sorted([updated if k.id == keyframe.id else k for k in obj.keyframes], key=lambda k: k.time)
+        self._save_composition(project_id, scene_id, shot_id, composition)
+        return {"keyframe_id": updated.id, "target": obj.name, "time": updated.time}
+
+    def _cmd_delete_keyframe(self, project_id: str, params: dict[str, object]) -> object:
+        scene_id, shot_id = self._find_shot(project_id, params)
+        project = self._film.get_project(project_id)
+        found = project.find_shot(shot_id)
+        assert found is not None
+        composition = self._ensure_composition(project, found[1])
+        obj, keyframe = self._find_keyframe(composition, _param_str(params, "keyframe_id"))
+        obj.keyframes = [k for k in obj.keyframes if k.id != keyframe.id]
+        self._save_composition(project_id, scene_id, shot_id, composition)
+        return {"deleted": keyframe.id, "target": obj.name, "count": len(obj.keyframes)}
+
+    def _cmd_capture_shot(self, project_id: str, params: dict[str, object]) -> object:
+        _, shot_id = self._find_shot(project_id, params)
+        project = self._film.get_project(project_id)
+        found = project.find_shot(shot_id)
+        assert found is not None
+        shot = found[1]
+        return {
+            "id": shot.id,
+            "has_capture": bool(shot.capture_path),
+            "capture_path": shot.capture_path,
+            "composed": shot.composition is not None,
+            "note": (
+                "A capture already exists; press Capture in the Shot Composer to refresh it after changes."
+                if shot.capture_path
+                else "No capture yet. Open the shot in the Shot Composer and press Capture — the director cannot render the viewport."
+            ),
+        }
 
     # ---- Storyboard generation ------------------------------------------
 

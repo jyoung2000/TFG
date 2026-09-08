@@ -155,6 +155,8 @@ export interface CompositionObject {
   type: CompositionObjectType
   asset_id?: string | null
   visible: boolean
+  /** Locked objects ignore gizmo drags and director moves. */
+  locked: boolean
   transform: CompositionTransform
   pose: Record<string, Vec3>
   figure_variant: FigureVariant
@@ -171,6 +173,10 @@ export interface ShotFraming {
   fov_deg: number
   ots_foreground_id?: string | null
   ots_subject_id?: string | null
+  /** Which shoulder the OTS camera looks over. */
+  ots_shoulder: 'left' | 'right'
+  /** "preset": camera re-solved from presets; "manual": user-positioned camera wins. */
+  camera_mode: 'preset' | 'manual'
 }
 
 export interface CompositionScene {
@@ -235,6 +241,13 @@ export interface ShotVersion {
   output_path: string
   error: string
   wardrobe_snapshot: Record<string, string>
+  /** Shot settings at render time (framing, camera move, cast, generation). */
+  shot_snapshot: Record<string, unknown>
+  generation_seconds: number | null
+  gpu_name: string
+  /** Estimate: VRAM used after the job, not a true peak. */
+  peak_vram_gb: number | null
+  execution_mode: string
   created_at: number
 }
 
@@ -244,6 +257,8 @@ export interface FilmShot {
   title: string
   description: string
   duration_seconds: number
+  /** Overrides the scene/project inter-shot gap before this shot. */
+  gap_before_seconds: number | null
   framing: ShotFraming
   camera_move: CameraMove
   characters: ShotCharacter[]
@@ -279,6 +294,8 @@ export interface FilmScene {
   lighting: string
   time_of_day: string
   continuity_notes: string
+  /** Overrides the project inter-shot gap for this scene. */
+  inter_shot_gap_seconds: number | null
   shots: FilmShot[]
 }
 
@@ -407,7 +424,24 @@ export interface FilmModelCapability {
   estimated_min_vram_gb: number | null
   fits_gpu: boolean | null
   supported_resolutions: string[]
+  family: string
+  task: string
+  description: string
+  quantization: string
+  state: ModelState
+  installed_size_gb: number | null
+  is_active: boolean
+  vram_is_estimate: boolean
 }
+
+export type ModelState =
+  | 'active'
+  | 'installed'
+  | 'available'
+  | 'downloading'
+  | 'update_available'
+  | 'incompatible'
+  | ''
 
 export interface FilmCapabilities {
   gpu_name: string | null
@@ -420,6 +454,10 @@ export interface FilmCapabilities {
   text_encoder_optional: boolean
   vram_note: string
   profiles: FilmQualityProfile[]
+  /** Where model weights live on disk (WanGP ckpts or the app models dir). */
+  models_path: string
+  system_ram_gb: number | null
+  cuda_available: boolean
 }
 
 export interface DirectorCommandResult {
@@ -473,11 +511,14 @@ export const DIRECTOR_ROLES: { id: DirectorRole; label: string; hint: string }[]
   { id: 'continuity', label: 'Continuity', hint: 'Continuity explanations and fixes' },
 ]
 
+export type DirectorProviderSetting = 'auto' | 'gemini' | 'openrouter' | 'openai_compatible'
+
 export interface DirectorStatus {
-  provider_setting: 'auto' | 'gemini' | 'openrouter'
-  active_provider: 'openrouter' | 'gemini' | 'none'
+  provider_setting: DirectorProviderSetting
+  active_provider: 'openrouter' | 'gemini' | 'openai_compatible' | 'none'
   gemini_configured: boolean
   openrouter_configured: boolean
+  openai_compatible_configured: boolean
   openrouter_key_source: 'settings' | 'env' | 'none'
   roles: { role: DirectorRole; provider: string; model: string }[]
   tools: { name: string; description: string }[]

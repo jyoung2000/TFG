@@ -438,6 +438,7 @@ export class ComposerScene {
       type: 'camera',
       asset_id: null,
       visible: true,
+      locked: false,
       transform: {
         position: [this.shotCamera.position.x, this.shotCamera.position.y, this.shotCamera.position.z],
         rotation: [this.shotCamera.rotation.x, this.shotCamera.rotation.y, this.shotCamera.rotation.z],

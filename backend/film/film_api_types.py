@@ -100,6 +100,8 @@ class UpdateSceneRequest(BaseModel):
     lighting: str | None = None
     time_of_day: str | None = None
     continuity_notes: str | None = None
+    inter_shot_gap_seconds: float | None = None
+    clear_gap: bool = False
 
 
 class ReorderRequest(BaseModel):
@@ -118,6 +120,8 @@ class UpdateShotRequest(BaseModel):
     title: str | None = None
     description: str | None = None
     duration_seconds: float | None = None
+    gap_before_seconds: float | None = None
+    clear_gap: bool = False
     framing: ShotFraming | None = None
     camera_move: CameraMove | None = None
     characters: list[ShotCharacter] | None = None
@@ -165,6 +169,9 @@ class ImportGenerationResponse(BaseModel):
 class ExportPackageRequest(BaseModel):
     destination_path: str
     include_outputs: bool = True
+    # The host project (name, assets, timelines) as the renderer holds it, so
+    # the package carries the timeline; secrets never live here.
+    host_project: dict[str, object] | None = None
 
 
 class PackageSummaryResponse(BaseModel):
@@ -190,6 +197,9 @@ class ImportPackageRequest(BaseModel):
 class ImportPackageResponse(BaseModel):
     summary: PackageSummaryResponse
     project: FilmProject
+    host_project: dict[str, object] | None = None
+    # Old output path -> new output path, so timeline clips can be re-linked.
+    output_path_map: dict[str, str] = Field(default_factory=dict)
 
 
 class ShotCaptureRequest(BaseModel):
@@ -297,6 +307,10 @@ class QueueControlResponse(BaseModel):
     queue: FilmQueueResponse
 
 
+class QueueMoveRequest(BaseModel):
+    index: int
+
+
 class FilmModelCapability(BaseModel):
     id: str
     label: str
@@ -315,6 +329,18 @@ class FilmModelCapability(BaseModel):
     estimated_min_vram_gb: float | None = None
     fits_gpu: bool | None = None
     supported_resolutions: list[str] = Field(default_factory=list[str])
+    # Model family / task metadata (from WanGP definitions where available).
+    family: str = ""
+    task: str = ""  # video | image | audio | edit
+    description: str = ""
+    quantization: str = ""
+    # "installed" | "available" | "downloading" | "update_available" |
+    # "incompatible" | "active" — the display state the Models tab uses.
+    state: str = ""
+    installed_size_gb: float | None = None
+    is_active: bool = False
+    # True when VRAM figures are estimates rather than vendor data.
+    vram_is_estimate: bool = True
 
 
 class FilmCapabilitiesResponse(BaseModel):
@@ -334,6 +360,10 @@ class FilmCapabilitiesResponse(BaseModel):
     vram_note: str
     # Quality profiles (model + resolution presets) evaluated against the GPU.
     profiles: list[FilmQualityProfile] = Field(default_factory=list["FilmQualityProfile"])
+    # Where local model files live (for "open model location").
+    models_path: str = ""
+    system_ram_gb: float | None = None
+    cuda_available: bool = False
 
 
 class DirectorCommandRequest(BaseModel):
@@ -422,6 +452,7 @@ class DirectorStatusResponse(BaseModel):
     active_provider: str  # "openrouter" | "gemini" | "none"
     gemini_configured: bool
     openrouter_configured: bool
+    openai_compatible_configured: bool = False
     openrouter_key_source: str
     roles: list[DirectorRoleModel]
     tools: list[DirectorToolInfo]

@@ -26,7 +26,7 @@ from _routes.suggest_gap_prompt import router as suggest_gap_prompt_router
 from _routes.retake import router as retake_router
 from _routes.runtime_policy import router as runtime_policy_router
 from _routes.settings import router as settings_router
-from logging_policy import log_http_error, log_unhandled_exception
+from logging_policy import install_secret_redaction, log_http_error, log_unhandled_exception, redact_secrets
 from state import init_state_service
 
 if TYPE_CHECKING:
@@ -54,6 +54,7 @@ def create_app(
 ) -> FastAPI:
     """Create a configured FastAPI app bound to the provided handler."""
     init_state_service(handler)
+    install_secret_redaction()
 
     app = FastAPI(title=title)
     app.add_middleware(
@@ -102,17 +103,15 @@ def create_app(
     async def _route_http_error_handler(request: Request, exc: Exception) -> JSONResponse:
         if isinstance(exc, HTTPError):
             log_http_error(request, exc)
-            return JSONResponse(status_code=exc.status_code, content={"error": exc.detail})
-        return JSONResponse(status_code=500, content={"error": str(exc)})
+            return JSONResponse(status_code=exc.status_code, content={"error": redact_secrets(str(exc.detail))})
+        return JSONResponse(status_code=500, content={"error": redact_secrets(str(exc))})
 
     async def _validation_error_handler(request: Request, exc: Exception) -> JSONResponse:
-        if isinstance(exc, RequestValidationError):
-            return JSONResponse(status_code=422, content={"error": str(exc)})
-        return JSONResponse(status_code=422, content={"error": str(exc)})
+        return JSONResponse(status_code=422, content={"error": redact_secrets(str(exc))})
 
     async def _route_generic_error_handler(request: Request, exc: Exception) -> JSONResponse:
         log_unhandled_exception(request, exc)
-        return JSONResponse(status_code=500, content={"error": str(exc)})
+        return JSONResponse(status_code=500, content={"error": redact_secrets(str(exc))})
 
     app.add_exception_handler(RequestValidationError, _validation_error_handler)
     app.add_exception_handler(HTTPError, _route_http_error_handler)

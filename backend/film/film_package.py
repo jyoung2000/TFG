@@ -103,8 +103,13 @@ def export_package(
     destination: Path,
     *,
     include_outputs: bool = True,
+    host_project: dict[str, object] | None = None,
 ) -> PackageSummary:
-    """Write a package for ``project_id`` to ``destination`` (.ltxfilm)."""
+    """Write a package for ``project_id`` to ``destination`` (.ltxfilm).
+
+    ``host_project`` is the renderer's project record (name, assets,
+    timelines); it is stored verbatim as ``host_project.json`` minus anything
+    that looks like a credential, so the timeline travels with the film."""
     project = store.load(project_id).model_copy(deep=True)
     project_dir = store.project_dir(project_id)
     media: dict[str, Path] = {}
@@ -130,6 +135,8 @@ def export_package(
     total_bytes = sum(path.stat().st_size for path in media.values())
     manifest = {
         "format": PACKAGE_FORMAT,
+        "has_host_project": host_project is not None,
+        "output_media": {member: str(source) for member, source in media.items() if member.startswith("outputs/")},
         "format_version": PACKAGE_FORMAT_VERSION,
         "exported_at_ms": int(time.time() * 1000),
         "schema_version": project.schema_version,
@@ -143,6 +150,8 @@ def export_package(
     with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("manifest.json", json.dumps(manifest, indent=2))
         archive.writestr("project.json", project.model_dump_json(indent=2))
+        if host_project is not None:
+            archive.writestr("host_project.json", json.dumps(_strip_secret_like(host_project), indent=2))
         for member, source in media.items():
             archive.write(source, arcname=member, compress_type=zipfile.ZIP_STORED if source.suffix.lower() in (".mp4", ".webm", ".mov", ".m4v") else zipfile.ZIP_DEFLATED)
     tmp.replace(destination)
@@ -219,7 +228,7 @@ def _validate_package(path: Path) -> tuple[zipfile.ZipFile, _ValidatedPackage]:
         members: list[tuple[PurePosixPath, zipfile.ZipInfo]] = []
         total = 0
         for info in infos:
-            if info.filename in ("manifest.json", "project.json"):
+            if info.filename in ("manifest.json", "project.json", "host_project.json"):
                 continue
             rel = _safe_member_path(info.filename)
             if rel.parts[0] not in _MEDIA_DIRS:
@@ -265,12 +274,34 @@ def inspect_package(path: Path) -> PackageSummary:
     )
 
 
-def import_package(store: FilmStore, path: Path, target_project_id: str) -> tuple[FilmProject, PackageSummary]:
+@dataclass(slots=True)
+class ImportResult:
+    project: FilmProject
+    summary: PackageSummary
+    host_project: dict[str, object] | None
+    # original absolute output path (from the exporting machine) -> new path
+    output_path_map: dict[str, str]
+
+
+def import_package(store: FilmStore, path: Path, target_project_id: str) -> ImportResult:
     """Validate ``path`` and install it as ``target_project_id``, replacing
     that project's facet and media. Nothing is written until validation passed."""
     archive, validated = _validate_package(path)
+    host_project: dict[str, object] | None = None
+    output_path_map: dict[str, str] = {}
     try:
         project = validated.project
+        if "host_project.json" in archive.namelist():
+            try:
+                raw_host: object = json.loads(archive.read("host_project.json").decode("utf-8"))
+                if isinstance(raw_host, dict):
+                    host_project = _strip_secret_like(cast(dict[str, object], raw_host))
+            except (ValueError, UnicodeDecodeError):
+                host_project = None
+        original_outputs = validated.manifest.get("output_media")
+        original_by_member: dict[str, str] = {}
+        if isinstance(original_outputs, dict):
+            original_by_member = {str(k): str(v) for k, v in cast(dict[object, object], original_outputs).items()}
         project.id = target_project_id
         project_dir = store.project_dir(target_project_id)
         project_dir.mkdir(parents=True, exist_ok=True)
@@ -297,7 +328,12 @@ def import_package(store: FilmStore, path: Path, target_project_id: str) -> tupl
             for shot in scene.shots:
                 for version in shot.versions:
                     if version.output_path:
-                        version.output_path = str((project_dir / Path(*PurePosixPath(version.output_path).parts)).resolve())
+                        member = version.output_path
+                        new_path = str((project_dir / Path(*PurePosixPath(member).parts)).resolve())
+                        version.output_path = new_path
+                        original = original_by_member.get(member)
+                        if original:
+                            output_path_map[original] = new_path
         try:
             store.save(project)
         except FilmStoreError as exc:
@@ -315,4 +351,25 @@ def import_package(store: FilmStore, path: Path, target_project_id: str) -> tupl
         includes_outputs=bool(validated.manifest.get("includes_outputs", False)),
         total_bytes=validated.total_bytes,
     )
-    return project, summary
+    return ImportResult(project=project, summary=summary, host_project=host_project, output_path_map=output_path_map)
+
+
+_SECRET_KEY_HINTS = ("api_key", "apikey", "token", "secret", "password", "authorization")
+
+
+def _strip_secret_like(payload: dict[str, object]) -> dict[str, object]:
+    """Defensive: drop any key that looks like a credential, recursively."""
+
+    def scrub(value: object) -> object:
+        if isinstance(value, dict):
+            return {
+                str(k): scrub(v)
+                for k, v in cast(dict[object, object], value).items()
+                if not any(hint in str(k).lower() for hint in _SECRET_KEY_HINTS)
+            }
+        if isinstance(value, list):
+            return [scrub(v) for v in cast(list[object], value)]
+        return value
+
+    scrubbed = scrub(payload)
+    return cast(dict[str, object], scrubbed) if isinstance(scrubbed, dict) else {}

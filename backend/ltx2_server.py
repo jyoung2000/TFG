@@ -43,6 +43,12 @@ console_handler.setLevel(logging.INFO)
 logging.basicConfig(level=logging.INFO, handlers=[console_handler])
 logger = logging.getLogger(__name__)
 
+# Redact provider keys / bearer tokens from every log line before it reaches
+# the session log (see logging_policy.redact_secrets).
+from logging_policy import install_secret_redaction  # noqa: E402
+
+install_secret_redaction()
+
 # ============================================================
 # SageAttention Integration
 # ============================================================

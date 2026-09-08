@@ -11,9 +11,13 @@ every transition, so a backend restart leaves shots resumable instead of lost.
 from __future__ import annotations
 
 import logging
+import os
+import time
 from collections import deque
+from collections.abc import Callable
 from dataclasses import dataclass
 from threading import RLock
+from typing import cast
 
 from _routes._errors import HTTPError
 from api_types import GenerateVideoRequest, VideoCameraMotion
@@ -44,6 +48,7 @@ from handlers.video_generation_handler import VideoGenerationHandler, get_allowe
 from runtime_config.model_download_specs import MODEL_FILE_ORDER, resolve_required_model_types
 from runtime_config.runtime_config import RuntimeConfig
 from services.interfaces import GpuInfo, TaskRunner, VideoProcessor
+from services.wangp_bridge import WanGPBridge
 from state.app_state_types import AppState
 
 logger = logging.getLogger(__name__)
@@ -83,6 +88,81 @@ QUALITY_PROFILES: dict[str, tuple[str, str, str, str]] = {
 _INTERRUPTED_ERROR = "Interrupted: the app restarted while this job was queued or generating"
 
 
+def _wangp_family(architecture: str) -> str:
+    key = architecture.lower()
+    for prefix, family in (
+        ("ltx2", "ltx2"),
+        ("ltx", "ltx"),
+        ("vace", "wan"),
+        ("t2v", "wan"),
+        ("i2v", "wan"),
+        ("ti2v", "wan"),
+        ("flf2v", "wan"),
+        ("fantasy", "wan"),
+        ("animate", "wan"),
+        ("hunyuan", "hunyuan"),
+        ("z_image", "z_image"),
+        ("flux", "flux"),
+        ("qwen", "qwen"),
+        ("ovi", "ovi"),
+        ("ace_step", "ace_step"),
+        ("k5", "k5"),
+        ("minimax", "minimax"),
+        ("lucy", "lucy"),
+        ("kiwi", "kiwi"),
+        ("chrono", "chrono"),
+    ):
+        if key.startswith(prefix):
+            return family
+    return key.split("_")[0] if key else "unknown"
+
+
+def _wangp_task(architecture: str) -> str:
+    key = architecture.lower()
+    if any(token in key for token in ("ace_step", "stable_audio", "chatterbox", "dramabox", "audio", "mmaudio")):
+        return "audio"
+    if any(token in key for token in ("z_image", "flux", "qwen", "bernini", "hidream", "sd3")):
+        return "image"
+    if "edit" in key and "ltx" not in key:
+        return "edit"
+    return "video"
+
+
+def _system_ram_gb() -> float | None:
+    try:
+        if hasattr(os, "sysconf"):
+            pages = os.sysconf("SC_PHYS_PAGES")
+            page_size = os.sysconf("SC_PAGE_SIZE")
+            if pages > 0 and page_size > 0:
+                return round(pages * page_size / 1024**3, 1)
+    except (ValueError, OSError, AttributeError):
+        pass
+    try:
+        import ctypes
+
+        class _MemStatus(ctypes.Structure):
+            _fields_ = [
+                ("dwLength", ctypes.c_ulong),
+                ("dwMemoryLoad", ctypes.c_ulong),
+                ("ullTotalPhys", ctypes.c_ulonglong),
+                ("ullAvailPhys", ctypes.c_ulonglong),
+                ("ullTotalPageFile", ctypes.c_ulonglong),
+                ("ullAvailPageFile", ctypes.c_ulonglong),
+                ("ullTotalVirtual", ctypes.c_ulonglong),
+                ("ullAvailVirtual", ctypes.c_ulonglong),
+                ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+            ]
+
+        status = _MemStatus()
+        status.dwLength = ctypes.sizeof(_MemStatus)
+        kernel32 = getattr(ctypes, "windll", None)
+        if kernel32 is not None and kernel32.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+            return round(status.ullTotalPhys / 1024**3, 1)
+    except Exception:  # noqa: BLE001 - best effort on non-Windows
+        pass
+    return None
+
+
 @dataclass(slots=True)
 class _QueuedShotJob:
     project_id: str
@@ -116,6 +196,7 @@ class FilmGenerationHandler(StateHandlerBase):
         video_processor: VideoProcessor,
         task_runner: TaskRunner,
         config: RuntimeConfig,
+        wangp_bridge: WanGPBridge | None = None,
     ) -> None:
         super().__init__(state, lock)
         self._film = film_handler
@@ -125,6 +206,7 @@ class FilmGenerationHandler(StateHandlerBase):
         self._video_processor = video_processor
         self._task_runner = task_runner
         self._config = config
+        self._wangp_bridge = wangp_bridge
         self._queue: deque[_QueuedShotJob] = deque()
         self._active: _QueuedShotJob | None = None
         self._worker_running = False
@@ -314,6 +396,18 @@ class FilmGenerationHandler(StateHandlerBase):
             raise HTTPError(404, "That shot is not queued or generating")
         return self.get_queue()
 
+    def move(self, shot_id: str, index: int) -> FilmQueueResponse:
+        """Move a pending shot to a specific position in the queue."""
+        with self.lock:
+            jobs = list(self._queue)
+            job = next((j for j in jobs if j.shot_id == shot_id), None)
+            if job is None:
+                raise HTTPError(404, "That shot is not in the pending queue")
+            jobs.remove(job)
+            jobs.insert(max(0, min(index, len(jobs))), job)
+            self._queue = deque(jobs)
+        return self.get_queue()
+
     def prioritize(self, shot_id: str) -> FilmQueueResponse:
         """Move a pending shot to the front of the queue."""
         with self.lock:
@@ -363,6 +457,22 @@ class FilmGenerationHandler(StateHandlerBase):
 
         capture_path = shot.capture_path if generation.use_capture_as_reference else ""
 
+        snapshot: dict[str, object] = {
+            "title": shot.title,
+            "description": shot.description,
+            "visual_prompt": shot.visual_prompt,
+            "negative_prompt": shot.negative_prompt,
+            "framing": shot.framing.model_dump(),
+            "camera_move": shot.camera_move,
+            "duration_seconds": shot.duration_seconds,
+            "characters": [c.model_dump() for c in shot.characters],
+            "location_id": shot.location_id,
+            "prop_ids": list(shot.prop_ids),
+            "generation": generation.model_dump(),
+            "capture_path": shot.capture_path,
+            "composition_objects": len(shot.composition.objects) if shot.composition else 0,
+            "aspect_ratio": generation.aspect_ratio,
+        }
         return ShotVersion(
             number=(max((v.number for v in shot.versions), default=0) + 1),
             kind=kind,
@@ -376,7 +486,16 @@ class FilmGenerationHandler(StateHandlerBase):
             seed=generation.seed,
             capture_path=capture_path,
             wardrobe_snapshot=wardrobe_snapshot,
+            shot_snapshot=snapshot,
+            execution_mode=self._execution_mode(),
         )
+
+    def _execution_mode(self) -> str:
+        if self._config.wangp_enabled:
+            return "wangp"
+        if self._config.force_api_generations:
+            return "api"
+        return "local"
 
     @staticmethod
     def _resolve_final_profile(project: FilmProject, shot: FilmShot) -> tuple[str, str]:
@@ -444,25 +563,43 @@ class FilmGenerationHandler(StateHandlerBase):
                 restore_seed = (settings.seed_locked, settings.locked_seed)
                 settings.seed_locked = True
                 settings.locked_seed = seed
+        started = time.perf_counter()
         try:
             response = self._video_generation.generate(request)
         except HTTPError as exc:
-            self._finish_version(job, status="failed", error=str(exc.detail))
+            self._finish_version(job, status="failed", error=str(exc.detail), telemetry=self._telemetry(started))
             return
         except Exception as exc:  # noqa: BLE001 - queue must survive any job failure
-            self._finish_version(job, status="failed", error=str(exc))
+            self._finish_version(job, status="failed", error=str(exc), telemetry=self._telemetry(started))
             return
         finally:
             if restore_seed is not None:
                 with self.lock:
                     settings = self.state.app_settings
                     settings.seed_locked, settings.locked_seed = restore_seed
+        telemetry = self._telemetry(started)
         if response.status == "complete" and response.video_path:
-            self._finish_version(job, status="complete", output_path=response.video_path)
+            self._finish_version(
+                job, status="complete", output_path=response.video_path, telemetry=telemetry, seed_used=response.seed
+            )
         elif response.status == "cancelled":
-            self._finish_version(job, status="cancelled", error="Cancelled")
+            self._finish_version(job, status="cancelled", error="Cancelled", telemetry=telemetry)
         else:
-            self._finish_version(job, status="failed", error=f"Generation ended with status {response.status}")
+            self._finish_version(job, status="failed", error=f"Generation ended with status {response.status}", telemetry=telemetry)
+
+    def _telemetry(self, started: float) -> dict[str, object]:
+        """Wall-clock time plus whatever the GPU service can observe. Peak VRAM
+        is the post-job used figure — an estimate, labelled as such."""
+        payload: dict[str, object] = {"generation_seconds": round(time.perf_counter() - started, 2)}
+        try:
+            info = self._gpu_info.get_gpu_info()
+            payload["gpu_name"] = str(info.get("name", "") or "")
+            used = info.get("vramUsed", 0)
+            if used > 0:
+                payload["peak_vram_gb"] = round(float(used) / 1024.0, 2)
+        except Exception:  # noqa: BLE001 - telemetry is advisory
+            pass
+        return payload
 
     def _prepare_request(self, job: _QueuedShotJob) -> tuple[GenerateVideoRequest, int | None] | None:
         with self.lock:
@@ -541,6 +678,8 @@ class FilmGenerationHandler(StateHandlerBase):
         status: str,
         output_path: str = "",
         error: str = "",
+        telemetry: dict[str, object] | None = None,
+        seed_used: int | None = None,
     ) -> None:
         with self.lock:
             project = self._film.store.load(job.project_id)
@@ -554,6 +693,18 @@ class FilmGenerationHandler(StateHandlerBase):
             version.status = status  # type: ignore[assignment]
             version.output_path = output_path
             version.error = error
+            if seed_used is not None and version.seed is None:
+                version.seed = seed_used
+            if telemetry:
+                seconds = telemetry.get("generation_seconds")
+                if isinstance(seconds, (int, float)):
+                    version.generation_seconds = float(seconds)
+                gpu_name = telemetry.get("gpu_name")
+                if isinstance(gpu_name, str):
+                    version.gpu_name = gpu_name
+                peak = telemetry.get("peak_vram_gb")
+                if isinstance(peak, (int, float)):
+                    version.peak_vram_gb = float(peak)
             if status == "complete":
                 shot.current_version = version.number
                 shot.status = "review"
@@ -658,6 +809,89 @@ class FilmGenerationHandler(StateHandlerBase):
         )
         return profiles
 
+    def _models_path(self) -> str:
+        if self._config.wangp_enabled and self._config.wangp_root is not None:
+            return str(self._config.wangp_root / "ckpts")
+        return str(self._config.models_dir)
+
+    def _wangp_model_rows(self, fits: Callable[[float | None], bool | None]) -> list[FilmModelCapability]:
+        """Rows for WanGP mode from the checkout's own model definitions. The
+        configured video/image types are 'active'; other LTX/video families
+        are 'available' (WanGP downloads them on first use) or 'installed'."""
+        active_video = self._config.wangp_video_model_type
+        active_image = self._config.wangp_image_model_type
+        definitions = self._wangp_bridge.list_model_definitions() if self._wangp_bridge is not None else []
+        rows: list[FilmModelCapability] = []
+        seen: set[str] = set()
+        for definition in definitions:
+            model_id = str(definition.get("id", ""))
+            architecture = str(definition.get("architecture", ""))
+            family = _wangp_family(architecture or model_id)
+            task = _wangp_task(architecture or model_id)
+            if task not in ("video", "image"):
+                continue  # audio / LLM defaults are not film models
+            installed = bool(definition.get("installed", False))
+            is_active = model_id in (active_video, active_image)
+            state = "active" if is_active else "installed" if installed else "available"
+            quant_raw = definition.get("quantized_variants", [])
+            quant = ", ".join(str(q) for q in cast(list[object], quant_raw)) if isinstance(quant_raw, list) else ""
+            minimum = _WANGP_MIN_VRAM_GB if family.startswith("ltx") or family in ("wan", "hunyuan", "z_image", "flux") else None
+            rows.append(
+                FilmModelCapability(
+                    id=model_id,
+                    label=f"WanGP · {definition.get('name', model_id)}",
+                    modes=["video"] if task == "video" else ["image"],
+                    supports_image_to_video=task == "video",
+                    supports_text_to_video=task == "video",
+                    supports_reference_images=task == "video",
+                    supports_audio=family.startswith("ltx"),
+                    downloaded=installed or is_active,
+                    download_state="managed_by_wangp",
+                    execution="wangp",
+                    required=is_active,
+                    estimated_min_vram_gb=minimum,
+                    fits_gpu=fits(minimum),
+                    supported_resolutions=_LOCAL_RESOLUTIONS if task == "video" else [],
+                    family=family,
+                    task=task,
+                    description=str(definition.get("description", ""))[:240],
+                    quantization=quant,
+                    state=state,
+                    is_active=is_active,
+                    vram_is_estimate=True,
+                )
+            )
+            seen.add(model_id)
+        # Always show the configured types even if the checkout has no definition for them.
+        for model_id, task in ((active_video, "video"), (active_image, "image")):
+            if model_id in seen:
+                continue
+            rows.append(
+                FilmModelCapability(
+                    id=model_id,
+                    label=f"WanGP · {model_id}",
+                    modes=[task],
+                    supports_image_to_video=task == "video",
+                    supports_text_to_video=task == "video",
+                    supports_reference_images=task == "video",
+                    supports_audio=task == "video",
+                    downloaded=True,
+                    download_state="managed_by_wangp",
+                    execution="wangp",
+                    estimated_min_vram_gb=_WANGP_MIN_VRAM_GB,
+                    fits_gpu=fits(_WANGP_MIN_VRAM_GB),
+                    supported_resolutions=_LOCAL_RESOLUTIONS if task == "video" else [],
+                    family=_wangp_family(model_id),
+                    task=task,
+                    state="active",
+                    is_active=True,
+                )
+            )
+        # Active rows first, then installed, then available; stable within groups.
+        order = {"active": 0, "installed": 1, "available": 2}
+        rows.sort(key=lambda r: (order.get(r.state, 3), r.family, r.id))
+        return rows
+
     def capabilities(self) -> FilmCapabilitiesResponse:
         gpu_name = self._gpu_info.get_device_name()
         vram_gb_int = self._gpu_info.get_vram_total_gb()
@@ -680,40 +914,7 @@ class FilmGenerationHandler(StateHandlerBase):
         models: list[FilmModelCapability] = []
         if self._config.wangp_enabled:
             execution_mode = "wangp"
-            models.append(
-                FilmModelCapability(
-                    id=self._config.wangp_video_model_type,
-                    label=f"WanGP · {self._config.wangp_video_model_type}",
-                    modes=["video"],
-                    supports_image_to_video=True,
-                    supports_text_to_video=True,
-                    supports_reference_images=True,
-                    supports_audio=True,
-                    downloaded=True,
-                    download_state="managed_by_wangp",
-                    execution="wangp",
-                    estimated_min_vram_gb=_WANGP_MIN_VRAM_GB,
-                    fits_gpu=fits(_WANGP_MIN_VRAM_GB),
-                    supported_resolutions=_LOCAL_RESOLUTIONS,
-                )
-            )
-            models.append(
-                FilmModelCapability(
-                    id=self._config.wangp_image_model_type,
-                    label=f"WanGP · {self._config.wangp_image_model_type}",
-                    modes=["image"],
-                    supports_image_to_video=False,
-                    supports_text_to_video=False,
-                    supports_reference_images=False,
-                    supports_audio=False,
-                    downloaded=True,
-                    download_state="managed_by_wangp",
-                    execution="wangp",
-                    estimated_min_vram_gb=_WANGP_MIN_VRAM_GB,
-                    fits_gpu=fits(_WANGP_MIN_VRAM_GB),
-                    supported_resolutions=[],
-                )
-            )
+            models.extend(self._wangp_model_rows(fits))
         elif self._config.force_api_generations:
             execution_mode = "api"
             for api_id, label in (("fast", "LTX-2.3 Fast (API)"), ("pro", "LTX-2.3 Pro (API)")):
@@ -732,6 +933,11 @@ class FilmGenerationHandler(StateHandlerBase):
                         estimated_min_vram_gb=None,
                         fits_gpu=None,
                         supported_resolutions=_FORCED_API_RESOLUTIONS,
+                        family="ltx2",
+                        task="video",
+                        state="active",
+                        is_active=True,
+                        vram_is_estimate=False,
                     )
                 )
         else:
@@ -768,6 +974,19 @@ class FilmGenerationHandler(StateHandlerBase):
                         estimated_min_vram_gb=minimum,
                         fits_gpu=fits(minimum),
                         supported_resolutions=_LOCAL_RESOLUTIONS if is_video else [],
+                        family="ltx2" if is_video else "z_image",
+                        task="video" if is_video else "image",
+                        description=spec.description,
+                        state=(
+                            "installed"
+                            if downloaded
+                            else "incompatible"
+                            if fits(minimum) is False
+                            else "available"
+                        ),
+                        installed_size_gb=round(spec.expected_size_bytes / 1_000_000_000, 1) if downloaded else None,
+                        is_active=downloaded and required,
+                        vram_is_estimate=True,
                     )
                 )
             total_required_download_gb = round(missing_required_bytes / 1_000_000_000, 1)
@@ -789,6 +1008,10 @@ class FilmGenerationHandler(StateHandlerBase):
                     estimated_min_vram_gb=_WANGP_MIN_VRAM_GB,
                     fits_gpu=fits(_WANGP_MIN_VRAM_GB),
                     supported_resolutions=_LOCAL_RESOLUTIONS,
+                    family="wangp",
+                    task="video",
+                    description="Set WANGP_ROOT to a Wan2GP checkout to enable this path.",
+                    state="incompatible" if fits(_WANGP_MIN_VRAM_GB) is False else "available",
                 )
             )
 
@@ -803,6 +1026,9 @@ class FilmGenerationHandler(StateHandlerBase):
             total_required_download_gb=total_required_download_gb,
             text_encoder_optional=text_encoder_optional,
             profiles=self._quality_profiles(vram_gb, execution_mode, models),
+            models_path=self._models_path(),
+            system_ram_gb=_system_ram_gb(),
+            cuda_available=self._gpu_info.get_cuda_available(),
             vram_note=(
                 "VRAM figures are from this app's documentation: the WanGP bridge runs on "
                 "as low as 6 GB VRAM; the native local LTX pipeline targets ~32 GB. "

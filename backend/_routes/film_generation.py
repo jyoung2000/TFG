@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import FileResponse
 
 from _routes._errors import HTTPError
+from server_utils.path_policy import PathPolicyError, require_within_any
 from film.film_api_types import (
     BatchGenerateRequest,
     BatchGenerateResponse,
@@ -15,6 +14,7 @@ from film.film_api_types import (
     FilmQueueResponse,
     GenerateShotRequest,
     QueueControlResponse,
+    QueueMoveRequest,
     QueueShotResponse,
 )
 from state import get_state_service
@@ -75,6 +75,13 @@ def route_film_queue_cancel_job(
     return QueueControlResponse(status="cancelled", queue=handler.film_generation.cancel_job(shot_id))
 
 
+@router.post("/queue/{shot_id}/move", response_model=QueueControlResponse)
+def route_film_queue_move(
+    shot_id: str, req: QueueMoveRequest, handler: AppHandler = Depends(get_state_service)
+) -> QueueControlResponse:
+    return QueueControlResponse(status="moved", queue=handler.film_generation.move(shot_id, req.index))
+
+
 @router.post("/queue/{shot_id}/prioritize", response_model=QueueControlResponse)
 def route_film_queue_prioritize(
     shot_id: str, handler: AppHandler = Depends(get_state_service)
@@ -95,10 +102,10 @@ def route_film_output(
     handler: AppHandler = Depends(get_state_service),
 ) -> FileResponse:
     """Serve a generated output strictly from within the outputs directory."""
-    outputs_dir = handler.config.outputs_dir.resolve()
-    candidate = Path(path).resolve()
-    if outputs_dir != candidate and outputs_dir not in candidate.parents:
-        raise HTTPError(400, "Path is outside the outputs directory")
+    try:
+        candidate = require_within_any(path, [handler.config.outputs_dir], what="output path")
+    except PathPolicyError as exc:
+        raise HTTPError(400, str(exc)) from exc
     if not candidate.is_file():
         raise HTTPError(404, "Output not found")
     return FileResponse(candidate)

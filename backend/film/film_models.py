@@ -187,6 +187,7 @@ class CompositionObject(BaseModel):
     # storyboard's cast stay one model, never two.
     asset_id: str | None = None
     visible: bool = True
+    locked: bool = False
     transform: CompositionTransform = Field(default_factory=CompositionTransform)
     # Named-joint pose: joint name -> [x, y, z] Euler degrees.
     pose: dict[str, tuple[float, float, float]] = Field(default_factory=dict)
@@ -202,9 +203,14 @@ class ShotFraming(BaseModel):
     camera_elevation: CameraElevation = "eye"
     composition: CompositionId = "center"
     fov_deg: float = 40.0
-    # OTS relationship: which composer object is foreground vs subject.
+    # OTS relationship: which composer object is foreground vs subject, and
+    # which shoulder the camera looks over.
     ots_foreground_id: str | None = None
     ots_subject_id: str | None = None
+    ots_shoulder: Literal["left", "right"] = "left"
+    # "preset": the camera is re-solved from the presets above; "manual": the
+    # user positioned the camera by hand and presets must not overwrite it.
+    camera_mode: Literal["preset", "manual"] = "preset"
 
 
 class CompositionScene(BaseModel):
@@ -279,6 +285,15 @@ class ShotVersion(BaseModel):
     # Wardrobe text per character asset at generation time, for continuity
     # comparisons against later edits.
     wardrobe_snapshot: dict[str, str] = Field(default_factory=dict)
+    # Reproducibility: the shot state this version was rendered from
+    # (framing, camera move, duration, cast, generation settings, capture).
+    shot_snapshot: dict[str, object] = Field(default_factory=dict)
+    # Telemetry recorded by the queue worker (estimates are labelled as such
+    # in the UI; peak VRAM is only what the GPU service could observe).
+    generation_seconds: float | None = None
+    gpu_name: str = ""
+    peak_vram_gb: float | None = None
+    execution_mode: str = ""
     created_at: int = Field(default_factory=now_ms)
 
 
@@ -288,6 +303,8 @@ class FilmShot(BaseModel):
     title: str = ""
     description: str = ""
     duration_seconds: float = 4.0
+    # Overrides the scene/project inter-shot gap before this shot on the timeline.
+    gap_before_seconds: float | None = None
 
     framing: ShotFraming = Field(default_factory=ShotFraming)
     camera_move: CameraMove = "static"
@@ -339,6 +356,8 @@ class FilmScene(BaseModel):
     lighting: str = ""
     time_of_day: str = ""
     continuity_notes: str = ""
+    # Overrides FilmProjectSettings.inter_shot_gap_seconds for this scene.
+    inter_shot_gap_seconds: float | None = None
     shots: list[FilmShot] = Field(default_factory=list[FilmShot])
 
     def shot(self, shot_id: str) -> FilmShot | None:

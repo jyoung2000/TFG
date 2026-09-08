@@ -42,6 +42,11 @@ def route_openrouter_models(
     return handler.film_director.openrouter_models(refresh=refresh)
 
 
+@router.get("/director/openai-compatible/models", response_model=OpenRouterModelsResponse)
+def route_openai_compatible_models(handler: AppHandler = Depends(get_state_service)) -> OpenRouterModelsResponse:
+    return handler.film_director.openai_compatible_models()
+
+
 @router.post("/director/openrouter/validate", response_model=OpenRouterValidateResponse)
 def route_openrouter_validate(handler: AppHandler = Depends(get_state_service)) -> OpenRouterValidateResponse:
     return handler.film_director.validate_openrouter_key()

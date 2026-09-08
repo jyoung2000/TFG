@@ -43,6 +43,7 @@ _KEY_FIELDS = {
     "fal": "fal_api_key",
     "gemini": "gemini_api_key",
     "openrouter": "openrouter_api_key",
+    "openai-compatible": "openai_compatible_api_key",
 }
 
 

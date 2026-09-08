@@ -24,6 +24,9 @@ ContinuityKind = Literal[
     "missing_previous_output",
     "wardrobe_change",
     "duration_invalid",
+    "screen_direction",
+    "jump_cut",
+    "framing_jump",
 ]
 
 ContinuitySeverity = Literal["minor", "significant", "broken"]
@@ -38,7 +41,12 @@ _SEVERITY: dict[str, ContinuitySeverity] = {
     "character_not_in_scene": "minor",
     "prop_not_in_scene": "minor",
     "missing_capture": "minor",
+    "screen_direction": "significant",
+    "jump_cut": "minor",
+    "framing_jump": "minor",
 }
+
+_SHOT_SIZE_ORDER = ["xwide", "wide", "full", "medium", "mcu", "closeup", "xcu"]
 
 _LEVEL_RANK: dict[str, int] = {"good": 0, "minor": 1, "significant": 2, "broken": 3}
 
@@ -220,6 +228,91 @@ def check_shot_continuity(
             )
         )
 
+    if previous is not None and previous_in_same_scene(project, previous, shot):
+        warnings.extend(camera_continuity_warnings(previous, shot))
+
+    return warnings
+
+
+def previous_in_same_scene(project: FilmProject, previous: FilmShot, shot: FilmShot) -> bool:
+    found_prev = project.find_shot(previous.id)
+    found_cur = project.find_shot(shot.id)
+    return found_prev is not None and found_cur is not None and found_prev[0].id == found_cur[0].id
+
+
+def _camera_side(shot: FilmShot, a_id: str, b_id: str) -> float | None:
+    """Sign of the camera's side of the line through characters a→b on the
+    ground plane (the 180° "axis of action"). None when not determinable."""
+    composition = shot.composition
+    if composition is None or composition.camera is None:
+        return None
+    a = next((o for o in composition.objects if o.asset_id == a_id), None)
+    b = next((o for o in composition.objects if o.asset_id == b_id), None)
+    if a is None or b is None:
+        return None
+    ax, _, az = a.transform.position
+    bx, _, bz = b.transform.position
+    cx, _, cz = composition.camera.transform.position
+    dx, dz = bx - ax, bz - az
+    if abs(dx) + abs(dz) < 1e-6:
+        return None
+    cross = dx * (cz - az) - dz * (cx - ax)
+    if abs(cross) < 1e-3:
+        return None
+    return 1.0 if cross > 0 else -1.0
+
+
+def camera_continuity_warnings(previous: FilmShot, shot: FilmShot) -> list[ContinuityWarning]:
+    """Deterministic screen-direction / framing checks between consecutive
+    shots of the same scene. Warnings, not rules: filmmakers break them on
+    purpose, so nothing here is auto-fixable."""
+    warnings: list[ContinuityWarning] = []
+    shared = [c.asset_id for c in shot.characters if any(p.asset_id == c.asset_id for p in previous.characters)]
+    if len(shared) >= 2:
+        a_id, b_id = shared[0], shared[1]
+        side_prev = _camera_side(previous, a_id, b_id)
+        side_cur = _camera_side(shot, a_id, b_id)
+        if side_prev is not None and side_cur is not None and side_prev != side_cur:
+            warnings.append(
+                _warn(
+                    "screen_direction",
+                    "The camera crosses the line of action between the two characters compared with the "
+                    "previous shot (180° rule) — screen direction will flip.",
+                    fix="Move the shot camera to the same side of the characters as the previous shot, or add a neutral/cutaway shot between them.",
+                    auto_fixable=False,
+                )
+            )
+    if shared or (len(shot.characters) == 1 and len(previous.characters) == 1 and shot.characters[0].asset_id == previous.characters[0].asset_id):
+        prev_f, cur_f = previous.framing, shot.framing
+        same_setup = (
+            prev_f.shot_size == cur_f.shot_size
+            and prev_f.camera_angle == cur_f.camera_angle
+            and prev_f.camera_elevation == cur_f.camera_elevation
+            and previous.camera_move == shot.camera_move
+        )
+        if same_setup:
+            warnings.append(
+                _warn(
+                    "jump_cut",
+                    "Same subject, same shot size, angle and elevation as the previous shot — this will read as a jump cut.",
+                    fix="Change the shot size by at least two steps or the angle by ~30°, or merge the shots.",
+                    auto_fixable=False,
+                )
+            )
+        else:
+            try:
+                delta = abs(_SHOT_SIZE_ORDER.index(prev_f.shot_size) - _SHOT_SIZE_ORDER.index(cur_f.shot_size))
+            except ValueError:
+                delta = 0
+            if delta >= 5 and prev_f.camera_angle == cur_f.camera_angle:
+                warnings.append(
+                    _warn(
+                        "framing_jump",
+                        "Severe framing jump on the same axis (e.g. extreme wide straight to extreme close-up).",
+                        fix="Add an intermediate shot size, or change the angle so the cut reads as a new setup.",
+                        auto_fixable=False,
+                    )
+                )
     return warnings
 
 

@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import cast
 
 from film.film_models import FILM_SCHEMA_VERSION, FilmProject
+from server_utils.path_policy import PathPolicyError, resolve_within
 
 logger = logging.getLogger(__name__)
 
@@ -135,12 +136,12 @@ class FilmStore:
         tmp.replace(path)
 
     def resolve_media_path(self, project_id: str, relative: str) -> Path:
-        """Resolve a project-relative media path, refusing traversal outside it."""
-        base = self.project_dir(project_id).resolve()
-        candidate = (base / relative).resolve()
-        if base != candidate and base not in candidate.parents:
-            raise FilmStoreError(f"Path escapes the film project directory: {relative!r}")
-        return candidate
+        """Resolve a project-relative media path, refusing traversal outside it
+        (canonical paths, so symlinks pointing out of the project are rejected)."""
+        try:
+            return resolve_within(self.project_dir(project_id), relative, what="media path")
+        except PathPolicyError as exc:
+            raise FilmStoreError(str(exc)) from exc
 
     def save_capture(
         self,

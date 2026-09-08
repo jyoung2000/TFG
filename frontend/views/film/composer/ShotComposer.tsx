@@ -59,6 +59,7 @@ function newObject(type: CompositionObjectType, name: string, variant: FigureVar
     type,
     asset_id: null,
     visible: true,
+    locked: false,
     transform: { position: [objectCounter * 0.9 - 1, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1] },
     pose: {},
     figure_variant: variant,

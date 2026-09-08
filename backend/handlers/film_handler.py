@@ -47,6 +47,8 @@ from film.film_continuity import (
     shot_continuity_report,
 )
 from film.film_models import (
+    CompositionObject,
+    CompositionTransform,
     FilmAsset,
     FilmPose,
     FilmProject,
@@ -68,6 +70,7 @@ from film.film_package import (
 )
 from film.film_prompt import synthesize_prompt
 from film.film_store import FilmStore, FilmStoreError
+from server_utils.path_policy import PathPolicyError, require_absolute_file, require_destination
 from handlers.base import StateHandlerBase
 from state.app_state_types import AppState
 
@@ -103,6 +106,86 @@ def decode_image_base64(data: str, *, require_png: bool = True) -> bytes:
     if require_png and not raw.startswith(_PNG_MAGIC):
         raise HTTPError(400, "Image payload is not a PNG")
     return raw
+
+
+def sync_composition_and_cast(project: FilmProject, shot: FilmShot, *, cast_is_authoritative: bool = False) -> None:
+    """ONE SHOT STATE invariant: the shot's cast/props and its composer objects
+    describe the same thing.
+
+    - A figure placed in the composer that links to a character asset becomes
+      part of ``shot.characters``.
+    - A character assigned to the shot gets a figure in an existing
+      composition; a prop gets a placeholder primitive.
+    - Composer objects linked to assets the shot no longer references are
+      removed (unlinked figures/primitives are left alone).
+
+    ``cast_is_authoritative`` is set when the caller edited the cast itself
+    (storyboard card, director ``assign_character``), so removing a character
+    also removes its figure instead of the figure re-adding the character.
+    """
+    composition = shot.composition
+    if composition is None:
+        return
+    character_ids = {c.asset_id for c in shot.characters}
+    prop_ids = set(shot.prop_ids)
+    # Composer → cast
+    for obj in [] if cast_is_authoritative else composition.objects:
+        if obj.type == "figure" and obj.asset_id and obj.asset_id not in character_ids:
+            asset = project.asset(obj.asset_id)
+            if asset is not None and asset.kind == "character":
+                shot.characters.append(ShotCharacter(asset_id=obj.asset_id))
+                character_ids.add(obj.asset_id)
+        elif obj.type != "figure" and obj.asset_id and obj.asset_id not in prop_ids:
+            asset = project.asset(obj.asset_id)
+            if asset is not None and asset.kind == "prop":
+                shot.prop_ids.append(obj.asset_id)
+                prop_ids.add(obj.asset_id)
+    # Cast → composer
+    linked = {obj.asset_id for obj in composition.objects if obj.asset_id}
+    figure_count = sum(1 for obj in composition.objects if obj.type == "figure")
+    for index, shot_character in enumerate(shot.characters):
+        if shot_character.asset_id in linked:
+            continue
+        asset = project.asset(shot_character.asset_id)
+        if asset is None:
+            continue
+        composition.objects.append(
+            CompositionObject(
+                name=asset.name,
+                type="figure",
+                asset_id=asset.id,
+                transform=CompositionTransform(position=((figure_count + index) * 1.2, 0.0, 0.0)),
+            )
+        )
+        linked.add(asset.id)
+    for index, prop_id in enumerate(shot.prop_ids):
+        if prop_id in linked:
+            continue
+        asset = project.asset(prop_id)
+        if asset is None:
+            continue
+        composition.objects.append(
+            CompositionObject(
+                name=asset.name,
+                type="cube",
+                asset_id=asset.id,
+                transform=CompositionTransform(position=(-1.5 - index * 0.8, 0.0, 0.8)),
+            )
+        )
+        linked.add(asset.id)
+    # Remove objects whose linked asset the shot no longer uses (or that no longer exists).
+    keep: list[CompositionObject] = []
+    for obj in composition.objects:
+        if obj.asset_id and obj.asset_id not in character_ids and obj.asset_id not in prop_ids:
+            continue
+        keep.append(obj)
+    composition.objects = keep
+    valid_ids = {obj.id for obj in composition.objects}
+    if composition.framing.ots_foreground_id and composition.framing.ots_foreground_id not in valid_ids:
+        composition.framing.ots_foreground_id = None
+    if composition.framing.ots_subject_id and composition.framing.ots_subject_id not in valid_ids:
+        composition.framing.ots_subject_id = None
+    shot.framing = composition.framing
 
 
 class FilmHandler(StateHandlerBase):
@@ -240,11 +323,14 @@ class FilmHandler(StateHandlerBase):
             scene = self._require_scene(project, scene_id)
             data = req.model_dump()
             clear_location = bool(data.pop("clear_location"))
+            clear_gap = bool(data.pop("clear_gap"))
             for key, value in data.items():
                 if value is not None:
                     setattr(scene, key, value)
             if clear_location:
                 scene.location_id = None
+            if clear_gap:
+                scene.inter_shot_gap_seconds = None
             for shot in scene.shots:
                 self._refresh_prompt(project, scene, shot)
             self._save(project)
@@ -306,7 +392,7 @@ class FilmHandler(StateHandlerBase):
                 # An explicit prompt edit locks synthesis unless the caller
                 # also unlocks it in the same request.
                 shot.prompt_locked = True
-            for key in provided - {"clear_location", "status"}:
+            for key in provided - {"clear_location", "clear_gap", "status"}:
                 value = getattr(req, key)
                 if value is not None:
                     # Assign the validated model instances from the request, so
@@ -315,11 +401,25 @@ class FilmHandler(StateHandlerBase):
                     setattr(shot, key, value)
             if clear_location:
                 shot.location_id = None
+            if req.clear_gap:
+                shot.gap_before_seconds = None
             if shot.composition is not None:
+                # ONE SHOT STATE: the composition carries the authoritative
+                # framing/camera move, so an explicit framing edit (card, director)
+                # is written into the composition rather than overwritten by it.
+                if "framing" in provided and req.framing is not None and "composition" not in provided:
+                    shot.composition.framing = req.framing
+                if "camera_move" in provided and req.camera_move is not None and "composition" not in provided:
+                    shot.composition.camera_move = req.camera_move
                 shot.framing = shot.composition.framing
                 shot.camera_move = shot.composition.camera_move
                 if shot.status == "draft":
                     shot.status = "composed"
+            sync_composition_and_cast(
+                project,
+                shot,
+                cast_is_authoritative=bool(provided & {"characters", "prop_ids"}) and "composition" not in provided,
+            )
             shot.updated_at = now_ms()
             self._refresh_prompt(project, scene, shot)
             self._save(project)
@@ -439,9 +539,12 @@ class FilmHandler(StateHandlerBase):
         prompt = req.prompt.strip()
         if not prompt:
             raise HTTPError(400, "prompt is required")
-        output = Path(req.output_path).expanduser()
-        if not output.is_absolute() or not output.is_file():
-            raise HTTPError(400, f"Generated video not found: {req.output_path}")
+        try:
+            output = require_absolute_file(
+                req.output_path, what="Generated video", allowed_suffixes=(".mp4", ".webm", ".mov", ".m4v", ".mkv")
+            )
+        except PathPolicyError as exc:
+            raise HTTPError(400, str(exc)) from exc
         duration = max(0.5, min(60.0, float(req.duration_seconds)))
         fps = max(1, min(120, int(req.fps)))
         aspect: str = req.aspect_ratio if req.aspect_ratio in ("16:9", "9:16") else "16:9"
@@ -509,28 +612,29 @@ class FilmHandler(StateHandlerBase):
         )
 
     def export_package(self, project_id: str, req: ExportPackageRequest) -> PackageSummaryResponse:
-        raw = req.destination_path.strip()
-        if not raw:
-            raise HTTPError(400, "destination_path is required")
-        destination = Path(raw).expanduser()
-        if not destination.is_absolute():
-            raise HTTPError(400, "destination_path must be an absolute path")
-        if destination.suffix.lower() != PACKAGE_EXTENSION:
-            destination = destination.with_name(destination.name + PACKAGE_EXTENSION)
-        if destination.is_dir():
-            raise HTTPError(400, "destination_path points at a directory")
+        try:
+            destination = require_destination(req.destination_path, suffix=PACKAGE_EXTENSION, what="destination_path")
+        except PathPolicyError as exc:
+            raise HTTPError(400, str(exc)) from exc
         with self.lock:
             self._load(project_id)  # 400 on bad id; creates the facet if missing
             try:
-                summary = export_package(self._store, project_id, destination, include_outputs=req.include_outputs)
+                summary = export_package(
+                    self._store,
+                    project_id,
+                    destination,
+                    include_outputs=req.include_outputs,
+                    host_project=req.host_project,
+                )
             except (FilmStoreError, FilmPackageError, OSError) as exc:
                 raise HTTPError(400, f"Export failed: {exc}") from exc
         return self._summary_response(summary, path=str(destination))
 
     def inspect_package(self, package_path: str) -> PackageSummaryResponse:
-        path = Path(package_path.strip()).expanduser()
-        if not path.is_absolute():
-            raise HTTPError(400, "package_path must be an absolute path")
+        try:
+            path = require_absolute_file(package_path, what="package_path", allowed_suffixes=(PACKAGE_EXTENSION, ".zip"))
+        except PathPolicyError as exc:
+            raise HTTPError(400, str(exc)) from exc
         try:
             summary = inspect_package(path)
         except FilmPackageError as exc:
@@ -538,9 +642,10 @@ class FilmHandler(StateHandlerBase):
         return self._summary_response(summary, path=str(path))
 
     def import_package(self, project_id: str, req: ImportPackageRequest) -> ImportPackageResponse:
-        path = Path(req.package_path.strip()).expanduser()
-        if not path.is_absolute():
-            raise HTTPError(400, "package_path must be an absolute path")
+        try:
+            path = require_absolute_file(req.package_path, what="package_path", allowed_suffixes=(PACKAGE_EXTENSION, ".zip"))
+        except PathPolicyError as exc:
+            raise HTTPError(400, str(exc)) from exc
         with self.lock:
             current = self._load(project_id)
             if (current.scenes or current.assets or current.script.content.strip()) and not req.replace:
@@ -549,12 +654,17 @@ class FilmHandler(StateHandlerBase):
                     "This project already has content. Import into a new project, or pass replace=true to overwrite it.",
                 )
             try:
-                project, summary = import_package(self._store, path, project_id)
+                result = import_package(self._store, path, project_id)
             except FilmPackageError as exc:
                 raise HTTPError(400, str(exc)) from exc
             except FilmStoreError as exc:
                 raise HTTPError(400, str(exc)) from exc
-        return ImportPackageResponse(summary=self._summary_response(summary, path=str(path)), project=project)
+        return ImportPackageResponse(
+            summary=self._summary_response(result.summary, path=str(path)),
+            project=result.project,
+            host_project=result.host_project,
+            output_path_map=result.output_path_map,
+        )
 
     # ---- Continuity / media ----------------------------------------------
 
