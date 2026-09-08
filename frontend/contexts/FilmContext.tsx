@@ -98,6 +98,10 @@ export function FilmProvider({ children }: { children: React.ReactNode }) {
   const redoStackRef = useRef<FilmProject[]>([])
   const lastSeenRef = useRef<{ projectId: string; project: FilmProject; signature: string } | null>(null)
   const restoringRef = useRef(false)
+  // Latest-wins ordering for project loads: a poll that started before an
+  // undo/redo (or a newer refresh) must not overwrite the fresher state or be
+  // recorded as an edit when it finally arrives.
+  const loadEpochRef = useRef(0)
 
   const syncHistorySize = useCallback(() => {
     setHistorySize({ undo: undoStackRef.current.length, redo: redoStackRef.current.length })
@@ -123,9 +127,10 @@ export function FilmProvider({ children }: { children: React.ReactNode }) {
   const refresh = useCallback(async (): Promise<FilmProject | null> => {
     const projectId = projectIdRef.current
     if (!projectId) return null
+    const epoch = ++loadEpochRef.current
     try {
       const project = await filmApi.getProject(projectId)
-      if (projectIdRef.current === projectId) {
+      if (projectIdRef.current === projectId && epoch === loadEpochRef.current) {
         setFilmState(project)
         setError(null)
         recordSnapshot(projectId, project)
@@ -195,8 +200,10 @@ export function FilmProvider({ children }: { children: React.ReactNode }) {
       const projectId = projectIdRef.current
       if (!projectId) return
       restoringRef.current = true
+      loadEpochRef.current++ // in-flight polls are stale from here on
       try {
         const project = await filmApi.replaceProject(projectId, snapshot)
+        loadEpochRef.current++
         setFilmState(project)
         lastSeenRef.current = { projectId, project, signature: structuralSignature(project) }
         setHistoryNote(direction === 'undo' ? 'Undone' : 'Redone')

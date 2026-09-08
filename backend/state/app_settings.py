@@ -19,6 +19,9 @@ def _to_camel_case(field_name: str) -> str:
     special_aliases = {
         "prompt_enhancer_enabled_t2v": "promptEnhancerEnabledT2V",
         "prompt_enhancer_enabled_i2v": "promptEnhancerEnabledI2V",
+        # Director role ids stay snake_case on the wire: the renderer indexes
+        # openrouterModels by the same role id it shows (prompt_refinement).
+        "prompt_refinement": "prompt_refinement",
     }
     if field_name in special_aliases:
         return special_aliases[field_name]

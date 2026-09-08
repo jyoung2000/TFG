@@ -75,7 +75,9 @@ Docs: [Filmmaking overview](docs/FILMMAKING.md) ·
 [Project format & packages](docs/PROJECT_FORMAT.md) ·
 [Architecture](docs/FILMMAKING_INTEGRATION_ARCHITECTURE.md) ·
 [Upstream attribution](docs/INTEGRATED_UPSTREAMS.md) ·
-[Hardening audit](docs/FINAL_HARDENING_AUDIT.md)
+[Hardening audit](docs/FINAL_HARDENING_AUDIT.md) ·
+[RC final report](docs/RC_FINAL_REPORT.md) ·
+[RTX 4070 test matrix](docs/RTX_4070_TEST_MATRIX.md)
 
 ### Building installers
 
@@ -421,6 +423,8 @@ LTX Desktop collects minimal, anonymous usage analytics (app version, platform, 
 - [`RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md) - what must be verified before a release
 - [`FILMMAKING.md`](docs/FILMMAKING.md) - filmmaking workflow overview (links to every film doc)
 - [`FINAL_HARDENING_AUDIT.md`](docs/FINAL_HARDENING_AUDIT.md) - audit of what is implemented, verified, and not
+- [`RC_FINAL_REPORT.md`](docs/RC_FINAL_REPORT.md) - release-candidate status, tests, installer state, remaining issues
+- [`RTX_4070_TEST_MATRIX.md`](docs/RTX_4070_TEST_MATRIX.md) - GPU qualification checklist (fill in on real hardware)
 - [`TELEMETRY.md`](docs/TELEMETRY.md) - telemetry and privacy
 - [`backend/architecture.md`](backend/architecture.md) - backend architecture
 - [`backend/WANGP_BACKEND.md`](backend/WANGP_BACKEND.md) - WanGP bridge configuration

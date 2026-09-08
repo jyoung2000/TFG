@@ -520,3 +520,23 @@ class TestVisualReview:
         parts = contents[0]["parts"]  # type: ignore[index]
         assert parts[0] == {"text": "compare"}
         assert parts[1] == {"inline_data": {"mime_type": "image/jpeg", "data": "QUJD"}}
+
+
+class TestSettingsSyncPayload:
+    def test_frontend_sync_payload_roundtrips(self, client):
+        """The renderer POSTs its whole settings object (minus has_* flags) on
+        every change; one unknown key would 422 the entire sync, so the
+        response shape must be accepted verbatim — role ids included."""
+        current = client.get("/api/settings").json()
+        payload = {k: v for k, v in current.items() if not k.startswith("has") and k != "openrouterKeySource"}
+        payload["openrouterModels"]["prompt_refinement"] = "openai/gpt-4o-mini"
+        payload["directorProvider"] = "openai_compatible"
+        payload["openaiCompatibleBaseUrl"] = "http://127.0.0.1:1234/v1"
+        payload["openaiCompatibleModel"] = "local-model"
+        response = client.post("/api/settings", json=payload)
+        assert response.status_code == 200, response.text
+        after = client.get("/api/settings").json()
+        assert after["openrouterModels"]["prompt_refinement"] == "openai/gpt-4o-mini"
+        assert after["directorProvider"] == "openai_compatible"
+        assert after["openaiCompatibleModel"] == "local-model"
+        assert set(after["openrouterModels"]) == {"defaultModel", "script", "storyboard", "director", "continuity", "prompt_refinement"}

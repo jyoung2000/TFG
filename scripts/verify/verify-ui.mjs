@@ -11,7 +11,7 @@ function log(step, ok, note = '') {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${step}${note ? ' — ' + note : ''}`)
 }
 
-const browser = await chromium.connectOverCDP('http://localhost:9222')
+const browser = await chromium.connectOverCDP('http://127.0.0.1:9222')
 const context = browser.contexts()[0]
 let page = context.pages().find(p => p.url().includes('localhost:5173')) ?? context.pages()[0]
 if (!page) throw new Error('No page found over CDP')
