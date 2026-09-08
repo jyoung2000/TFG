@@ -136,6 +136,18 @@ export function ShotCard({
           </span>
         </div>
         <div className="text-[10px] text-zinc-500 truncate">{framingLabel(shot.framing)}</div>
+        <div className="flex items-center gap-1 text-[10px] text-zinc-600 truncate">
+          <span className="truncate" title="Generation model">
+            {shot.generation.model || film.settings.default_model || 'project model'}
+          </span>
+          {shot.versions.length > 0 && (
+            <span className="shrink-0 px-1 rounded bg-zinc-800 text-zinc-400" title="Rendered versions">
+              v{shot.current_version ?? shot.versions.length}/{shot.versions.length}
+            </span>
+          )}
+          {shot.status === 'approved' && <span className="shrink-0 text-emerald-400">approved</span>}
+          {shot.status === 'rejected' && <span className="shrink-0 text-red-400">rejected</span>}
+        </div>
         {(characterNames.length > 0 || location) && (
           <div className="flex items-center gap-1 text-[10px] text-zinc-500 truncate">
             {characterNames.length > 0 && (

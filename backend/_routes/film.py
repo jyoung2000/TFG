@@ -26,6 +26,7 @@ from film.film_api_types import (
     ProjectContinuityResponse,
     PromoteVersionResponse,
     ReorderRequest,
+    ReplaceProjectRequest,
     SavePoseRequest,
     ShotCaptureRequest,
     UpdateAssetRequest,
@@ -54,6 +55,16 @@ def route_get_film_project(
     project_id: str, handler: AppHandler = Depends(get_state_service)
 ) -> FilmProjectResponse:
     return FilmProjectResponse(project=handler.film.get_project(project_id))
+
+
+@router.put("/projects/{project_id}", response_model=FilmProjectResponse)
+def route_replace_film_project(
+    project_id: str,
+    req: ReplaceProjectRequest,
+    handler: AppHandler = Depends(get_state_service),
+) -> FilmProjectResponse:
+    """Whole-project replacement for undo/redo snapshots."""
+    return FilmProjectResponse(project=handler.film_generation.replace_project(project_id, req))
 
 
 @router.put("/projects/{project_id}/script", response_model=FilmProjectResponse)

@@ -12,6 +12,13 @@ import type {
 } from '../types/film'
 import { useProjects } from './ProjectContext'
 
+/** A request from elsewhere in the app (editor, Gen Space) to open a shot in the storyboard. */
+export interface ShotFocusRequest {
+  shotId: string
+  /** Also open the Shot Composer for it. */
+  compose?: boolean
+}
+
 interface FilmContextType {
   film: FilmProject | null
   isLoading: boolean
@@ -32,11 +39,44 @@ interface FilmContextType {
   /** Keep the card markers in step with a fresh per-shot report (drawer fetch/fix). */
   setShotContinuity: (shotId: string, level: ContinuityLevel, warningCount: number) => void
   setQueue: (queue: FilmQueue) => void
+  /** Undo/redo over structural project edits (scenes, shots, assets, script, settings, compositions). */
+  undo: () => Promise<void>
+  redo: () => Promise<void>
+  canUndo: boolean
+  canRedo: boolean
+  historyNote: string
+  /** Ask the storyboard to select (and optionally compose) a shot once it is showing. */
+  focusShot: (request: ShotFocusRequest) => void
+  pendingFocus: ShotFocusRequest | null
+  clearPendingFocus: () => void
 }
 
 const FilmContext = createContext<FilmContextType | null>(null)
 
 const EMPTY_QUEUE: FilmQueue = { active: null, pending: [], paused: false, progress: null, phase: '' }
+const HISTORY_LIMIT = 40
+
+/**
+ * A signature of the project's user-authored structure. Generation progress
+ * (version status/output, shot status) is deliberately excluded so the polling
+ * refresh during a render does not create undo steps.
+ */
+function structuralSignature(project: FilmProject): string {
+  return JSON.stringify({
+    name: project.name,
+    script: project.script.content,
+    settings: project.settings,
+    assets: project.assets,
+    pose_library: project.pose_library,
+    scenes: project.scenes.map(scene => ({
+      ...scene,
+      shots: scene.shots.map(shot => {
+        const { versions: _versions, current_version: _current, status: _status, updated_at: _updated, ...rest } = shot
+        return rest
+      }),
+    })),
+  })
+}
 
 export function FilmProvider({ children }: { children: React.ReactNode }) {
   const { currentProjectId, currentTab } = useProjects()
@@ -46,8 +86,39 @@ export function FilmProvider({ children }: { children: React.ReactNode }) {
   const [queue, setQueue] = useState<FilmQueue>(EMPTY_QUEUE)
   const [capabilities, setCapabilities] = useState<FilmCapabilities | null>(null)
   const [continuity, setContinuity] = useState<ProjectContinuity | null>(null)
+  const [pendingFocus, setPendingFocus] = useState<ShotFocusRequest | null>(null)
+  const [historyNote, setHistoryNote] = useState('')
+  const [historySize, setHistorySize] = useState({ undo: 0, redo: 0 })
   const projectIdRef = useRef<string | null>(null)
   projectIdRef.current = currentProjectId
+
+  // Undo/redo stacks of project snapshots, per project. A snapshot is pushed
+  // whenever a refreshed project differs structurally from the last one seen.
+  const undoStackRef = useRef<FilmProject[]>([])
+  const redoStackRef = useRef<FilmProject[]>([])
+  const lastSeenRef = useRef<{ projectId: string; project: FilmProject; signature: string } | null>(null)
+  const restoringRef = useRef(false)
+
+  const syncHistorySize = useCallback(() => {
+    setHistorySize({ undo: undoStackRef.current.length, redo: redoStackRef.current.length })
+  }, [])
+
+  const recordSnapshot = useCallback(
+    (projectId: string, project: FilmProject) => {
+      const signature = structuralSignature(project)
+      const last = lastSeenRef.current
+      if (!last || last.projectId !== projectId) {
+        undoStackRef.current = []
+        redoStackRef.current = []
+      } else if (last.signature !== signature && !restoringRef.current) {
+        undoStackRef.current = [...undoStackRef.current.slice(-(HISTORY_LIMIT - 1)), last.project]
+        redoStackRef.current = []
+      }
+      lastSeenRef.current = { projectId, project, signature }
+      syncHistorySize()
+    },
+    [syncHistorySize],
+  )
 
   const refresh = useCallback(async (): Promise<FilmProject | null> => {
     const projectId = projectIdRef.current
@@ -57,6 +128,7 @@ export function FilmProvider({ children }: { children: React.ReactNode }) {
       if (projectIdRef.current === projectId) {
         setFilmState(project)
         setError(null)
+        recordSnapshot(projectId, project)
       }
       // Continuity is derived state; a failure here must not hide the project.
       void filmApi
@@ -72,7 +144,7 @@ export function FilmProvider({ children }: { children: React.ReactNode }) {
       if (projectIdRef.current === projectId) setError(message)
       return null
     }
-  }, [])
+  }, [recordSnapshot])
 
   const refreshCapabilities = useCallback(async () => {
     try {
@@ -118,6 +190,63 @@ export function FilmProvider({ children }: { children: React.ReactNode }) {
     return () => clearInterval(interval)
   }, [currentTab, refresh])
 
+  const restore = useCallback(
+    async (snapshot: FilmProject, direction: 'undo' | 'redo') => {
+      const projectId = projectIdRef.current
+      if (!projectId) return
+      restoringRef.current = true
+      try {
+        const project = await filmApi.replaceProject(projectId, snapshot)
+        setFilmState(project)
+        lastSeenRef.current = { projectId, project, signature: structuralSignature(project) }
+        setHistoryNote(direction === 'undo' ? 'Undone' : 'Redone')
+        void filmApi
+          .projectContinuity(projectId)
+          .then(summary => setContinuity(summary))
+          .catch(() => {})
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e)
+        setHistoryNote(`${direction === 'undo' ? 'Undo' : 'Redo'} failed: ${message}`)
+        throw e
+      } finally {
+        restoringRef.current = false
+        syncHistorySize()
+      }
+    },
+    [syncHistorySize],
+  )
+
+  const undo = useCallback(async () => {
+    const previous = undoStackRef.current[undoStackRef.current.length - 1]
+    const current = lastSeenRef.current?.project
+    if (!previous || !current) return
+    undoStackRef.current = undoStackRef.current.slice(0, -1)
+    redoStackRef.current = [...redoStackRef.current, current]
+    try {
+      await restore(previous, 'undo')
+    } catch {
+      // Put the stacks back the way they were so the user can retry.
+      undoStackRef.current = [...undoStackRef.current, previous]
+      redoStackRef.current = redoStackRef.current.slice(0, -1)
+      syncHistorySize()
+    }
+  }, [restore, syncHistorySize])
+
+  const redo = useCallback(async () => {
+    const next = redoStackRef.current[redoStackRef.current.length - 1]
+    const current = lastSeenRef.current?.project
+    if (!next || !current) return
+    redoStackRef.current = redoStackRef.current.slice(0, -1)
+    undoStackRef.current = [...undoStackRef.current, current]
+    try {
+      await restore(next, 'redo')
+    } catch {
+      redoStackRef.current = [...redoStackRef.current, next]
+      undoStackRef.current = undoStackRef.current.slice(0, -1)
+      syncHistorySize()
+    }
+  }, [restore, syncHistorySize])
+
   const findShot = useCallback(
     (shotId: string): { scene: FilmScene; shot: FilmShot } | null => {
       if (!film) return null
@@ -130,9 +259,13 @@ export function FilmProvider({ children }: { children: React.ReactNode }) {
     [film],
   )
 
-  const setFilm = useCallback((next: FilmProject) => {
-    setFilmState(next)
-  }, [])
+  const setFilm = useCallback(
+    (next: FilmProject) => {
+      setFilmState(next)
+      if (projectIdRef.current) recordSnapshot(projectIdRef.current, next)
+    },
+    [recordSnapshot],
+  )
 
   const continuityLevelFor = useCallback(
     (shotId: string): ContinuityLevel | null => continuity?.shots.find(s => s.shot_id === shotId)?.level ?? null,
@@ -155,6 +288,9 @@ export function FilmProvider({ children }: { children: React.ReactNode }) {
     })
   }, [])
 
+  const focusShot = useCallback((request: ShotFocusRequest) => setPendingFocus(request), [])
+  const clearPendingFocus = useCallback(() => setPendingFocus(null), [])
+
   const isGenerating = queue.active !== null || queue.pending.length > 0
 
   const value = useMemo(
@@ -173,8 +309,37 @@ export function FilmProvider({ children }: { children: React.ReactNode }) {
       continuity,
       continuityLevelFor,
       setShotContinuity,
+      undo,
+      redo,
+      canUndo: historySize.undo > 0,
+      canRedo: historySize.redo > 0,
+      historyNote,
+      focusShot,
+      pendingFocus,
+      clearPendingFocus,
     }),
-    [film, isLoading, error, refresh, setFilm, queue, capabilities, refreshCapabilities, isGenerating, findShot, continuity, continuityLevelFor, setShotContinuity],
+    [
+      film,
+      isLoading,
+      error,
+      refresh,
+      setFilm,
+      queue,
+      capabilities,
+      refreshCapabilities,
+      isGenerating,
+      findShot,
+      continuity,
+      continuityLevelFor,
+      setShotContinuity,
+      undo,
+      redo,
+      historySize,
+      historyNote,
+      focusShot,
+      pendingFocus,
+      clearPendingFocus,
+    ],
   )
 
   return <FilmContext.Provider value={value}>{children}</FilmContext.Provider>

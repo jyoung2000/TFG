@@ -61,6 +61,7 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
     duration_seconds: shot.duration_seconds,
     visual_prompt: shot.visual_prompt,
     camera_move: shot.camera_move,
+    gap_before: shot.gap_before_seconds == null ? '' : String(shot.gap_before_seconds),
   })
   const [warnings, setWarnings] = useState<ContinuityWarning[]>([])
   const [continuityLevel, setContinuityLevel] = useState<ContinuityLevel>('good')
@@ -82,8 +83,9 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
       duration_seconds: shot.duration_seconds,
       visual_prompt: shot.visual_prompt,
       camera_move: shot.camera_move,
+      gap_before: shot.gap_before_seconds == null ? '' : String(shot.gap_before_seconds),
     })
-  }, [shot.id, shot.updated_at, shot.title, shot.description, shot.action, shot.dialogue, shot.duration_seconds, shot.visual_prompt, shot.camera_move])
+  }, [shot.id, shot.updated_at, shot.title, shot.description, shot.action, shot.dialogue, shot.duration_seconds, shot.visual_prompt, shot.camera_move, shot.gap_before_seconds])
 
   useEffect(() => {
     if (!projectId) return
@@ -144,6 +146,9 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
         dialogue: draft.dialogue,
         duration_seconds: Math.max(0.5, draft.duration_seconds),
         camera_move: draft.camera_move,
+        ...(draft.gap_before.trim() === ''
+          ? { clear_gap: true }
+          : { gap_before_seconds: Math.max(0, Number(draft.gap_before) || 0) }),
         ...(draft.visual_prompt !== shot.visual_prompt
           ? { visual_prompt: draft.visual_prompt }
           : {}),
@@ -359,7 +364,7 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
               onChange={e => setDraft(d => ({ ...d, dialogue: e.target.value }))}
             />
           </Row>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-3 gap-2">
             <Row label="Duration (s)">
               <input
                 type="number"
@@ -368,6 +373,18 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
                 className={inputClass}
                 value={draft.duration_seconds}
                 onChange={e => setDraft(d => ({ ...d, duration_seconds: Number(e.target.value) }))}
+              />
+            </Row>
+            <Row label="Gap before (s)">
+              <input
+                type="number"
+                min={0}
+                step={0.25}
+                className={inputClass}
+                value={draft.gap_before}
+                placeholder={`${(scene.inter_shot_gap_seconds ?? film?.settings.inter_shot_gap_seconds ?? 0).toFixed(2)} (scene)`}
+                onChange={e => setDraft(d => ({ ...d, gap_before: e.target.value }))}
+                title="Blank uses the scene/project gap"
               />
             </Row>
             <Row label="Camera move">

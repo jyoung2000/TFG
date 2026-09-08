@@ -38,6 +38,13 @@ class UpdateFilmSettingsRequest(BaseModel):
     settings: FilmProjectSettings
 
 
+class ReplaceProjectRequest(BaseModel):
+    """Whole-project replacement (undo/redo snapshots). The body is a full,
+    schema-validated FilmProject; its id is forced to the route's project id."""
+
+    project: FilmProject
+
+
 class CreateAssetRequest(BaseModel):
     kind: FilmAssetKind
     name: str

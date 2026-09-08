@@ -61,6 +61,13 @@ export const filmApi = {
       body: JSON.stringify({ content }),
     }).then(r => r.project),
 
+  /** Whole-project replacement used by undo/redo (refused while a shot is queued/rendering). */
+  replaceProject: (projectId: string, project: FilmProject) =>
+    request<{ project: FilmProject }>(`/api/film/projects/${enc(projectId)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ project }),
+    }).then(r => r.project),
+
   updateSettings: (projectId: string, settings: FilmProjectSettings) =>
     request<{ project: FilmProject }>(`/api/film/projects/${enc(projectId)}/settings`, {
       method: 'PUT',
@@ -123,7 +130,11 @@ export const filmApi = {
       body: JSON.stringify(data),
     }),
 
-  updateScene: (projectId: string, sceneId: string, data: Partial<FilmScene> & { clear_location?: boolean }) =>
+  updateScene: (
+    projectId: string,
+    sceneId: string,
+    data: Partial<FilmScene> & { clear_location?: boolean; clear_gap?: boolean },
+  ) =>
     request<FilmScene>(`/api/film/projects/${enc(projectId)}/scenes/${enc(sceneId)}`, {
       method: 'PUT',
       body: JSON.stringify(data),
@@ -153,6 +164,7 @@ export const filmApi = {
     data: Partial<Omit<FilmShot, 'composition'>> & {
       composition?: CompositionScene | null
       clear_location?: boolean
+      clear_gap?: boolean
     },
   ) =>
     request<FilmShot>(

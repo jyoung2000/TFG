@@ -10,9 +10,11 @@ import {
   Pause,
   Play,
   Plus,
+  Redo2,
   SlidersHorizontal,
   Sparkles,
   Trash2,
+  Undo2,
   XCircle,
 } from 'lucide-react'
 import { useFilm } from '../../contexts/FilmContext'
@@ -135,7 +137,23 @@ function SceneRow({
   }, [projectId, scene.id, scene.title, titleDraft, refresh])
 
   const sceneDuration = shots.reduce((sum, s) => sum + s.duration_seconds, 0)
-  const gap = film?.settings.inter_shot_gap_seconds ?? 0
+  const projectGap = film?.settings.inter_shot_gap_seconds ?? 0
+  const sceneGap = scene.inter_shot_gap_seconds ?? projectGap
+  const gapBefore = (shot: FilmShot) => shot.gap_before_seconds ?? sceneGap
+  const [gapDraft, setGapDraft] = useState<string | null>(null)
+
+  const saveSceneGap = useCallback(async () => {
+    if (!projectId || gapDraft === null) return
+    const trimmed = gapDraft.trim()
+    if (trimmed === '') {
+      await filmApi.updateScene(projectId, scene.id, { clear_gap: true })
+    } else {
+      const value = Math.max(0, Number(trimmed) || 0)
+      await filmApi.updateScene(projectId, scene.id, { inter_shot_gap_seconds: value })
+    }
+    setGapDraft(null)
+    await refresh()
+  }, [projectId, scene.id, gapDraft, refresh])
 
   return (
     <div className="border-b border-zinc-800/70">
@@ -168,6 +186,25 @@ function SceneRow({
           <Clock className="h-3 w-3" />
           {sceneDuration.toFixed(1)}s · {shots.length} shots
         </span>
+        <label className="flex items-center gap-1 text-[10px] text-zinc-600" title="Gap between shots in this scene (blank = project default)">
+          gap
+          <input
+            type="number"
+            min={0}
+            step={0.25}
+            value={gapDraft ?? (scene.inter_shot_gap_seconds ?? '')}
+            placeholder={projectGap.toFixed(2)}
+            onChange={e => setGapDraft(e.target.value)}
+            onBlur={() => void saveSceneGap()}
+            onKeyDown={e => {
+              if (e.key === 'Enter') void saveSceneGap()
+              if (e.key === 'Escape') setGapDraft(null)
+            }}
+            aria-label={`Inter-shot gap for ${scene.title || `Scene ${sceneNumber}`}`}
+            className="w-14 bg-zinc-900 border border-zinc-800 rounded px-1 py-0 text-[10px] text-zinc-300 placeholder:text-zinc-700 tabular-nums"
+          />
+          s
+        </label>
         <span className="flex-1" />
         <button
           onClick={() => void generateScene('preview')}
@@ -189,9 +226,12 @@ function SceneRow({
       <div className="flex items-stretch gap-2 px-4 pb-3 overflow-x-auto">
         {shots.map((shot, index) => (
           <div key={shot.id} className="flex items-center gap-2">
-            {index > 0 && gap > 0 && (
-              <div className="shrink-0 text-[9px] text-zinc-700 rotate-90 whitespace-nowrap w-3 text-center">
-                {gap.toFixed(1)}s
+            {index > 0 && gapBefore(shot) > 0 && (
+              <div
+                className={`shrink-0 text-[9px] rotate-90 whitespace-nowrap w-3 text-center ${shot.gap_before_seconds != null ? 'text-violet-400' : 'text-zinc-700'}`}
+                title={shot.gap_before_seconds != null ? 'Shot override' : scene.inter_shot_gap_seconds != null ? 'Scene gap' : 'Project gap'}
+              >
+                {gapBefore(shot).toFixed(1)}s
               </div>
             )}
             <ShotCard
@@ -226,7 +266,8 @@ function SceneRow({
 }
 
 export function FilmSpace() {
-  const { film, isLoading, error, refresh, queue, setQueue, isGenerating } = useFilm()
+  const { film, isLoading, error, refresh, queue, setQueue, isGenerating, undo, redo, canUndo, canRedo, historyNote, pendingFocus, clearPendingFocus } =
+    useFilm()
   const [tab, setTab] = useState<FilmTab>('storyboard')
   const [selectedShotId, setSelectedShotId] = useState<string | null>(null)
   const [composerShotId, setComposerShotId] = useState<string | null>(null)
@@ -237,6 +278,38 @@ export function FilmSpace() {
   useEffect(() => {
     if (uiMode === 'simple' && (tab === 'script' || tab === 'models')) setTab('storyboard')
   }, [uiMode, tab])
+
+  // A shot focus request from the editor / Gen Space ("Edit / Regenerate Shot").
+  useEffect(() => {
+    if (!pendingFocus || !film) return
+    const exists = film.scenes.some(scene => scene.shots.some(shot => shot.id === pendingFocus.shotId))
+    if (!exists) return
+    setTab('storyboard')
+    setSelectedShotId(pendingFocus.shotId)
+    if (pendingFocus.compose) setComposerShotId(pendingFocus.shotId)
+    clearPendingFocus()
+  }, [pendingFocus, film, clearPendingFocus])
+
+  // Ctrl/Cmd+Z and Ctrl/Cmd+Shift+Z (or Ctrl+Y) undo/redo structural edits,
+  // except while typing or while the Shot Composer owns the screen.
+  useEffect(() => {
+    if (tab !== 'storyboard' || composerShotId) return
+    const handler = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey)) return
+      const target = event.target as HTMLElement | null
+      if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable)) return
+      const key = event.key.toLowerCase()
+      if (key === 'z' && !event.shiftKey) {
+        event.preventDefault()
+        void undo()
+      } else if ((key === 'z' && event.shiftKey) || key === 'y') {
+        event.preventDefault()
+        void redo()
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [tab, composerShotId, undo, redo])
 
   const scenes = useMemo(
     () => (film ? [...film.scenes].sort((a, b) => a.order - b.order) : []),
@@ -410,6 +483,27 @@ export function FilmSpace() {
         )}
         {tab === 'storyboard' && (
           <>
+            <div className="flex items-center gap-0.5" role="group" aria-label="History">
+              <button
+                onClick={() => void undo()}
+                disabled={!canUndo || isGenerating}
+                title={isGenerating ? 'Undo is available once the queue is idle' : 'Undo (Ctrl+Z)'}
+                aria-label="Undo"
+                className="p-1 rounded text-zinc-500 hover:text-white hover:bg-zinc-800 disabled:opacity-30 disabled:hover:bg-transparent"
+              >
+                <Undo2 className="h-3.5 w-3.5" />
+              </button>
+              <button
+                onClick={() => void redo()}
+                disabled={!canRedo || isGenerating}
+                title="Redo (Ctrl+Shift+Z)"
+                aria-label="Redo"
+                className="p-1 rounded text-zinc-500 hover:text-white hover:bg-zinc-800 disabled:opacity-30 disabled:hover:bg-transparent"
+              >
+                <Redo2 className="h-3.5 w-3.5" />
+              </button>
+              {historyNote && <span className="text-[10px] text-zinc-500 ml-1" role="status">{historyNote}</span>}
+            </div>
             <span className="text-[11px] text-zinc-600 tabular-nums">
               {scenes.length} scenes · {totalShots} shots · {totalDuration.toFixed(1)}s
             </span>

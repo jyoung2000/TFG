@@ -1,5 +1,5 @@
 import React from 'react'
-import { Plus, X, RefreshCw, ChevronLeft, ChevronRight, Layers, GitMerge, FolderPlus, Folder, Trash2, FolderOpen } from 'lucide-react'
+import { Plus, X, RefreshCw, ChevronLeft, ChevronRight, Layers, GitMerge, FolderPlus, Folder, Trash2, FolderOpen, Clapperboard } from 'lucide-react'
 import type { Asset } from '../../types/project'
 import { COLOR_LABELS } from './video-editor-utils'
 
@@ -26,6 +26,8 @@ export interface AssetContextMenuProps {
   deleteAsset: (projectId: string, assetId: string) => void
   deleteTakeFromAsset: (projectId: string, assetId: string, takeIndex: number) => void
   setClips: React.Dispatch<React.SetStateAction<import('../../types/project').TimelineClip[]>>
+  /** Open (or create) the Film Maker shot behind this video asset. */
+  onEditInFilmMaker?: (asset: Asset) => void
 }
 
 export function AssetContextMenu({
@@ -51,6 +53,7 @@ export function AssetContextMenu({
   deleteAsset,
   deleteTakeFromAsset,
   setClips,
+  onEditInFilmMaker,
 }: AssetContextMenuProps) {
   const isMulti = targetIds.length > 1
 
@@ -90,6 +93,21 @@ export function AssetContextMenu({
         >
           <FolderOpen className="h-3.5 w-3.5 text-zinc-500" />
           <span>Show in Explorer</span>
+        </button>
+      )}
+
+      {!isMulti && asset.type === 'video' && onEditInFilmMaker && (
+        <button
+          onClick={() => {
+            onEditInFilmMaker(asset)
+            setAssetContextMenu(null)
+          }}
+          className="w-full text-left px-3 py-1.5 text-zinc-300 hover:bg-zinc-700 flex items-center gap-3"
+          title={asset.filmRef ? 'Open the storyboard shot this clip was rendered from' : 'Turn this clip into a film shot with this clip as version 1'}
+        >
+          <Clapperboard className="h-3.5 w-3.5 text-violet-400" />
+          <span className="flex-1">{asset.filmRef ? 'Edit / Regenerate Shot in Film Maker' : 'Edit in Film Maker'}</span>
+          {asset.filmRef && <span className="text-[10px] text-violet-300">v{asset.filmRef.versionNumber}</span>}
         </button>
       )}
 

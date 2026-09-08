@@ -4,7 +4,7 @@ import {
   ZoomIn, Film, Eye, FolderOpen, RotateCcw, Volume2, VolumeX,
   FlipHorizontal2, FlipVertical2, Link2, Unlink2,
   ChevronLeft, ChevronRight, // IC-LORA HIDDEN: removed Sparkles
-  Video, Camera,
+  Video, Camera, Clapperboard,
 } from 'lucide-react'
 import type { Asset, TimelineClip, Track, TextOverlayStyle } from '../../types/project'
 import { TEXT_PRESETS } from '../../types/project'
@@ -54,6 +54,8 @@ export interface ClipContextMenuProps {
   setShowICLoraPanel: (v: boolean) => void
   onCaptureFrameForVideo: (clip: TimelineClip) => void
   onCreateVideoFromAudio: (clip: TimelineClip) => void
+  /** Open (or create) the Film Maker shot behind this clip. */
+  onEditInFilmMaker?: (asset: Asset) => void
 }
 
 // Reusable menu item component
@@ -133,6 +135,7 @@ export function ClipContextMenu({
   setShowICLoraPanel, // IC-LORA HIDDEN: still passed to SingleClipMenu
   onCaptureFrameForVideo,
   onCreateVideoFromAudio,
+  onEditInFilmMaker,
 }: ClipContextMenuProps) {
   const close = () => setClipContextMenu(null)
   const isBackground = !contextClip
@@ -250,6 +253,7 @@ export function ClipContextMenu({
           setShowICLoraPanel={setShowICLoraPanel}
           onCaptureFrameForVideo={onCaptureFrameForVideo}
           onCreateVideoFromAudio={onCreateVideoFromAudio}
+          onEditInFilmMaker={onEditInFilmMaker}
           close={close}
         />
       ) : null}
@@ -282,6 +286,7 @@ function SingleClipMenu({
   setI2vClipId, setI2vPrompt, onRetakeClip, setIcLoraSourceClipId: _setIcLoraSourceClipId, setShowICLoraPanel: _setShowICLoraPanel, // IC-LORA HIDDEN
   onCaptureFrameForVideo,
   onCreateVideoFromAudio,
+  onEditInFilmMaker,
   close,
 }: {
   contextClip: TimelineClip
@@ -315,6 +320,7 @@ function SingleClipMenu({
   setShowICLoraPanel: (v: boolean) => void
   onCaptureFrameForVideo: (clip: TimelineClip) => void
   onCreateVideoFromAudio: (clip: TimelineClip) => void
+  onEditInFilmMaker?: (asset: Asset) => void
   close: () => void
 }) {
   const liveAsset = getLiveAsset(contextClip)
@@ -510,6 +516,17 @@ function SingleClipMenu({
             </div>
           )}
 
+          {isVideo && liveAsset && onEditInFilmMaker && (
+            <MenuItem
+              icon={Clapperboard}
+              iconClass="text-violet-400"
+              label={liveAsset.filmRef ? 'Edit / Regenerate Shot in Film Maker' : 'Edit in Film Maker'}
+              badge={liveAsset.filmRef ? `v${liveAsset.filmRef.versionNumber}` : undefined}
+              badgeClass="text-violet-300"
+              title={liveAsset.filmRef ? 'Open the storyboard shot this clip was rendered from' : 'Turn this clip into a film shot (Scene / Shot with this clip as version 1)'}
+              onClick={() => { onEditInFilmMaker(liveAsset); close() }}
+            />
+          )}
           {isVideo && contextClip.assetId && (
             <MenuItem icon={ZoomIn} iconClass="text-zinc-500" label="Upscale (2x)"
               disabled={true} title="Coming Soon!" onClick={() => {}} />

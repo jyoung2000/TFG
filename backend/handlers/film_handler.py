@@ -34,6 +34,7 @@ from film.film_api_types import (
     SavePoseRequest,
     ShotCaptureRequest,
     UpdateAssetRequest,
+    ReplaceProjectRequest,
     UpdateFilmSettingsRequest,
     UpdateSceneRequest,
     UpdateScriptRequest,
@@ -245,6 +246,29 @@ class FilmHandler(StateHandlerBase):
             project.settings = req.settings
             self._save(project)
             return project
+
+    def replace_project(self, project_id: str, req: ReplaceProjectRequest, *, busy_shot_ids: set[str]) -> FilmProject:
+        """Replace the whole project facet with a validated snapshot (undo/redo).
+
+        Output files on disk are untouched, so a version restored by undo still
+        plays. Refused while any shot of the project is queued or rendering,
+        because the queue holds references into the live record.
+        """
+        with self.lock:
+            current = self._load(project_id)
+            if busy_shot_ids:
+                raise HTTPError(409, "Wait for the queued or running generation to finish before undoing")
+            incoming = req.project.model_copy(deep=True)
+            incoming.id = current.id
+            incoming.schema_version = current.schema_version
+            incoming.created_at = current.created_at
+            # Composer-derived fields must stay consistent after a restore.
+            for scene in incoming.scenes:
+                for shot in scene.shots:
+                    sync_composition_and_cast(incoming, shot)
+                    self._refresh_prompt(incoming, scene, shot)
+            self._save(incoming)
+            return incoming
 
     # ---- Assets ----------------------------------------------------------
 

@@ -1,5 +1,5 @@
-import { useCallback, useState } from 'react'
-import { ChevronDown, ChevronRight, Loader2, Sparkles, Wand2, X } from 'lucide-react'
+import { useCallback, useMemo, useState } from 'react'
+import { ChevronDown, ChevronRight, Loader2, RefreshCw, Sparkles, Wand2, X } from 'lucide-react'
 import { useAppSettings } from '../../contexts/AppSettingsContext'
 import { useFilm } from '../../contexts/FilmContext'
 import { filmApi } from '../../lib/film-api'
@@ -36,6 +36,8 @@ export function BuildFilmDialog({ onClose, onApplied }: { onClose: () => void; o
   const [busy, setBusy] = useState<'plan' | 'apply' | null>(null)
   const [error, setError] = useState('')
   const [openScenes, setOpenScenes] = useState<Record<number, boolean>>({ 0: true })
+  // Scenes excluded from "Apply selected" (by index into plan.scenes).
+  const [excluded, setExcluded] = useState<Set<number>>(new Set())
 
   const build = useCallback(
     async (useLlm: boolean) => {
@@ -54,6 +56,7 @@ export function BuildFilmDialog({ onClose, onApplied }: { onClose: () => void; o
         setContext(result.context)
         setUsedLlm(result.used_llm)
         setOpenScenes({ 0: true })
+        setExcluded(new Set())
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e))
       } finally {
@@ -63,14 +66,19 @@ export function BuildFilmDialog({ onClose, onApplied }: { onClose: () => void; o
     [film, idea, style, targetScenes, targetShots],
   )
 
+  const selectedPlan = useMemo(
+    () => (plan ? { ...plan, scenes: plan.scenes.filter((_, index) => !excluded.has(index)) } : null),
+    [plan, excluded],
+  )
+
   const apply = useCallback(async () => {
-    if (!film || !plan) return
+    if (!film || !selectedPlan) return
     const hasScenes = film.scenes.length > 0
     if (hasScenes && !window.confirm('Replace the existing storyboard with this plan?')) return
     setBusy('apply')
     setError('')
     try {
-      await filmApi.applyBuild(film.id, plan, hasScenes)
+      await filmApi.applyBuild(film.id, selectedPlan, hasScenes)
       await refresh()
       onApplied()
     } catch (e) {
@@ -78,7 +86,7 @@ export function BuildFilmDialog({ onClose, onApplied }: { onClose: () => void; o
     } finally {
       setBusy(null)
     }
-  }, [film, plan, refresh, onApplied])
+  }, [film, selectedPlan, refresh, onApplied])
 
   const updateScene = (index: number, patch: Partial<FilmBuildScene>) =>
     setPlan(p => (p ? { ...p, scenes: p.scenes.map((s, i) => (i === index ? { ...s, ...patch } : s)) } : p))
@@ -103,6 +111,8 @@ export function BuildFilmDialog({ onClose, onApplied }: { onClose: () => void; o
     setPlan(p => (p ? { ...p, scenes: p.scenes.filter((_, i) => i !== sceneIndex) } : p))
 
   const totalShots = plan?.scenes.reduce((n, s) => n + s.shots.length, 0) ?? 0
+  const selectedShots = selectedPlan?.scenes.reduce((n, s) => n + s.shots.length, 0) ?? 0
+  const selectedScenes = selectedPlan?.scenes.length ?? 0
 
   return (
     <div className="fixed inset-0 z-[52] flex items-center justify-center" role="dialog" aria-modal="true" aria-labelledby="build-film-title">
@@ -187,6 +197,15 @@ export function BuildFilmDialog({ onClose, onApplied }: { onClose: () => void; o
                     {context.prompt_tokens != null ? `${context.prompt_tokens} in / ${context.completion_tokens} out tokens` : `${context.prompt_chars} chars sent`}
                   </span>
                 )}
+                <span className="flex-1" />
+                <button
+                  onClick={() => void build(usedLlm)}
+                  disabled={busy !== null || !idea.trim()}
+                  className="flex items-center gap-1 px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 text-[11px] text-zinc-300"
+                  title="Plan again from the same idea (your edits to this plan are discarded)"
+                >
+                  <RefreshCw className="h-3 w-3" /> Regenerate plan
+                </button>
               </div>
               <div className="grid grid-cols-2 gap-2">
                 <label className="block">
@@ -227,7 +246,21 @@ export function BuildFilmDialog({ onClose, onApplied }: { onClose: () => void; o
                   const open = openScenes[sceneIndex] ?? false
                   return (
                     <div key={sceneIndex} className="rounded-lg border border-zinc-800">
-                      <div className="flex items-center gap-2 px-2 py-1.5">
+                      <div className={`flex items-center gap-2 px-2 py-1.5 ${excluded.has(sceneIndex) ? 'opacity-50' : ''}`}>
+                        <input
+                          type="checkbox"
+                          checked={!excluded.has(sceneIndex)}
+                          onChange={e =>
+                            setExcluded(prev => {
+                              const next = new Set(prev)
+                              if (e.target.checked) next.delete(sceneIndex)
+                              else next.add(sceneIndex)
+                              return next
+                            })
+                          }
+                          aria-label={`Include scene ${sceneIndex + 1} when applying`}
+                          title="Include this scene when applying"
+                        />
                         <button onClick={() => setOpenScenes(o => ({ ...o, [sceneIndex]: !open }))} className="text-zinc-500 hover:text-white" aria-label={open ? 'Collapse scene' : 'Expand scene'}>
                           {open ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
                         </button>
@@ -282,9 +315,11 @@ export function BuildFilmDialog({ onClose, onApplied }: { onClose: () => void; o
           <Button size="sm" variant="secondary" onClick={onClose}>
             Cancel
           </Button>
-          <Button size="sm" onClick={() => void apply()} disabled={!plan || totalShots === 0 || busy !== null} className="gap-1.5">
+          <Button size="sm" onClick={() => void apply()} disabled={!plan || selectedShots === 0 || busy !== null} className="gap-1.5">
             {busy === 'apply' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-            Apply to storyboard
+            {plan && selectedScenes < plan.scenes.length
+              ? `Apply selected (${selectedScenes} of ${plan.scenes.length} scenes)`
+              : 'Apply all to storyboard'}
           </Button>
         </div>
       </div>

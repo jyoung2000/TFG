@@ -408,3 +408,37 @@ class TestWanGPModelDiscovery:
         assert payload["system_ram_gb"] is None or payload["system_ram_gb"] > 0
         for row in payload["models"]:
             assert row["state"] in ("active", "installed", "available", "downloading", "update_available", "incompatible", "not_downloaded")
+
+
+class TestReplaceProject:
+    def test_snapshot_restore_round_trip(self, client):
+        scene_id, shots = _scene_with_shots(client, 2)
+        before = client.get(f"/api/film/projects/{PROJECT}").json()["project"]
+        client.put(f"/api/film/projects/{PROJECT}/scenes/{scene_id}/shots/{shots[0]}", json={"title": "Renamed"})
+        client.delete(f"/api/film/projects/{PROJECT}/scenes/{scene_id}/shots/{shots[1]}")
+        assert len(client.get(f"/api/film/projects/{PROJECT}").json()["project"]["scenes"][0]["shots"]) == 1
+        # Restore the earlier snapshot (undo): id/created_at are pinned to the route.
+        tampered = {**before, "id": "someone-else", "created_at": 1}
+        restored = client.put(f"/api/film/projects/{PROJECT}", json={"project": tampered})
+        assert restored.status_code == 200, restored.text
+        project = restored.json()["project"]
+        assert project["id"] == PROJECT
+        assert project["created_at"] == before["created_at"]
+        assert [s["title"] for s in project["scenes"][0]["shots"]] == ["Shot 0", "Shot 1"]
+        assert client.get(f"/api/film/projects/{PROJECT}").json()["project"]["scenes"][0]["shots"][0]["title"] == "Shot 0"
+
+    def test_invalid_snapshot_rejected(self, client):
+        response = client.put(f"/api/film/projects/{PROJECT}", json={"project": {"scenes": "nope"}})
+        assert response.status_code == 422
+
+    def test_refused_while_shot_is_queued(self, client, test_state, create_fake_model_files):
+        _enable_local(test_state, create_fake_model_files)
+        scene_id, shots = _scene_with_shots(client, 1)
+        snapshot = client.get(f"/api/film/projects/{PROJECT}").json()["project"]
+        client.post("/api/film/queue/pause")
+        client.post(f"/api/film/projects/{PROJECT}/scenes/{scene_id}/shots/{shots[0]}/generate", json={"kind": "preview"})
+        refused = client.put(f"/api/film/projects/{PROJECT}", json={"project": snapshot})
+        assert refused.status_code == 409
+        client.post("/api/film/queue/resume")
+        allowed = client.put(f"/api/film/projects/{PROJECT}", json={"project": snapshot})
+        assert allowed.status_code == 200, allowed.text

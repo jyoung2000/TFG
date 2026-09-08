@@ -23,15 +23,19 @@ import {
 import { logger } from '../lib/logger'
 import { RetakePanel } from '../components/RetakePanel'
 import { FreeApiKeyBubble } from '../components/FreeApiKeyBubble'
+import { Clapperboard } from 'lucide-react'
+import { useFilm } from '../contexts/FilmContext'
+import { conversionSourceFromAsset, importClipAsShot } from '../lib/film-conversion'
 
 // Asset card with hover overlays
-function AssetCard({ 
-  asset, 
-  onDelete, 
+function AssetCard({
+  asset,
+  onDelete,
   onPlay,
   onDragStart,
   onCreateVideo,
   onRetake,
+  onEditInFilmMaker,
   onToggleFavorite
 }: {
   asset: Asset
@@ -40,6 +44,7 @@ function AssetCard({
   onDragStart: (e: React.DragEvent, asset: Asset) => void
   onCreateVideo?: (asset: Asset) => void
   onRetake?: (asset: Asset) => void
+  onEditInFilmMaker?: (asset: Asset) => void
   onToggleFavorite?: () => void
 }) {
   const videoRef = useRef<HTMLVideoElement>(null)
@@ -140,13 +145,25 @@ function AssetCard({
               </>
             )}
             {asset.type === 'video' && (
-              <button
-                onClick={(e) => { e.stopPropagation(); onRetake?.(asset) }}
-                className="px-2.5 py-1.5 rounded-lg bg-black/40 backdrop-blur-md text-white hover:bg-black/60 transition-colors flex items-center gap-1.5 text-xs font-medium whitespace-nowrap"
-              >
-                <Scissors className="h-3 w-3" />
-                Retake
-              </button>
+              <>
+                <button
+                  onClick={(e) => { e.stopPropagation(); onRetake?.(asset) }}
+                  className="px-2.5 py-1.5 rounded-lg bg-black/40 backdrop-blur-md text-white hover:bg-black/60 transition-colors flex items-center gap-1.5 text-xs font-medium whitespace-nowrap"
+                >
+                  <Scissors className="h-3 w-3" />
+                  Retake
+                </button>
+                {onEditInFilmMaker && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); onEditInFilmMaker(asset) }}
+                    title={asset.filmRef ? 'Open the storyboard shot this clip came from' : 'Continue in the Film Maker: this clip becomes a shot (version 1) — nothing is re-encoded'}
+                    className="px-2.5 py-1.5 rounded-lg bg-violet-700/70 backdrop-blur-md text-white hover:bg-violet-600 transition-colors flex items-center gap-1.5 text-xs font-medium whitespace-nowrap"
+                  >
+                    <Clapperboard className="h-3 w-3" />
+                    {asset.filmRef ? 'Edit shot' : 'Film Maker'}
+                  </button>
+                )}
+              </>
             )}
           </div>
           
@@ -783,7 +800,8 @@ const DEFAULT_VIDEO_SETTINGS = {
 }
 
 export function GenSpace() {
-  const { currentProject, currentProjectId, addAsset, addTakeToAsset, deleteAsset, toggleFavorite, genSpaceEditImageUrl, setGenSpaceEditImageUrl, setGenSpaceEditMode, genSpaceAudioUrl, setGenSpaceAudioUrl, genSpaceRetakeSource, setGenSpaceRetakeSource, setPendingRetakeUpdate } = useProjects()
+  const { currentProject, currentProjectId, addAsset, addTakeToAsset, deleteAsset, updateAsset, toggleFavorite, setCurrentTab, genSpaceEditImageUrl, setGenSpaceEditImageUrl, setGenSpaceEditMode, genSpaceAudioUrl, setGenSpaceAudioUrl, genSpaceRetakeSource, setGenSpaceRetakeSource, setPendingRetakeUpdate } = useProjects()
+  const { focusShot } = useFilm()
   const { shouldVideoGenerateWithLtxApi, forceApiGenerations, settings: appSettings } = useAppSettings()
   const [mode, setMode] = useState<'image' | 'video' | 'retake'>('video')
   const [prompt, setPrompt] = useState('')
@@ -1174,6 +1192,26 @@ export function GenSpace() {
     setRetakePanelKey((prev) => prev + 1)
   }
 
+  // "Edit in Film Maker": open the shot behind this clip, or create one from it.
+  const handleEditInFilmMaker = async (videoAsset: Asset) => {
+    if (!currentProjectId) return
+    try {
+      if (videoAsset.filmRef) {
+        focusShot({ shotId: videoAsset.filmRef.shotId })
+      } else {
+        const result = await importClipAsShot(currentProjectId, conversionSourceFromAsset(videoAsset))
+        updateAsset(currentProjectId, videoAsset.id, {
+          filmRef: { projectId: currentProjectId, sceneId: result.sceneId, shotId: result.shotId, versionNumber: result.versionNumber },
+        })
+        focusShot({ shotId: result.shotId })
+      }
+      setCurrentTab('storyboard')
+    } catch (e) {
+      logger.error(`Edit in Film Maker failed: ${e}`)
+      window.alert(`Could not open in Film Maker: ${e instanceof Error ? e.message : e}`)
+    }
+  }
+
   const isRetakeMode = mode === 'retake'
   const canSubmit = isRetakeMode
     ? retakeInput.ready && !!retakeInput.videoPath && !isRetaking
@@ -1350,6 +1388,7 @@ export function GenSpace() {
                   onDragStart={handleDragStart}
                   onCreateVideo={handleCreateVideo}
                   onRetake={handleRetake}
+                  onEditInFilmMaker={a => void handleEditInFilmMaker(a)}
                   onToggleFavorite={() => currentProjectId && toggleFavorite(currentProjectId, asset.id)}
                 />
               ))}

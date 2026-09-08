@@ -5,6 +5,7 @@ import {
   Film,
   FolderPlus,
   History,
+  Image as ImageIcon,
   Info,
   Loader2,
   MessageSquare,
@@ -13,12 +14,15 @@ import {
   Sparkles,
   Square,
   Wand2,
+  X,
 } from 'lucide-react'
 import { useAppSettings } from '../contexts/AppSettingsContext'
 import { useProjects } from '../contexts/ProjectContext'
 import { useGeneration } from '../hooks/use-generation'
 import { copyToAssetFolder } from '../lib/asset-copy'
 import { filmApi } from '../lib/film-api'
+import { importClipAsShot } from '../lib/film-conversion'
+import { fileUrlToPath } from '../lib/url-to-path'
 import { logger } from '../lib/logger'
 import {
   FORCED_API_VIDEO_RESOLUTIONS,
@@ -55,6 +59,8 @@ interface QuickResult {
   videoPath: string
   videoUrl: string
   createdAt: number
+  /** file:// URL of the reference image when this was an image-to-video run. */
+  referenceImage?: string | null
 }
 
 interface ChatTurn extends DirectorChatMessage {
@@ -122,7 +128,7 @@ function projectNameFromPrompt(prompt: string): string {
  * as Scene 1 / Shot 1 / version 1.
  */
 export function QuickMode() {
-  const { goHome, createProject, addAsset, openProject, projects } = useProjects()
+  const { goHome, createProject, addAsset, updateAsset, openProject, projects } = useProjects()
   const { shouldVideoGenerateWithLtxApi, hasDirectorProvider } = useAppSettings()
   const generation = useGeneration()
 
@@ -138,8 +144,23 @@ export function QuickMode() {
   const [actionBusy, setActionBusy] = useState<string | null>(null)
   const [actionNote, setActionNote] = useState('')
   const [saveTargetId, setSaveTargetId] = useState<string>('new')
-  const submittedRef = useRef<{ prompt: string; negativePrompt: string; settings: QuickSettings } | null>(null)
+  const [referenceImage, setReferenceImage] = useState<string | null>(null)
+  const [refDragOver, setRefDragOver] = useState(false)
+  const refInputRef = useRef<HTMLInputElement>(null)
+  const submittedRef = useRef<{ prompt: string; negativePrompt: string; settings: QuickSettings; referenceImage: string | null } | null>(null)
   const lastVideoRef = useRef<string | null>(null)
+
+  /** Accept an image File (Electron exposes its path) as the I2V reference. */
+  const acceptReferenceFile = useCallback((file: File | undefined) => {
+    if (!file || !file.type.startsWith('image/')) return
+    const filePath = (file as File & { path?: string }).path
+    if (filePath) {
+      const normalized = filePath.replace(/\\/g, '/')
+      setReferenceImage(normalized.startsWith('/') ? `file://${normalized}` : `file:///${normalized}`)
+    } else {
+      setActionNote('Pick the image with the file dialog so its path can be used as the reference.')
+    }
+  }, [])
 
   const forcedApi = shouldVideoGenerateWithLtxApi
 
@@ -178,6 +199,7 @@ export function QuickMode() {
       videoPath: generation.videoPath,
       videoUrl: generation.videoUrl,
       createdAt: Date.now(),
+      referenceImage: submitted?.referenceImage ?? null,
     }
     setResult(entry)
     setHistory(prev => {
@@ -189,16 +211,17 @@ export function QuickMode() {
   }, [generation.isGenerating, generation.videoUrl, generation.videoPath, generation.videoSeed, prompt, negativePrompt, effectiveSettings])
 
   const runGeneration = useCallback(
-    async (overridePrompt?: string, overrideSettings?: QuickSettings, overrideNegative?: string) => {
+    async (overridePrompt?: string, overrideSettings?: QuickSettings, overrideNegative?: string, overrideReference?: string | null) => {
       const usePrompt = (overridePrompt ?? prompt).trim()
       if (!usePrompt || generation.isGenerating) return
       const useSettings = overrideSettings ?? effectiveSettings
       const useNegative = overrideNegative ?? negativePrompt
-      submittedRef.current = { prompt: usePrompt, negativePrompt: useNegative, settings: useSettings }
+      const useReference = overrideReference === undefined ? referenceImage : overrideReference
+      submittedRef.current = { prompt: usePrompt, negativePrompt: useNegative, settings: useSettings, referenceImage: useReference }
       setResult(null)
-      await generation.generate(usePrompt, null, toGenerationSettings(useSettings))
+      await generation.generate(usePrompt, useReference ? fileUrlToPath(useReference) : null, toGenerationSettings(useSettings))
     },
-    [prompt, negativePrompt, effectiveSettings, generation],
+    [prompt, negativePrompt, effectiveSettings, generation, referenceImage],
   )
 
   const sendChat = useCallback(async () => {
@@ -258,7 +281,7 @@ export function QuickMode() {
         resolution: target.settings.videoResolution,
         duration: target.settings.duration,
         generationParams: {
-          mode: 'text-to-video',
+          mode: target.referenceImage ? 'image-to-video' : 'text-to-video',
           prompt: target.prompt,
           model: target.settings.model,
           duration: target.settings.duration,
@@ -267,6 +290,7 @@ export function QuickMode() {
           audio: target.settings.audio,
           cameraMotion: 'none',
           imageAspectRatio: target.settings.aspectRatio,
+          inputImageUrl: target.referenceImage ?? undefined,
         },
         takes: [{ url, path, createdAt: Date.now() }],
         activeTakeIndex: 0,
@@ -283,20 +307,24 @@ export function QuickMode() {
       try {
         const name = projectNameFromPrompt(target.prompt)
         const project = createProject(name)
-        const { path } = await persistToProject(target, project.id)
-        await filmApi.importGeneration(project.id, {
+        const { path, asset } = await persistToProject(target, project.id)
+        const result = await importClipAsShot(project.id, {
+          outputPath: path,
           prompt: target.prompt,
-          negative_prompt: target.negativePrompt,
-          output_path: path,
+          negativePrompt: target.negativePrompt,
           model: target.settings.model,
           resolution: target.settings.videoResolution,
-          duration_seconds: target.settings.duration,
+          durationSeconds: target.settings.duration,
           fps: target.settings.fps,
           seed: target.seed,
-          aspect_ratio: target.settings.aspectRatio,
-          mode: 'text-to-video',
+          aspectRatio: target.settings.aspectRatio,
+          mode: target.referenceImage ? 'image-to-video' : 'text-to-video',
+          inputImagePath: target.referenceImage ? (fileUrlToPath(target.referenceImage) ?? undefined) : undefined,
           title: 'Shot 1',
-          project_name: name,
+          projectName: name,
+        })
+        updateAsset(project.id, asset.id, {
+          filmRef: { projectId: project.id, sceneId: result.sceneId, shotId: result.shotId, versionNumber: result.versionNumber },
         })
         openProject(project.id, 'storyboard')
       } catch (e) {
@@ -306,7 +334,7 @@ export function QuickMode() {
         setActionBusy(null)
       }
     },
-    [createProject, persistToProject, openProject],
+    [createProject, persistToProject, openProject, updateAsset],
   )
 
   const saveToProject = useCallback(
@@ -331,6 +359,7 @@ export function QuickMode() {
       setPrompt(entry.prompt)
       setNegativePrompt(entry.negativePrompt)
       setSettings(entry.settings)
+      setReferenceImage(entry.referenceImage ?? null)
       setResult(entry)
       lastVideoRef.current = entry.videoPath
       window.scrollTo({ top: 0, behavior: 'smooth' })
@@ -486,6 +515,68 @@ export function QuickMode() {
                 </select>
               </label>
             </div>
+            {/* Optional reference image → image-to-video */}
+            <div className="flex items-center gap-3">
+              <div
+                role="button"
+                tabIndex={0}
+                aria-label={referenceImage ? 'Reference image (click to replace)' : 'Add a reference image for image-to-video'}
+                onClick={() => refInputRef.current?.click()}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' || e.key === ' ') refInputRef.current?.click()
+                }}
+                onDragOver={e => {
+                  e.preventDefault()
+                  setRefDragOver(true)
+                }}
+                onDragLeave={() => setRefDragOver(false)}
+                onDrop={e => {
+                  e.preventDefault()
+                  setRefDragOver(false)
+                  acceptReferenceFile(e.dataTransfer.files?.[0])
+                }}
+                className={`relative w-16 h-10 rounded-lg border-2 border-dashed flex items-center justify-center cursor-pointer overflow-hidden ${
+                  refDragOver ? 'border-violet-500 bg-violet-500/10' : 'border-zinc-700 hover:border-zinc-500'
+                }`}
+              >
+                {referenceImage ? (
+                  <>
+                    <img src={referenceImage} alt="" className="w-full h-full object-cover" />
+                    <button
+                      onClick={e => {
+                        e.stopPropagation()
+                        setReferenceImage(null)
+                      }}
+                      aria-label="Remove reference image"
+                      className="absolute -top-0.5 -right-0.5 p-0.5 rounded-full bg-zinc-900 text-zinc-300 hover:text-white"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </>
+                ) : (
+                  <ImageIcon className="h-4 w-4 text-zinc-500" />
+                )}
+                <input
+                  ref={refInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={e => {
+                    acceptReferenceFile(e.target.files?.[0])
+                    e.target.value = ''
+                  }}
+                />
+              </div>
+              <div className="text-[11px] text-zinc-500">
+                {referenceImage ? (
+                  <>
+                    <span className="text-violet-300">Image to video</span> — the clip starts from this frame.
+                  </>
+                ) : (
+                  'Optional: drop a reference image to animate it (image-to-video).'
+                )}
+              </div>
+            </div>
             <div className="flex items-center gap-2">
               <Button onClick={() => void runGeneration()} disabled={!prompt.trim() || generation.isGenerating} className="gap-1.5">
                 {generation.isGenerating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
@@ -498,6 +589,7 @@ export function QuickMode() {
               )}
               <span className="text-[11px] text-zinc-600">
                 {forcedApi ? 'LTX cloud API' : 'local generation'} · {effectiveSettings.model} · {effectiveSettings.videoResolution} · {effectiveSettings.duration}s
+                {referenceImage ? ' · image-to-video' : ''}
               </span>
             </div>
             {generation.error && <ErrorNotice error={generation.error} onRetry={() => void runGeneration()} />}
@@ -554,6 +646,7 @@ export function QuickMode() {
               <div className="text-[11px] text-zinc-500 font-mono">
                 {result.settings.model} · {result.settings.videoResolution} · {result.settings.duration}s · {result.settings.fps} fps · {result.settings.aspectRatio}
                 {result.seed != null ? ` · seed ${result.seed}` : ' · seed chosen by API'}
+                {result.referenceImage ? ' · image-to-video' : ''}
               </div>
 
               <div className="grid grid-cols-2 gap-2">
@@ -561,7 +654,7 @@ export function QuickMode() {
                   {actionBusy === 'film' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Clapperboard className="h-3.5 w-3.5" />}
                   Edit in Film Maker
                 </Button>
-                <Button variant="secondary" onClick={() => void runGeneration(result.prompt, result.settings, result.negativePrompt)} disabled={actionBusy !== null} className="gap-1.5" title="Same prompt and settings; a new seed unless seed lock is on">
+                <Button variant="secondary" onClick={() => void runGeneration(result.prompt, result.settings, result.negativePrompt, result.referenceImage ?? null)} disabled={actionBusy !== null} className="gap-1.5" title="Same prompt, settings and reference image; a new seed unless seed lock is on">
                   <RefreshCw className="h-3.5 w-3.5" /> Generate again
                 </Button>
                 <Button variant="secondary" onClick={() => void saveToProject(result, 'gen-space')} disabled={actionBusy !== null} className="gap-1.5">

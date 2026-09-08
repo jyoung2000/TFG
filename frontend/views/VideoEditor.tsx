@@ -40,6 +40,9 @@ import {
 import { LeftPanel } from './editor/LeftPanel'
 import { ClipContextMenu } from './editor/ClipContextMenu'
 import { AssetContextMenu } from './editor/AssetContextMenu'
+import { useFilm } from '../contexts/FilmContext'
+import { conversionSourceFromAsset, importClipAsShot } from '../lib/film-conversion'
+import type { Asset } from '../types/project'
 import { TakeContextMenu } from './editor/TakeContextMenu'
 import { ClipPropertiesPanel } from './editor/ClipPropertiesPanel'
 import { SubtitlePropertiesPanel } from './editor/SubtitlePropertiesPanel'
@@ -80,6 +83,28 @@ export function VideoEditor() {
     setCurrentTab, setGenSpaceEditImageUrl, setGenSpaceEditMode, setGenSpaceAudioUrl,
     setGenSpaceRetakeSource, pendingRetakeUpdate, setPendingRetakeUpdate,
   } = useProjects()
+  const { focusShot } = useFilm()
+
+  // "Edit / Regenerate Shot": jump to the film shot behind a clip, or turn a
+  // plain generated clip into a new shot first (the file is referenced, never re-encoded).
+  const handleEditInFilmMaker = useCallback(async (asset: Asset) => {
+    if (!currentProjectId) return
+    try {
+      if (asset.filmRef) {
+        focusShot({ shotId: asset.filmRef.shotId })
+      } else {
+        const result = await importClipAsShot(currentProjectId, conversionSourceFromAsset(asset))
+        updateAsset(currentProjectId, asset.id, {
+          filmRef: { projectId: currentProjectId, sceneId: result.sceneId, shotId: result.shotId, versionNumber: result.versionNumber },
+        })
+        focusShot({ shotId: result.shotId })
+      }
+      setCurrentTab('storyboard')
+    } catch (e) {
+      logger.error(`Edit in Film Maker failed: ${e}`)
+      window.alert(`Could not open in Film Maker: ${e instanceof Error ? e.message : e}`)
+    }
+  }, [currentProjectId, focusShot, updateAsset, setCurrentTab])
 
   const { activeLayout: kbLayout, isEditorOpen: isKbEditorOpen, setEditorOpen: setKbEditorOpen } = useKeyboardShortcuts()
   const { shouldVideoGenerateWithLtxApi } = useAppSettings()
@@ -3943,6 +3968,7 @@ export function VideoEditor() {
             addAsset={addAsset}
             deleteAsset={deleteAsset}
             deleteTakeFromAsset={deleteTakeFromAsset}
+            onEditInFilmMaker={asset => void handleEditInFilmMaker(asset)}
             setClips={setClips}
           />
         )
@@ -4065,6 +4091,7 @@ export function VideoEditor() {
             setShowICLoraPanel={_setShowICLoraPanel}
             onCaptureFrameForVideo={handleCaptureFrameForVideo}
             onCreateVideoFromAudio={handleCreateVideoFromAudio}
+            onEditInFilmMaker={asset => void handleEditInFilmMaker(asset)}
           />
         )
       })()}

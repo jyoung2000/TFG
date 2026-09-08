@@ -31,6 +31,7 @@ from film.film_api_types import (
     GenerateShotRequest,
     QueuedJob,
     QueueShotResponse,
+    ReplaceProjectRequest,
 )
 from film.film_continuity import check_shot_continuity
 from film.film_models import (
@@ -335,6 +336,15 @@ class FilmGenerationHandler(StateHandlerBase):
                 )
             )
         return BatchGenerateResponse(status="queued", queued=queued)
+
+    def replace_project(self, project_id: str, req: ReplaceProjectRequest) -> FilmProject:
+        """Undo/redo snapshot restore, guarded by the queue: a shot that is
+        queued or rendering pins the live record."""
+        with self.lock:
+            busy = {job.shot_id for job in self._queue if job.project_id == project_id}
+            if self._active is not None and self._active.project_id == project_id:
+                busy.add(self._active.shot_id)
+        return self._film.replace_project(project_id, req, busy_shot_ids=busy)
 
     def get_queue(self) -> FilmQueueResponse:
         with self.lock:
