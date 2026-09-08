@@ -112,6 +112,8 @@ export interface SolveShotInput {
   anchors: CharacterAnchors
   /** The character an OTS/POV shot looks toward. Ignored by other angles. */
   targetAnchors?: CharacterAnchors
+  /** Which shoulder the OTS camera looks over (mirrors the OTS azimuth). */
+  otsShoulder?: 'left' | 'right'
   fovDeg: number
   aspect: number
 }
@@ -124,6 +126,7 @@ export interface SolvedShot {
 
 export function solveShot(input: SolveShotInput): SolvedShot {
   const { anchors, targetAnchors, shotSize, angle, elevation, composition, fovDeg, aspect } = input
+  const otsShoulder = input.otsShoulder ?? 'left'
 
   const span = SHOT_SIZE_SPAN[shotSize]
   const frameBottom = anchors.feet + span.bottom * anchors.height
@@ -143,8 +146,9 @@ export function solveShot(input: SolveShotInput): SolvedShot {
   // OTS/POV azimuths follow the character's current facing so the camera stays
   // behind the shoulder / at the eyes as they turn; other angles are world-fixed.
   const followsFacing = isOTS || isPOV
-  const azimuthRad =
-    THREE.MathUtils.degToRad(ANGLE_AZIMUTH_DEG[angle]) + (followsFacing ? anchors.facingYaw : 0)
+  // The right-shoulder OTS is the mirror image of the left-shoulder one.
+  const azimuthDeg = isOTS && otsShoulder === 'right' ? -ANGLE_AZIMUTH_DEG.ots : ANGLE_AZIMUTH_DEG[angle]
+  const azimuthRad = THREE.MathUtils.degToRad(azimuthDeg) + (followsFacing ? anchors.facingYaw : 0)
 
   let position: THREE.Vector3
   if (isPOV) {

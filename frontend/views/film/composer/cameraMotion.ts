@@ -41,13 +41,15 @@ export function buildCameraMove(
   move: CameraMove,
   start: CameraPose,
   durationSeconds: number,
+  /** 1 = the preset's default travel; 0.5 = half as far, 2 = twice as far. */
+  intensity = 1,
 ): CompositionKeyframe[] {
   const makeId = () => `kf-${Math.random().toString(36).slice(2, 10)}`
   const startKf = toKeyframe(makeId(), 0, start.position, start.target, start.fov)
   if (move === 'static') return [startKf]
 
   const toSubject = start.target.clone().sub(start.position)
-  const distance = Math.max(toSubject.length(), 0.5)
+  const distance = Math.max(toSubject.length(), 0.5) * Math.min(Math.max(intensity, 0.1), 3)
   const forward = toSubject.clone().normalize()
   const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize()
 
@@ -84,7 +86,10 @@ export function buildCameraMove(
       break
     case 'orbit': {
       const offset = start.position.clone().sub(start.target)
-      offset.applyAxisAngle(new THREE.Vector3(0, 1, 0), THREE.MathUtils.degToRad(50))
+      offset.applyAxisAngle(
+        new THREE.Vector3(0, 1, 0),
+        THREE.MathUtils.degToRad(50 * Math.min(Math.max(intensity, 0.1), 3)),
+      )
       endPosition.copy(start.target).add(offset)
       break
     }

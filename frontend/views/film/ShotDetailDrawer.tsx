@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import {
   AlertTriangle,
   Aperture,
@@ -14,25 +14,20 @@ import {
   X,
 } from 'lucide-react'
 import { useAppSettings } from '../../contexts/AppSettingsContext'
-import { useProjects } from '../../contexts/ProjectContext'
 import { useFilm } from '../../contexts/FilmContext'
-import { copyToAssetFolder } from '../../lib/asset-copy'
 import { filmApi, filmMediaUrl, filmOutputUrl } from '../../lib/film-api'
-import { logger } from '../../lib/logger'
 import { useUiMode } from '../../lib/ui-mode'
 import { Button } from '../../components/ui/button'
-import type { Asset, TimelineClip } from '../../types/project'
-import { DEFAULT_COLOR_CORRECTION } from '../../types/project'
 import type {
   ContinuityLevel,
   ContinuityWarning,
   FilmScene,
   FilmShot,
   QualityPreset,
-  ShotVersion,
   VersionKind,
 } from '../../types/film'
 import { CAMERA_MOVES, CONTINUITY_LEVEL_META, SHOT_STATUS_META, framingLabel } from '../../types/film'
+import { useShotWorkflow } from './useShotWorkflow'
 
 interface ShotDetailDrawerProps {
   scene: FilmScene
@@ -55,7 +50,7 @@ const inputClass =
 
 export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetailDrawerProps) {
   const { film, refresh, capabilities, isGenerating, setShotContinuity } = useFilm()
-  const { currentProjectId, addAsset, updateTimeline, getActiveTimeline } = useProjects()
+  const workflow = useShotWorkflow(scene, shot)
   const projectId = film?.id ?? ''
 
   const [draft, setDraft] = useState({
@@ -232,127 +227,24 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
 
   const generate = useCallback(
     async (kind: VersionKind) => {
-      if (!projectId) return
-      setBusy(kind)
-      try {
-        const result = await filmApi.generateShot(projectId, scene.id, shot.id, kind)
-        setWarnings(result.warnings)
+      const result = await workflow.generate(kind)
+      if (result) {
+        setWarnings(result)
         setContinuityLevel(
-          result.warnings.reduce<ContinuityLevel>((worst, w) => {
+          result.reduce<ContinuityLevel>((worst, w) => {
             const rank: Record<ContinuityLevel, number> = { good: 0, minor: 1, significant: 2, broken: 3 }
             return rank[w.severity] > rank[worst] ? w.severity : worst
           }, 'good'),
         )
-        setNote(kind === 'preview' ? 'Preview queued' : 'Final queued')
-        await refresh()
-      } catch (e) {
-        setNote(`Generate failed: ${e instanceof Error ? e.message : e}`)
-      } finally {
-        setBusy(null)
       }
     },
-    [projectId, scene.id, shot.id, refresh],
+    [workflow],
   )
 
-  const setStatus = useCallback(
-    async (status: FilmShot['status']) => {
-      if (!projectId) return
-      await filmApi.updateShot(projectId, scene.id, shot.id, { status })
-      await refresh()
-    },
-    [projectId, scene.id, shot.id, refresh],
-  )
-
-  const promote = useCallback(
-    async (number: number) => {
-      if (!projectId) return
-      await filmApi.promoteVersion(projectId, scene.id, shot.id, number)
-      await refresh()
-    },
-    [projectId, scene.id, shot.id, refresh],
-  )
-
-  const currentVersion: ShotVersion | undefined = useMemo(
-    () =>
-      shot.current_version != null
-        ? shot.versions.find(v => v.number === shot.current_version)
-        : undefined,
-    [shot.versions, shot.current_version],
-  )
-
-  const sendToTimeline = useCallback(async () => {
-    if (!currentProjectId || !currentVersion || currentVersion.status !== 'complete') return
-    setBusy('timeline')
-    try {
-      const copied = await copyToAssetFolder(currentVersion.output_path, currentProjectId)
-      const path = copied?.path ?? currentVersion.output_path
-      const url =
-        copied?.url ??
-        (path.startsWith('/') ? `file://${path}` : `file:///${path.replace(/\\/g, '/')}`)
-      const asset: Asset = addAsset(currentProjectId, {
-        type: 'video',
-        path,
-        url,
-        prompt: currentVersion.prompt,
-        resolution: currentVersion.resolution,
-        duration: currentVersion.duration_seconds,
-        generationParams: {
-          mode: currentVersion.capture_path ? 'image-to-video' : 'text-to-video',
-          prompt: currentVersion.prompt,
-          model: currentVersion.model,
-          duration: currentVersion.duration_seconds,
-          resolution: currentVersion.resolution,
-          fps: currentVersion.fps,
-          audio: false,
-          cameraMotion: 'none',
-        },
-        takes: [{ url, path, createdAt: Date.now() }],
-        activeTakeIndex: 0,
-      })
-
-      const timeline = getActiveTimeline(currentProjectId)
-      if (timeline) {
-        const videoTrackIndex = Math.max(
-          0,
-          timeline.tracks.findIndex(t => t.kind === 'video' || t.kind === undefined),
-        )
-        const clipsOnTrack = timeline.clips.filter(c => c.trackIndex === videoTrackIndex)
-        const endTime = clipsOnTrack.reduce(
-          (max, clip) => Math.max(max, clip.startTime + clip.duration),
-          0,
-        )
-        const gap = film?.settings.inter_shot_gap_seconds ?? 0
-        const newClip: TimelineClip = {
-          id: `clip-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-          assetId: asset.id,
-          type: 'video',
-          startTime: endTime > 0 ? endTime + gap : 0,
-          duration: currentVersion.duration_seconds,
-          trimStart: 0,
-          trimEnd: 0,
-          speed: 1,
-          reversed: false,
-          muted: false,
-          volume: 1,
-          trackIndex: videoTrackIndex,
-          asset,
-          flipH: false,
-          flipV: false,
-          transitionIn: { type: 'none', duration: 0.5 },
-          transitionOut: { type: 'none', duration: 0.5 },
-          colorCorrection: { ...DEFAULT_COLOR_CORRECTION },
-          opacity: 100,
-        }
-        updateTimeline(currentProjectId, timeline.id, { clips: [...timeline.clips, newClip] })
-      }
-      setNote('Sent to timeline — open the Video Editor tab')
-    } catch (e) {
-      logger.error(`Send to timeline failed: ${e}`)
-      setNote(`Send to timeline failed: ${e instanceof Error ? e.message : e}`)
-    } finally {
-      setBusy(null)
-    }
-  }, [currentProjectId, currentVersion, addAsset, getActiveTimeline, updateTimeline, film?.settings.inter_shot_gap_seconds])
+  const { setStatus, promote, currentVersion, sendToTimeline, linkedClip, queueInfo } = workflow
+  // The drawer's own busy flag covers its edits; the workflow hook covers generation/hand-off.
+  const anyBusy = busy !== null || workflow.busy !== null
+  const displayNote = note || workflow.note
 
   const status = SHOT_STATUS_META[shot.status]
   const videoModels = (capabilities?.models ?? []).filter(m => m.modes.includes('video'))
@@ -366,7 +258,11 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
         <span className="flex-1 text-sm font-semibold text-white truncate">
           {shot.title || 'Shot'}
         </span>
-        {note && <span className="text-[10px] text-zinc-500 truncate max-w-[8rem]">{note}</span>}
+        {displayNote && (
+          <span className="text-[10px] text-zinc-500 truncate max-w-[8rem]" role="status">
+            {displayNote}
+          </span>
+        )}
         <button
           onClick={onClose}
           aria-label="Close shot details"
@@ -567,26 +463,47 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
             <Button
               size="sm"
               variant="secondary"
-              disabled={busy !== null || isGenerating}
+              disabled={anyBusy || queueInfo.active || queueInfo.pendingPosition != null}
               onClick={() => void generate('preview')}
               className="gap-1.5"
             >
-              {busy === 'preview' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+              {workflow.busy === 'preview' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
               Preview
             </Button>
             <Button
               size="sm"
-              disabled={busy !== null || isGenerating}
+              disabled={anyBusy || queueInfo.active || queueInfo.pendingPosition != null}
               onClick={() => void generate('final')}
               className="gap-1.5"
             >
-              {busy === 'final' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Film className="h-3.5 w-3.5" />}
+              {workflow.busy === 'final' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Film className="h-3.5 w-3.5" />}
               Final
             </Button>
           </div>
-          {isGenerating && (
-            <div className="text-[10px] text-amber-400 flex items-center gap-1">
-              <Loader2 className="h-3 w-3 animate-spin" /> Generation in progress — new jobs queue behind it
+          {(queueInfo.active || queueInfo.pendingPosition != null) && (
+            <div className="space-y-1">
+              <div className="text-[10px] text-amber-400 flex items-center gap-1">
+                <Loader2 className="h-3 w-3 animate-spin" />
+                {queueInfo.active
+                  ? `Rendering this shot${queueInfo.progress != null ? ` · ${Math.round(queueInfo.progress)}%` : ''}${queueInfo.phase ? ` · ${queueInfo.phase}` : ''}`
+                  : `Queued · position ${queueInfo.pendingPosition}`}
+                <button
+                  onClick={() => void workflow.cancelJob()}
+                  className="ml-auto px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-[10px] text-zinc-300"
+                >
+                  Cancel
+                </button>
+              </div>
+              {queueInfo.active && queueInfo.progress != null && (
+                <div className="h-1 rounded bg-zinc-800 overflow-hidden">
+                  <div className="h-full bg-violet-500 transition-all" style={{ width: `${Math.min(100, Math.max(0, queueInfo.progress))}%` }} />
+                </div>
+              )}
+            </div>
+          )}
+          {isGenerating && !queueInfo.active && queueInfo.pendingPosition == null && (
+            <div className="text-[10px] text-zinc-500 flex items-center gap-1">
+              <Loader2 className="h-3 w-3 animate-spin" /> Another shot is rendering — new jobs queue behind it
             </div>
           )}
         </div>
@@ -624,6 +541,8 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
                   <span className="flex-1" />
                   <span className="text-zinc-600">
                     {version.resolution} · {version.duration_seconds.toFixed(0)}s
+                    {version.generation_seconds != null ? ` · ${version.generation_seconds.toFixed(0)}s render` : ''}
+                    {version.execution_mode ? ` · ${version.execution_mode}` : ''}
                   </span>
                 </div>
                 {version.status === 'complete' && versionUrls[version.number] && (
@@ -642,9 +561,20 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
                   {version.status === 'complete' && shot.current_version !== version.number && (
                     <button
                       onClick={() => void promote(version.number)}
-                      className="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-[10px] text-zinc-300"
+                      disabled={anyBusy}
+                      className="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 text-[10px] text-zinc-300"
                     >
                       Set current
+                    </button>
+                  )}
+                  {version.status === 'complete' && (
+                    <button
+                      onClick={() => void sendToTimeline(version)}
+                      disabled={anyBusy}
+                      className="px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 text-[10px] text-zinc-300"
+                      title="Add this version to the timeline as a new clip"
+                    >
+                      To timeline
                     </button>
                   )}
                   {version.status === 'failed' && (
@@ -685,17 +615,26 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
             </div>
             <Button
               size="sm"
-              onClick={() => void sendToTimeline()}
-              disabled={busy !== null}
+              onClick={() => void sendToTimeline(currentVersion, { replace: linkedClip !== null })}
+              disabled={anyBusy}
               className="w-full gap-1.5"
             >
-              {busy === 'timeline' ? (
+              {workflow.busy === 'timeline' ? (
                 <Loader2 className="h-3.5 w-3.5 animate-spin" />
               ) : (
                 <CheckCircle2 className="h-3.5 w-3.5" />
               )}
-              Send to Timeline
+              {linkedClip ? `Replace timeline clip with v${currentVersion.number}` : 'Send to Timeline'}
             </Button>
+            {linkedClip && (
+              <button
+                onClick={() => void sendToTimeline(currentVersion)}
+                disabled={anyBusy}
+                className="w-full text-[10px] text-zinc-500 hover:text-zinc-300"
+              >
+                or add as a new clip
+              </button>
+            )}
           </div>
         )}
       </div>

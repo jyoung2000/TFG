@@ -45,6 +45,15 @@ export interface Asset {
   takes?: AssetTake[] // All takes (index 0 = original). If undefined, the asset itself is the only take.
   activeTakeIndex?: number // Which take is currently active (default = 0 / latest)
   colorLabel?: string // Color label for organization (e.g. 'violet', 'blue', 'green', 'yellow', 'red', 'rose', 'orange', 'mango')
+  /** Link back to the Film Maker shot/version this clip was rendered from ("Edit / Regenerate Shot"). */
+  filmRef?: FilmShotRef
+}
+
+export interface FilmShotRef {
+  projectId: string
+  sceneId: string
+  shotId: string
+  versionNumber: number
 }
 
 export interface Track {
