@@ -5,9 +5,10 @@ import { filmApi } from '../lib/film-api'
 import { DIRECTOR_ROLES, type OpenRouterModelInfo, type OpenRouterValidation } from '../types/film'
 
 const PROVIDER_OPTIONS: { id: DirectorProviderSetting; label: string; hint: string }[] = [
-  { id: 'auto', label: 'Auto', hint: 'OpenRouter when a key exists, otherwise Gemini' },
+  { id: 'auto', label: 'Auto', hint: 'OpenRouter when a key exists, then Gemini, then a local endpoint' },
   { id: 'openrouter', label: 'OpenRouter', hint: 'Any model on openrouter.ai' },
   { id: 'gemini', label: 'Gemini', hint: 'Google AI Studio key' },
+  { id: 'openai_compatible', label: 'Local / OpenAI-compatible', hint: 'LM Studio, vLLM, Ollama (OpenAI API), any /v1 endpoint' },
 ]
 
 /**
@@ -215,7 +216,7 @@ export function OpenRouterSettings() {
       {/* Provider selection */}
       <div className="space-y-2">
         <div className="text-xs font-medium text-zinc-300">AI Director provider</div>
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-2 gap-2">
           {PROVIDER_OPTIONS.map(option => {
             const active = settings.directorProvider === option.id
             return (
@@ -294,6 +295,212 @@ export function OpenRouterSettings() {
           </p>
         </div>
       )}
+
+      <OpenAICompatibleSettings inputClass={inputClass} />
+    </div>
+  )
+}
+
+/**
+ * Local / self-hosted OpenAI-compatible endpoint (LM Studio, vLLM, Ollama's
+ * OpenAI shim, gateways). The optional key is stored by the backend exactly
+ * like the other provider keys; the base URL and model id are ordinary
+ * settings (not secrets).
+ */
+function OpenAICompatibleSettings({ inputClass }: { inputClass: string }) {
+  const { settings, updateSettings, saveOpenaiCompatibleApiKey, clearApiKey } = useAppSettings()
+  const [baseUrl, setBaseUrl] = useState(settings.openaiCompatibleBaseUrl)
+  const [model, setModel] = useState(settings.openaiCompatibleModel)
+  const [keyInput, setKeyInput] = useState('')
+  const [busy, setBusy] = useState<'key' | 'models' | 'test' | 'clear' | null>(null)
+  const [models, setModels] = useState<OpenRouterModelInfo[]>([])
+  const [note, setNote] = useState('')
+
+  useEffect(() => {
+    setBaseUrl(settings.openaiCompatibleBaseUrl)
+    setModel(settings.openaiCompatibleModel)
+  }, [settings.openaiCompatibleBaseUrl, settings.openaiCompatibleModel])
+
+  const commitEndpoint = useCallback(() => {
+    const trimmedUrl = baseUrl.trim().replace(/\/+$/, '')
+    const trimmedModel = model.trim()
+    if (trimmedUrl !== settings.openaiCompatibleBaseUrl || trimmedModel !== settings.openaiCompatibleModel) {
+      updateSettings({ openaiCompatibleBaseUrl: trimmedUrl, openaiCompatibleModel: trimmedModel })
+    }
+  }, [baseUrl, model, settings.openaiCompatibleBaseUrl, settings.openaiCompatibleModel, updateSettings])
+
+  const refreshModels = useCallback(async () => {
+    commitEndpoint()
+    setBusy('models')
+    setNote('')
+    try {
+      // The backend reads the base URL from settings; give the debounced sync a moment.
+      await new Promise(resolve => setTimeout(resolve, 400))
+      const result = await filmApi.openaiCompatibleModels()
+      setModels(result.models)
+      setNote(result.models.length ? `${result.models.length} models available at the endpoint` : 'The endpoint returned no models')
+      if (!model.trim() && result.models[0]) {
+        setModel(result.models[0].id)
+        updateSettings({ openaiCompatibleModel: result.models[0].id })
+      }
+    } catch (e) {
+      setNote(`Could not reach the endpoint: ${e instanceof Error ? e.message : e}`)
+    } finally {
+      setBusy(null)
+    }
+  }, [commitEndpoint, model, updateSettings])
+
+  const testConnection = useCallback(async () => {
+    commitEndpoint()
+    setBusy('test')
+    setNote('')
+    try {
+      await new Promise(resolve => setTimeout(resolve, 400))
+      const status = await filmApi.directorStatus()
+      if (!status.openai_compatible_configured) {
+        setNote('Set both the base URL and a model id first')
+        return
+      }
+      const result = await filmApi.directorChat([{ role: 'user', content: 'Reply with the single word: ready' }], {
+        role: 'prompt_refinement',
+      })
+      setNote(`Connected · ${result.context.provider} · ${result.context.model} answered`)
+    } catch (e) {
+      setNote(`Connection test failed: ${e instanceof Error ? e.message : e}`)
+    } finally {
+      setBusy(null)
+    }
+  }, [commitEndpoint])
+
+  const saveKey = useCallback(async () => {
+    const trimmed = keyInput.trim()
+    if (!trimmed) return
+    setBusy('key')
+    setNote('')
+    try {
+      await saveOpenaiCompatibleApiKey(trimmed)
+      setKeyInput('')
+      setNote('Endpoint key saved')
+    } catch (e) {
+      setNote(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(null)
+    }
+  }, [keyInput, saveOpenaiCompatibleApiKey])
+
+  const clearKey = useCallback(async () => {
+    setBusy('clear')
+    try {
+      await clearApiKey('openai-compatible')
+      setNote('Endpoint key removed')
+    } catch (e) {
+      setNote(e instanceof Error ? e.message : String(e))
+    } finally {
+      setBusy(null)
+    }
+  }, [clearApiKey])
+
+  const configured = settings.openaiCompatibleBaseUrl.trim() !== '' && settings.openaiCompatibleModel.trim() !== ''
+
+  return (
+    <div className="space-y-2 pt-3 border-t border-zinc-800/70">
+      <div className="flex items-center gap-2">
+        <div className="text-xs font-medium text-zinc-300">Local / OpenAI-compatible endpoint</div>
+        <span className={`text-[10px] px-1.5 py-0.5 rounded ${configured ? 'bg-emerald-500/10 text-emerald-300' : 'bg-zinc-800 text-zinc-500'}`}>
+          {configured ? 'configured' : 'not configured'}
+        </span>
+      </div>
+      <p className="text-[10px] text-zinc-600 leading-snug">
+        Run the AI Director fully offline with LM Studio, vLLM or Ollama (OpenAI-compatible API). Enter the{' '}
+        <code className="text-zinc-400">/v1</code> base URL, refresh the model list, pick a model. A key is only
+        needed if your server requires one; it is stored by the local backend like the other keys.
+      </p>
+      <div className="grid grid-cols-[1fr_1fr] gap-2">
+        <input
+          value={baseUrl}
+          onChange={e => setBaseUrl(e.target.value)}
+          onBlur={commitEndpoint}
+          onKeyDown={e => {
+            e.stopPropagation()
+            if (e.key === 'Enter') commitEndpoint()
+          }}
+          placeholder="http://127.0.0.1:1234/v1"
+          aria-label="OpenAI-compatible base URL"
+          className={`${inputClass} text-xs py-1.5 font-mono`}
+        />
+        <div className="flex items-center gap-1.5">
+          <input
+            list="openai-compatible-model-ids"
+            value={model}
+            onChange={e => setModel(e.target.value)}
+            onBlur={commitEndpoint}
+            onKeyDown={e => {
+              e.stopPropagation()
+              if (e.key === 'Enter') commitEndpoint()
+            }}
+            placeholder="model id (e.g. qwen2.5-7b-instruct)"
+            aria-label="OpenAI-compatible model id"
+            className={`${inputClass} text-xs py-1.5 font-mono`}
+          />
+          <datalist id="openai-compatible-model-ids">
+            {models.map(m => (
+              <option key={m.id} value={m.id}>
+                {m.name}
+              </option>
+            ))}
+          </datalist>
+          <button
+            onClick={() => void refreshModels()}
+            disabled={busy !== null || !baseUrl.trim()}
+            className="flex items-center gap-1 text-[11px] text-zinc-300 hover:text-white px-2 py-1.5 rounded bg-zinc-800 border border-zinc-700 disabled:opacity-40 whitespace-nowrap"
+            title="GET <base URL>/models"
+          >
+            {busy === 'models' ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+            Models
+          </button>
+        </div>
+      </div>
+      <div className="flex gap-2">
+        <input
+          type="password"
+          autoComplete="off"
+          value={keyInput}
+          onChange={e => setKeyInput(e.target.value)}
+          onKeyDown={e => {
+            e.stopPropagation()
+            if (e.key === 'Enter') void saveKey()
+          }}
+          placeholder={settings.hasOpenaiCompatibleApiKey ? 'Key stored — enter a new one to replace' : 'API key (optional)'}
+          aria-label="OpenAI-compatible endpoint API key"
+          className={`${inputClass} text-xs py-1.5`}
+        />
+        <button
+          onClick={() => void saveKey()}
+          disabled={!keyInput.trim() || busy !== null}
+          className="px-3 py-1.5 bg-blue-600 text-white text-xs rounded-lg hover:bg-blue-500 disabled:bg-zinc-700 disabled:text-zinc-500 whitespace-nowrap"
+        >
+          {busy === 'key' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Save key'}
+        </button>
+        {settings.hasOpenaiCompatibleApiKey && (
+          <button
+            onClick={() => void clearKey()}
+            disabled={busy !== null}
+            className="flex items-center gap-1 text-xs text-zinc-400 hover:text-red-300 px-2 py-1.5 rounded bg-zinc-800 border border-zinc-700"
+          >
+            <Trash2 className="h-3 w-3" /> Remove
+          </button>
+        )}
+        <button
+          onClick={() => void testConnection()}
+          disabled={busy !== null || !baseUrl.trim() || !model.trim()}
+          className="flex items-center gap-1 text-xs text-zinc-300 hover:text-white px-2 py-1.5 rounded bg-zinc-800 border border-zinc-700 disabled:opacity-40 whitespace-nowrap"
+          title="Sends one tiny chat request to the endpoint"
+        >
+          {busy === 'test' ? <Loader2 className="h-3 w-3 animate-spin" /> : <ShieldCheck className="h-3 w-3" />}
+          Test connection
+        </button>
+      </div>
+      {note && <div className="text-[11px] text-zinc-400">{note}</div>}
     </div>
   )
 }

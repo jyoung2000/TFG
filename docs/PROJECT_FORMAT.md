@@ -24,9 +24,19 @@ an empty facet.
 
 The schema is `backend/film/film_models.py` (mirrored 1:1 by
 `frontend/types/film.ts`). `FilmStore.migrate()` upgrades older payloads in
-steps (v0 → v1 wraps bare shots into a scene). Fields added since v1
-(`settings.default_quality_preset`, `generation.quality_preset = "project"`)
-are defaulted on load, so no version bump was needed.
+steps (v0 → v1 wraps bare shots into a scene). Fields added since v1 are
+defaulted on load, so no version bump was needed:
+`settings.default_quality_preset`, `generation.quality_preset = "project"`,
+`ShotFraming.ots_shoulder` / `camera_mode`, `CompositionObject.locked`,
+`FilmScene.inter_shot_gap_seconds`, `FilmShot.gap_before_seconds`, and the
+per-version telemetry `ShotVersion.shot_snapshot` (framing, cast, prompt and
+generation settings as rendered), `generation_seconds`, `gpu_name`,
+`peak_vram_gb` (estimate), `execution_mode`.
+
+`PUT /api/film/projects/{id}` replaces the whole facet with a validated
+`FilmProject` (the storyboard's undo/redo); the id, schema version and
+creation time are pinned to the route and it is refused (`409`) while any
+shot of the project is queued or rendering.
 
 ## `.ltxfilm` packages
 
@@ -35,20 +45,29 @@ A package is a zip with this layout:
 ```
 manifest.json    {"format": "ltx-film-package", "format_version": 1,
                   "exported_at_ms", "schema_version", "project_id",
-                  "project_name", "includes_outputs", "media": [...]}
+                  "project_name", "includes_outputs", "has_host_project",
+                  "media": [...], "output_media": {member: original path}}
 project.json     FilmProject exactly as on disk, except every
                  version.output_path is package-relative ("outputs/…")
-captures/…       copied verbatim
+host_project.json  (optional) the host project — name, assets, timelines —
+                 as the renderer holds it, with any credential-looking key
+                 stripped recursively; API keys never live here
+captures/…       copied verbatim (includes review frames)
 references/…     copied verbatim
 outputs/…        <shot-id>-v<n>.<ext> — current renders (optional)
 ```
 
+**Compact vs Complete**: *Compact* (`include_outputs: false`) carries the
+project, captures and references only; *Complete* adds every current render.
+Both may carry `host_project.json` so the timeline travels with the film.
+
 ### Export — `POST /api/film/projects/{id}/export`
 
-`{destination_path, include_outputs}` → `PackageSummary` (`scenes, shots,
-assets, media_files, total_bytes, warnings, path`). The `.ltxfilm` suffix is
-added when missing; parent folders are created; the archive is written to a
-temp name and renamed. Renders whose file has gone missing are dropped from
+`{destination_path, include_outputs, host_project?}` → `PackageSummary`
+(`scenes, shots, assets, media_files, total_bytes, warnings, path`). The
+`.ltxfilm` suffix is enforced (a directory or a non-absolute destination is
+refused); parent folders are created; the archive is written to a temp name
+and renamed. Renders whose file has gone missing are dropped from
 the package with the version marked (`error` set) rather than failing the
 export. Storyboard → **Export** uses the native save dialog and reveals the
 result in the file manager.
@@ -60,7 +79,9 @@ confirmation before importing.
 
 ### Import — `POST /api/film/projects/{id}/import`
 
-`{package_path, replace}` → `{summary, project}`. Validation runs
+`{package_path, replace}` → `{summary, project, host_project,
+output_path_map}` — `output_path_map` maps each original render path to its
+extracted location so timeline clips can be re-linked. Validation runs
 **completely before anything is written**:
 
 | Check | Failure |

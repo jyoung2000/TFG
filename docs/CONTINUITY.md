@@ -37,6 +37,28 @@ the user could make by hand:
 | `character_not_in_scene` | minor | a shot character isn't in the scene's declared cast | add to the scene's cast |
 | `prop_not_in_scene` | minor | a shot prop isn't in the scene's declared props | add to the scene's props |
 | `missing_capture` | minor | the shot was composed in 3D but never captured, and generation expects the capture | generate from text only |
+| `screen_direction` | significant | the shot camera is on the other side of the line between the two shared characters compared with the previous shot of the scene (180° rule), computed from the composer's camera and figure positions | **none** — move the camera or add a neutral shot (creative decision) |
+| `jump_cut` | minor | same subject, same shot size, angle, elevation and camera move as the previous shot | none — change size by two steps or the angle |
+| `framing_jump` | minor | extreme size jump on the same axis (e.g. extreme wide → extreme close-up, same angle) | none — add an intermediate size or change the angle |
+
+The three screen-direction checks are deterministic (no model involved) and
+are warnings by design: filmmakers break them on purpose.
+
+## Optional AI visual review
+
+`POST /api/film/projects/{id}/continuity/{shotId}/visual-review` compares the
+**last frame of the previous shot's current version** with the **first frame
+of this shot's current version** through the configured multimodal provider
+(`continuity` role). The frames are saved as
+`captures/<shot>-review-prev.jpg` / `-cur.jpg` and shown in the drawer. The
+answer is one of **Good / Minor drift / Review recommended / Likely
+continuity break** plus a one-line summary and specific observations.
+
+It is advisory only: it never changes the deterministic level, never blocks
+generation, and returns `available: false` with a plain reason when there is
+no provider, the provider cannot see images, either shot has no render, or
+the model does not answer in the expected format. Keys never appear in the
+request body (images travel as data URLs inside the message content).
 
 An uncomposed draft is *not* flagged for a missing capture — it simply
 generates from text — so new shots start `good`.

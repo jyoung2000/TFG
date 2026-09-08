@@ -369,6 +369,28 @@ export interface ContinuityReport {
   warnings: ContinuityWarning[]
 }
 
+export type VisualReviewCategory = 'good' | 'minor_drift' | 'review_recommended' | 'likely_break' | 'unavailable'
+
+export const VISUAL_REVIEW_META: Record<VisualReviewCategory, { label: string; className: string }> = {
+  good: { label: 'Good', className: 'text-emerald-300' },
+  minor_drift: { label: 'Minor drift', className: 'text-amber-200' },
+  review_recommended: { label: 'Review recommended', className: 'text-orange-300' },
+  likely_break: { label: 'Likely continuity break', className: 'text-red-300' },
+  unavailable: { label: 'Not available', className: 'text-zinc-500' },
+}
+
+export interface VisualReview {
+  available: boolean
+  reason: string
+  category: VisualReviewCategory
+  summary: string
+  issues: string[]
+  previous_shot_id: string | null
+  previous_frame_path: string
+  current_frame_path: string
+  context: DirectorContextDetails | null
+}
+
 export interface ProjectContinuity {
   level: ContinuityLevel
   shots: { shot_id: string; scene_id: string; level: ContinuityLevel; warning_count: number }[]

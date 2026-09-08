@@ -11,6 +11,7 @@ calls is executed the same way. Execution is always the structured registry.
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import math
@@ -53,6 +54,7 @@ from film.film_api_types import (
     OpenRouterValidateResponse,
     RefinePromptRequest,
     RefinePromptResponse,
+    VisualReviewResponse,
     ReorderRequest,
     UpdateAssetRequest,
     UpdateSceneRequest,
@@ -78,6 +80,7 @@ from film.film_models import (
     ShotGenerationSettings,
     now_ms,
 )
+from film.film_continuity import previous_in_same_scene
 from film.film_prompt import framing_summary, synthesize_prompt
 from film.llm_providers import (
     GEMINI_DEFAULT_MODEL,
@@ -98,7 +101,7 @@ from film.script_parser import parse_script, suggest_duration, suggest_shot_size
 from handlers.base import StateHandlerBase
 from handlers.film_generation_handler import FilmGenerationHandler
 from handlers.film_handler import FilmHandler
-from services.interfaces import HTTPClient
+from services.interfaces import HTTPClient, VideoProcessor
 from state.app_state_types import AppState
 
 logger = logging.getLogger(__name__)
@@ -558,11 +561,13 @@ class FilmDirectorHandler(StateHandlerBase):
         film_handler: FilmHandler,
         film_generation_handler: FilmGenerationHandler,
         http: HTTPClient,
+        video_processor: VideoProcessor | None = None,
     ) -> None:
         super().__init__(state, lock)
         self._film = film_handler
         self._film_generation = film_generation_handler
         self._http = http
+        self._video_processor = video_processor
         self._openrouter_models_cache: tuple[int, list[OpenRouterModel]] | None = None
         self._commands: dict[str, Callable[[str, dict[str, object]], object]] = {
             "get_project": self._cmd_get_project,
@@ -939,6 +944,156 @@ class FilmDirectorHandler(StateHandlerBase):
         )
 
     # ---- Prompt refinement -----------------------------------------------
+
+    # ---- Visual continuity review (optional, multimodal) --------------------
+
+    _VISUAL_CATEGORIES: dict[str, str] = {
+        "good": "good",
+        "minor_drift": "minor_drift",
+        "minor drift": "minor_drift",
+        "review_recommended": "review_recommended",
+        "review recommended": "review_recommended",
+        "likely_break": "likely_break",
+        "likely continuity break": "likely_break",
+        "likely_continuity_break": "likely_break",
+        "break": "likely_break",
+    }
+
+    def _frame_data_url(self, output_path: str, *, last: bool) -> tuple[str, bytes] | None:
+        """(data URL, jpeg bytes) for the first or last frame of a rendered clip."""
+        processor = self._video_processor
+        if processor is None:
+            return None
+        try:
+            cap = processor.open_video(output_path)
+            try:
+                info = processor.get_video_info(cap)
+                index = max(0, info["frame_count"] - 1) if last else 0
+                frame = processor.read_frame(cap, index)
+                if frame is None:
+                    return None
+                jpeg = processor.encode_frame_jpeg(frame, quality=88)
+            finally:
+                processor.release(cap)
+        except Exception as exc:  # noqa: BLE001 - review is best-effort
+            logger.warning("Could not extract frame for visual review: %s", exc)
+            return None
+        encoded = base64.b64encode(jpeg).decode("ascii")
+        return f"data:image/jpeg;base64,{encoded}", jpeg
+
+    def visual_review(self, project_id: str, shot_id: str) -> VisualReviewResponse:
+        """Compare the previous shot's last frame with this shot's first frame
+        through a multimodal model. Never a hard failure: anything that stops
+        the review comes back as ``available=False`` with a reason, and the
+        deterministic continuity checks stay authoritative."""
+        project = self._film.get_project(project_id)
+        found = project.find_shot(shot_id)
+        if found is None:
+            raise HTTPError(404, f"Shot not found: {shot_id}")
+        scene, shot = found
+        previous = project.previous_shot(shot.id)
+        if previous is None or not previous_in_same_scene(project, previous, shot):
+            return VisualReviewResponse(available=False, reason="This is the first shot of its scene — nothing to compare against.")
+        prev_version = previous.version(previous.current_version) if previous.current_version is not None else None
+        cur_version = shot.version(shot.current_version) if shot.current_version is not None else None
+        if prev_version is None or prev_version.status != "complete" or not prev_version.output_path:
+            return VisualReviewResponse(available=False, reason="The previous shot has no rendered version yet.", previous_shot_id=previous.id)
+        if cur_version is None or cur_version.status != "complete" or not cur_version.output_path:
+            return VisualReviewResponse(available=False, reason="This shot has no rendered version yet.", previous_shot_id=previous.id)
+        try:
+            provider = self._provider("continuity")
+        except HTTPError as exc:
+            return VisualReviewResponse(available=False, reason=str(exc.detail), previous_shot_id=previous.id)
+
+        prev_frame = self._frame_data_url(prev_version.output_path, last=True)
+        cur_frame = self._frame_data_url(cur_version.output_path, last=False)
+        if prev_frame is None or cur_frame is None:
+            return VisualReviewResponse(
+                available=False,
+                reason="Could not read frames from the rendered clips (missing file or unreadable video).",
+                previous_shot_id=previous.id,
+            )
+        captures = self._film.store.captures_dir(project_id)
+        captures.mkdir(parents=True, exist_ok=True)
+        prev_rel = f"captures/{shot.id}-review-prev.jpg"
+        cur_rel = f"captures/{shot.id}-review-cur.jpg"
+        (captures / f"{shot.id}-review-prev.jpg").write_bytes(prev_frame[1])
+        (captures / f"{shot.id}-review-cur.jpg").write_bytes(cur_frame[1])
+
+        cast_names = [a.name for c in shot.characters for a in project.assets if a.id == c.asset_id]
+        prev_cast = [a.name for c in previous.characters for a in project.assets if a.id == c.asset_id]
+        location_asset = project.asset(shot.location_id) if shot.location_id else None
+        location = location_asset.name if location_asset is not None else "unspecified"
+        system = (
+            "You are a film continuity supervisor. You receive the LAST frame of the previous shot and the FIRST frame "
+            "of the next shot from the same scene. Judge visual continuity only: character appearance and wardrobe, "
+            "props, location/set dressing, lighting and time of day, screen direction. Ignore differences that are "
+            "expected from the framing change. Answer with JSON only: "
+            '{"category": "good" | "minor_drift" | "review_recommended" | "likely_break", '
+            '"summary": "<one sentence>", "issues": ["<specific observation>", ...]}. '
+            "Be conservative: use likely_break only for clear contradictions (different clothing colour, missing "
+            "character, different location)."
+        )
+        user = (
+            f"Scene: {scene.title or 'untitled'} · location: {location}.\n"
+            f"Previous shot: {previous.title or previous.id} — {framing_summary(previous)}; cast: {', '.join(prev_cast) or 'none'}.\n"
+            f"This shot: {shot.title or shot.id} — {framing_summary(shot)}; cast: {', '.join(cast_names) or 'none'}.\n"
+            "Image 1 is the previous shot's last frame; image 2 is this shot's first frame."
+        )
+        messages = [
+            LLMMessage(role="system", content=system),
+            LLMMessage(role="user", content=user, images=[prev_frame[0], cur_frame[0]]),
+        ]
+        try:
+            reply = provider.chat(messages, json_mode=True)
+        except HTTPError as exc:
+            return VisualReviewResponse(
+                available=False,
+                reason=f"The provider could not review the frames: {exc.detail}",
+                previous_shot_id=previous.id,
+                previous_frame_path=prev_rel,
+                current_frame_path=cur_rel,
+            )
+        try:
+            parsed = parse_json_block(reply.text)
+        except HTTPError:
+            parsed = None
+        payload = cast(dict[str, object], parsed) if isinstance(parsed, dict) else {}
+        raw_category = str(payload.get("category", "")).strip().lower()
+        category = self._VISUAL_CATEGORIES.get(raw_category)
+        issues_raw = payload.get("issues", [])
+        issues = [str(i) for i in cast(list[object], issues_raw)][:8] if isinstance(issues_raw, list) else []
+        summary = str(payload.get("summary", "")).strip() or reply.text.strip()[:300]
+        context = self._context(
+            provider,
+            "continuity",
+            steps=1,
+            tool_calls=0,
+            prompt_chars=messages_chars(messages),
+            summary_chars=len(user),
+            replies=[reply],
+            scope="two frames (previous last / current first) + shot facts",
+        )
+        if category is None:
+            return VisualReviewResponse(
+                available=False,
+                reason=f"The model did not return a recognised category ({raw_category or 'no JSON'}).",
+                summary=summary,
+                previous_shot_id=previous.id,
+                previous_frame_path=prev_rel,
+                current_frame_path=cur_rel,
+                context=context,
+            )
+        return VisualReviewResponse(
+            available=True,
+            category=category,  # type: ignore[arg-type]
+            summary=summary,
+            issues=issues,
+            previous_shot_id=previous.id,
+            previous_frame_path=prev_rel,
+            current_frame_path=cur_rel,
+            context=context,
+        )
 
     def refine_prompt(self, project_id: str, scene_id: str, shot_id: str, req: RefinePromptRequest) -> RefinePromptResponse:
         provider = self._provider("prompt_refinement")

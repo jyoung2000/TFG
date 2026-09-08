@@ -53,6 +53,17 @@ class LLMMessage:
     # For role == "tool": which call this answers and the tool's name.
     tool_call_id: str = ""
     name: str = ""
+    # Optional inline images (data: URLs) for multimodal review prompts.
+    images: list[str] = field(default_factory=list[str])
+
+
+def _split_data_url(url: str) -> tuple[str, str] | None:
+    """('image/jpeg', '<base64>') for a data URL, else None."""
+    if not url.startswith("data:"):
+        return None
+    header, _, payload = url.partition(",")
+    mime = header[5:].split(";")[0] or "image/png"
+    return mime, payload
 
 
 @dataclass(slots=True)
@@ -313,7 +324,12 @@ class OpenAICompatibleProvider(LLMProvider):
                     }
                 )
                 continue
-            item: dict[str, JSONValue] = {"role": message.role, "content": message.content}
+            content: JSONValue = message.content
+            if message.images:
+                parts: list[JSONValue] = [{"type": "text", "text": message.content}]
+                parts.extend({"type": "image_url", "image_url": {"url": url}} for url in message.images)
+                content = parts
+            item: dict[str, JSONValue] = {"role": message.role, "content": content}
             if message.tool_calls:
                 item["tool_calls"] = [
                     {
@@ -496,6 +512,10 @@ class GeminiProvider(LLMProvider):
             parts: list[JSONValue] = []
             if message.content:
                 parts.append({"text": message.content})
+            for url in message.images:
+                split = _split_data_url(url)
+                if split is not None:
+                    parts.append({"inline_data": {"mime_type": split[0], "data": split[1]}})
             for call in message.tool_calls:
                 parts.append({"functionCall": {"name": call.name, "args": cast(JSONValue, call.arguments)}})
             if not parts:

@@ -88,6 +88,21 @@ clean VM → launch → first-run Python download → backend health → one qui
 video → ffmpeg export → uninstall. Record installer SHA-256 and the tested
 OS/GPU.
 
+## CI installer jobs
+
+`.github/workflows/ci.yml` builds the distributables on every push/PR and
+`workflow_dispatch`, unsigned and never published:
+
+| Job | Runner | What it does | What it checks |
+|---|---|---|---|
+| `installer-windows` | `windows-latest` | Wan2GP checkout → frontend build → `electron-builder --win --publish never` | `*Setup*.exe` exists and is > 60 MB; unpacked tree carries `backend/ltx2_server.py`, `Wan2GP/wgp.py`, `python-deps-hash.txt`, `app.asar`; backend tests are not shipped; SHA-256 recorded; artifact uploaded (14 days) |
+| `installer-linux` | `ubuntu-latest` | Wan2GP checkout → runtime-only Python (`LTX_PYTHON_DEPS=skip`) → `electron-builder --linux AppImage` | AppImage extracts and contains backend, Wan2GP, `resources/python`, `app.asar`; SHA-256 recorded; artifact uploaded |
+
+These prove the packaging config and bundle contents. They are **not** the
+clean-machine install test — that stays a manual `RELEASE_CHECKLIST.md`
+step, because a runner cannot exercise first-run Python staging, GPU
+generation or uninstall. Publishing a GitHub Release remains manual.
+
 ## Build Output
 
 ```

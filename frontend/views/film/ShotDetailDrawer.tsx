@@ -25,8 +25,9 @@ import type {
   FilmShot,
   QualityPreset,
   VersionKind,
+  VisualReview,
 } from '../../types/film'
-import { CAMERA_MOVES, CONTINUITY_LEVEL_META, SHOT_STATUS_META, framingLabel } from '../../types/film'
+import { CAMERA_MOVES, CONTINUITY_LEVEL_META, SHOT_STATUS_META, VISUAL_REVIEW_META, framingLabel } from '../../types/film'
 import { useShotWorkflow } from './useShotWorkflow'
 
 interface ShotDetailDrawerProps {
@@ -71,8 +72,16 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
   const [captureUrl, setCaptureUrl] = useState<string | null>(null)
   const [versionUrls, setVersionUrls] = useState<Record<number, string>>({})
   const [refineNote, setRefineNote] = useState('')
+  const [visual, setVisual] = useState<VisualReview | null>(null)
+  const [visualFrames, setVisualFrames] = useState<{ previous: string; current: string } | null>(null)
   const { hasDirectorProvider } = useAppSettings()
   const [uiMode] = useUiMode()
+
+  // Reset the optional AI visual review when the shot changes.
+  useEffect(() => {
+    setVisual(null)
+    setVisualFrames(null)
+  }, [shot.id])
 
   useEffect(() => {
     setDraft({
@@ -182,6 +191,37 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
     },
     [projectId, shot.id, refresh, setShotContinuity],
   )
+
+  const runVisualReview = useCallback(async () => {
+    if (!projectId) return
+    setBusy('visual')
+    try {
+      const result = await filmApi.visualReview(projectId, shot.id)
+      setVisual(result)
+      if (result.previous_frame_path && result.current_frame_path) {
+        setVisualFrames({
+          previous: await filmMediaUrl(projectId, result.previous_frame_path),
+          current: await filmMediaUrl(projectId, result.current_frame_path),
+        })
+      } else {
+        setVisualFrames(null)
+      }
+    } catch (e) {
+      setVisual({
+        available: false,
+        reason: e instanceof Error ? e.message : String(e),
+        category: 'unavailable',
+        summary: '',
+        issues: [],
+        previous_shot_id: null,
+        previous_frame_path: '',
+        current_frame_path: '',
+        context: null,
+      })
+    } finally {
+      setBusy(null)
+    }
+  }, [projectId, shot.id])
 
   const setQualityPreset = useCallback(
     async (preset: QualityPreset) => {
@@ -339,6 +379,58 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
             </div>
           ))}
           {fixNote && <div className="text-[10px] text-zinc-400">{fixNote}</div>}
+          {/* Optional multimodal review — advisory, never blocks; needs rendered previous + current shot */}
+          <div className="flex items-center gap-2 pt-1 border-t border-zinc-800/60">
+            <button
+              onClick={() => void runVisualReview()}
+              disabled={anyBusy || !hasDirectorProvider || !currentVersion || currentVersion.status !== 'complete'}
+              className="flex items-center gap-1 px-2 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 text-[10px] text-violet-300"
+              title={
+                !hasDirectorProvider
+                  ? 'Needs an AI provider with vision (OpenRouter, Gemini or a local multimodal endpoint)'
+                  : !currentVersion || currentVersion.status !== 'complete'
+                    ? 'Render this shot (and the previous one) first'
+                    : 'Compare the previous shot’s last frame with this shot’s first frame using the AI provider'
+              }
+            >
+              {busy === 'visual' ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
+              AI visual check
+            </button>
+            {visual && (
+              <span className={`text-[10px] ${VISUAL_REVIEW_META[visual.available ? visual.category : 'unavailable'].className}`}>
+                {visual.available ? VISUAL_REVIEW_META[visual.category].label : 'Not available'}
+              </span>
+            )}
+          </div>
+          {visual && (
+            <div className="text-[10px] text-zinc-400 space-y-1">
+              {visual.available ? (
+                <>
+                  <div>{visual.summary}</div>
+                  {visual.issues.length > 0 && (
+                    <ul className="list-disc pl-4 space-y-0.5">
+                      {visual.issues.map((issue, index) => (
+                        <li key={index}>{issue}</li>
+                      ))}
+                    </ul>
+                  )}
+                </>
+              ) : (
+                <div>{visual.reason}</div>
+              )}
+              {visualFrames && (
+                <div className="grid grid-cols-2 gap-1">
+                  <img src={visualFrames.previous} alt="Previous shot, last frame" className="rounded aspect-video object-cover bg-black" />
+                  <img src={visualFrames.current} alt="This shot, first frame" className="rounded aspect-video object-cover bg-black" />
+                </div>
+              )}
+              {visual.context && (
+                <div className="text-zinc-600">
+                  {visual.context.provider} · {visual.context.model} · advisory only — the deterministic checks above stay authoritative
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Fields */}

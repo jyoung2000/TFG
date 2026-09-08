@@ -10,7 +10,10 @@ export interface FastModelSettings {
   useUpscaler: boolean
 }
 
-export type DirectorProviderSetting = 'auto' | 'gemini' | 'openrouter'
+export type DirectorProviderSetting = 'auto' | 'gemini' | 'openrouter' | 'openai_compatible'
+
+/** Backend key identifiers accepted by DELETE /api/settings/api-keys/{provider}. */
+export type ClearableKeyProvider = 'ltx' | 'fal' | 'gemini' | 'openrouter' | 'openai-compatible'
 
 /** Preferred OpenRouter model per AI Director role ('' = defaultModel). */
 export interface OpenRouterRoleModels {
@@ -33,6 +36,10 @@ export interface AppSettings {
   openrouterKeySource: 'settings' | 'env' | 'none'
   directorProvider: DirectorProviderSetting
   openrouterModels: OpenRouterRoleModels
+  /** OpenAI-compatible endpoint (LM Studio, vLLM, Ollama's OpenAI shim…): /v1 base URL + model id. */
+  openaiCompatibleBaseUrl: string
+  openaiCompatibleModel: string
+  hasOpenaiCompatibleApiKey: boolean
   useLocalTextEncoder: boolean
   fastModel: FastModelSettings
   proModel: InferenceSettings
@@ -63,6 +70,9 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   openrouterKeySource: 'none',
   directorProvider: 'auto',
   openrouterModels: DEFAULT_OPENROUTER_ROLE_MODELS,
+  openaiCompatibleBaseUrl: '',
+  openaiCompatibleModel: '',
+  hasOpenaiCompatibleApiKey: false,
   useLocalTextEncoder: false,
   fastModel: { useUpscaler: true },
   proModel: { steps: 20, useUpscaler: true },
@@ -85,9 +95,10 @@ interface AppSettingsContextValue {
   saveFalApiKey: (value: string) => Promise<void>
   saveGeminiApiKey: (value: string) => Promise<void>
   saveOpenrouterApiKey: (value: string) => Promise<void>
+  saveOpenaiCompatibleApiKey: (value: string) => Promise<void>
   /** Remove a stored secret (e.g. after the provider rejected it). */
-  clearApiKey: (provider: 'ltx' | 'fal' | 'gemini' | 'openrouter') => Promise<void>
-  /** True when any AI Director provider (OpenRouter or Gemini) has a key. */
+  clearApiKey: (provider: ClearableKeyProvider) => Promise<void>
+  /** True when the selected AI Director provider is usable (key present, or endpoint + model set). */
   hasDirectorProvider: boolean
   forceApiGenerations: boolean
   shouldVideoGenerateWithLtxApi: boolean
@@ -119,6 +130,9 @@ function normalizeAppSettings(data: Partial<AppSettings>): AppSettings {
     openrouterKeySource: data.openrouterKeySource ?? DEFAULT_APP_SETTINGS.openrouterKeySource,
     directorProvider: data.directorProvider ?? DEFAULT_APP_SETTINGS.directorProvider,
     openrouterModels: { ...DEFAULT_OPENROUTER_ROLE_MODELS, ...(data.openrouterModels ?? {}) },
+    openaiCompatibleBaseUrl: data.openaiCompatibleBaseUrl ?? DEFAULT_APP_SETTINGS.openaiCompatibleBaseUrl,
+    openaiCompatibleModel: data.openaiCompatibleModel ?? DEFAULT_APP_SETTINGS.openaiCompatibleModel,
+    hasOpenaiCompatibleApiKey: data.hasOpenaiCompatibleApiKey ?? DEFAULT_APP_SETTINGS.hasOpenaiCompatibleApiKey,
     useLocalTextEncoder: data.useLocalTextEncoder ?? DEFAULT_APP_SETTINGS.useLocalTextEncoder,
     fastModel: data.fastModel ?? DEFAULT_APP_SETTINGS.fastModel,
     proModel: data.proModel ?? DEFAULT_APP_SETTINGS.proModel,
@@ -255,6 +269,7 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
           hasGeminiApiKey: _c,
           hasOpenrouterApiKey: _d,
           openrouterKeySource: _e,
+          hasOpenaiCompatibleApiKey: _f,
           ...syncPayload
         } = settings
         await backendFetch('/api/settings', {
@@ -329,7 +344,20 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
     await refreshSettings()
   }, [refreshSettings])
 
-  const clearApiKey = useCallback(async (provider: 'ltx' | 'fal' | 'gemini' | 'openrouter') => {
+  const saveOpenaiCompatibleApiKey = useCallback(async (value: string) => {
+    const response = await backendFetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ openaiCompatibleApiKey: value }),
+    })
+    if (!response.ok) {
+      const detail = await response.text()
+      throw new Error(detail || 'Failed to save the endpoint API key.')
+    }
+    await refreshSettings()
+  }, [refreshSettings])
+
+  const clearApiKey = useCallback(async (provider: ClearableKeyProvider) => {
     const response = await backendFetch(`/api/settings/api-keys/${provider}`, { method: 'DELETE' })
     if (!response.ok) {
       const detail = await response.text()
@@ -341,12 +369,16 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
   const shouldVideoGenerateWithLtxApi =
     forceApiGenerations || (settings.userPrefersLtxApiVideoGenerations && settings.hasLtxApiKey)
 
+  const hasOpenaiCompatible =
+    settings.openaiCompatibleBaseUrl.trim() !== '' && settings.openaiCompatibleModel.trim() !== ''
   const hasDirectorProvider =
     settings.directorProvider === 'openrouter'
       ? settings.hasOpenrouterApiKey
       : settings.directorProvider === 'gemini'
         ? settings.hasGeminiApiKey
-        : settings.hasOpenrouterApiKey || settings.hasGeminiApiKey
+        : settings.directorProvider === 'openai_compatible'
+          ? hasOpenaiCompatible
+          : settings.hasOpenrouterApiKey || settings.hasGeminiApiKey || hasOpenaiCompatible
 
   const contextValue = useMemo<AppSettingsContextValue>(
     () => ({
@@ -359,6 +391,7 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
       saveFalApiKey,
       saveGeminiApiKey,
       saveOpenrouterApiKey,
+      saveOpenaiCompatibleApiKey,
       clearApiKey,
       hasDirectorProvider,
       forceApiGenerations,
@@ -375,6 +408,7 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
       saveGeminiApiKey,
       saveLtxApiKey,
       saveOpenrouterApiKey,
+      saveOpenaiCompatibleApiKey,
       settings,
       shouldVideoGenerateWithLtxApi,
       updateSettings,

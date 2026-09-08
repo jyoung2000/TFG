@@ -7,10 +7,23 @@ onto an operation the app already performs, and no command invents a
 capability the UI lacks. The LLM never mutates anything directly: it can only
 call the registry below, and every call is validated like a UI request.
 
-Providers: **OpenRouter** (first-class, see `docs/OPENROUTER.md`) or Gemini.
-Both are driven through one `LLMProvider` contract (`backend/film/llm_providers.py`)
-over the fakeable `HTTPClient` service, so all tests run without network or
-keys.
+Providers: **OpenRouter** (first-class, see `docs/OPENROUTER.md`), Gemini,
+or any **OpenAI-compatible endpoint** (LM Studio, vLLM, Ollama's OpenAI API —
+fully offline). All are driven through one `LLMProvider` contract
+(`backend/film/llm_providers.py`) over the fakeable `HTTPClient` service, so
+all tests run without network or keys. Without any provider, the offline
+builder, the script parser, continuity and the composer keep working.
+
+### Safety boundaries
+
+- The model can only call registry commands; there is no filesystem, shell
+  or network tool. Every argument is validated (ids must exist, enums must be
+  valid, numbers are range-checked) and a bad call is reported back to the
+  model as `{ok: false, error}` instead of failing the request.
+- Loops are bounded (12 model turns, tool results truncated to 6 kB).
+- Locked composer objects refuse `position/rotate/scale_object`.
+- Keys never enter prompts, tool results or logs (redaction filter in
+  `logging_policy.py`).
 
 ## Structured commands — `POST /api/film/projects/{id}/director/command`
 
@@ -19,15 +32,20 @@ keys.
 model as tools (JSON-schema parameters; list them via
 `GET /api/film/director/status`):
 
-| Read | Structure | Framing / camera | Assets & cast | Prompt & generation |
-|---|---|---|---|---|
-| `get_project` | `create_scene` | `set_framing` | `add_character` | `set_prompt` |
-| `list_assets` | `update_scene` | `set_camera_motion` | `add_location` | `set_generation_settings` |
-| `get_scene` | `delete_scene` | `set_duration` | `add_prop` | `set_script` |
-| `get_shot` | `create_shot` | `apply_pose` | `update_asset` | `check_continuity` |
-| `get_shot_composition` | `update_shot` | | `assign_character` | `generate_shot` |
-| `list_framing_options` | `delete_shot` | | `set_location` | `queue_shot` (alias) |
-| | `reorder_shots` | | | |
+| Read | Structure | Framing / camera | Composer (3D) | Assets & cast | Prompt & generation |
+|---|---|---|---|---|---|
+| `get_project` | `create_scene` | `set_framing` | `position_object` (x/y/z or hint: *foreground left*, *center*, …) | `add_character` | `set_prompt` |
+| `list_assets` | `update_scene` | `set_shot_type` | `rotate_object` (yaw) | `add_location` | `set_negative_prompt` |
+| `get_scene` | `delete_scene` | `set_camera_angle` | `scale_object` | `add_prop` | `set_generation_settings` |
+| `get_shot` | `create_shot` | `set_camera_elevation` | `update_pose` (joint → [x,y,z]°) / `apply_pose` (library) | `update_asset` / `update_character` / `update_location` / `update_prop` | `set_script` |
+| `get_composition` / `get_shot_composition` | `update_shot` | `set_composition` | `set_ots` (foreground, subject, shoulder) | `assign_character` / `assign_prop` | `check_continuity` |
+| `list_framing_options` | `delete_shot` / `duplicate_shot` | `set_camera_motion` | `set_camera` (manual position, look_at, fov → manual mode) | `set_location` / `assign_location` | `generate_shot` / `queue_shot` |
+| | `reorder_shots` | `set_duration` | `add_keyframe` / `update_keyframe` / `delete_keyframe` (camera or object) | | `generate_preview` / `generate_final` |
+| | | | `capture_shot` (reports capture state — the director cannot render the viewport) | | |
+
+All composer tools edit the shot's single composition record (the same one
+the Shot Composer saves), seeding it from the cast when the shot has never
+been opened in the composer. See `backend/tests/test_film_invariants.py`.
 
 Conventions:
 

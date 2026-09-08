@@ -29,6 +29,7 @@ import type {
   QueuedJob,
   Vec3,
   VersionKind,
+  VisualReview,
 } from '../types/film'
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -246,6 +247,12 @@ export const filmApi = {
       { method: 'POST', body: JSON.stringify({ kind, subject_id: subjectId }) },
     ),
 
+  /** Optional multimodal continuity review (previous last frame vs this first frame). */
+  visualReview: (projectId: string, shotId: string) =>
+    request<VisualReview>(`/api/film/projects/${enc(projectId)}/continuity/${enc(shotId)}/visual-review`, {
+      method: 'POST',
+    }),
+
   queue: () => request<FilmQueue>('/api/film/queue'),
 
   cancelQueue: () => request<FilmQueue>('/api/film/queue/cancel', { method: 'POST' }),
@@ -310,6 +317,12 @@ export const filmApi = {
   openrouterModels: (refresh = false) =>
     request<{ models: OpenRouterModelInfo[]; fetched_at_ms: number; cached: boolean }>(
       `/api/film/director/openrouter/models${refresh ? '?refresh=true' : ''}`,
+    ),
+
+  /** Model list from the configured OpenAI-compatible endpoint (LM Studio, vLLM, …). */
+  openaiCompatibleModels: () =>
+    request<{ models: OpenRouterModelInfo[]; fetched_at_ms: number; cached: boolean }>(
+      '/api/film/director/openai-compatible/models',
     ),
 
   validateOpenrouterKey: () =>

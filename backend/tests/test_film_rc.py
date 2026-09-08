@@ -442,3 +442,81 @@ class TestReplaceProject:
         client.post("/api/film/queue/resume")
         allowed = client.put(f"/api/film/projects/{PROJECT}", json={"project": snapshot})
         assert allowed.status_code == 200, allowed.text
+
+
+class TestVisualReview:
+    def _two_rendered_shots(self, client, test_state, create_fake_model_files) -> tuple[str, list[str]]:
+        _enable_local(test_state, create_fake_model_files)
+        scene_id, shots = _scene_with_shots(client, 2, capture=True)
+        for shot_id in shots:
+            response = client.post(
+                f"/api/film/projects/{PROJECT}/scenes/{scene_id}/shots/{shot_id}/generate", json={"kind": "preview"}
+            )
+            assert response.status_code == 200, response.text
+        for shot_id in shots:
+            assert _get_shot(client, shot_id)["versions"][0]["status"] == "complete"
+        return scene_id, shots
+
+    def test_unavailable_without_provider_or_renders(self, client, test_state, create_fake_model_files):
+        scene_id, shots = _scene_with_shots(client, 2)
+        first = client.post(f"/api/film/projects/{PROJECT}/continuity/{shots[0]}/visual-review").json()
+        assert first["available"] is False and "first shot" in first["reason"]
+        second = client.post(f"/api/film/projects/{PROJECT}/continuity/{shots[1]}/visual-review").json()
+        assert second["available"] is False and "no rendered version" in second["reason"]
+        _, rendered = self._two_rendered_shots(client, test_state, create_fake_model_files)
+        no_key = client.post(f"/api/film/projects/{PROJECT}/continuity/{rendered[1]}/visual-review").json()
+        assert no_key["available"] is False and "AI_DIRECTOR_KEY_MISSING" in no_key["reason"]
+        assert client.post(f"/api/film/projects/{PROJECT}/continuity/nope/visual-review").status_code == 404
+        del scene_id
+
+    def test_review_sends_two_frames_and_maps_category(self, client, test_state, create_fake_model_files):
+        _, shots = self._two_rendered_shots(client, test_state, create_fake_model_files)
+        assert client.post("/api/settings", json={"openrouterApiKey": FAKE_KEY}).status_code == 200
+        test_state.http.queue(
+            "post",
+            _text(json.dumps({"category": "Minor Drift", "summary": "Jacket colour shifts slightly.", "issues": ["jacket hue", "lamp moved"]})),
+        )
+        response = client.post(f"/api/film/projects/{PROJECT}/continuity/{shots[1]}/visual-review")
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["available"] is True
+        assert payload["category"] == "minor_drift"
+        assert payload["issues"] == ["jacket hue", "lamp moved"]
+        assert payload["previous_shot_id"] == shots[0]
+        assert payload["context"]["role"] == "continuity"
+        # Two inline images travelled as OpenAI content parts, JSON mode requested.
+        sent = test_state.http.calls[-1].json_payload
+        assert sent is not None
+        user_message = sent["messages"][-1]
+        parts = user_message["content"]
+        assert isinstance(parts, list)
+        assert [p["type"] for p in parts] == ["text", "image_url", "image_url"]
+        assert parts[1]["image_url"]["url"].startswith("data:image/jpeg;base64,")
+        assert sent["response_format"] == {"type": "json_object"}
+        # The compared frames are saved beside the captures and served by the media route.
+        for rel in (payload["previous_frame_path"], payload["current_frame_path"]):
+            media = client.get(f"/api/film/projects/{PROJECT}/media", params={"path": rel})
+            assert media.status_code == 200
+            assert media.content.startswith(b"jpeg:")
+        assert FAKE_KEY not in response.text
+
+    def test_review_tolerates_provider_and_parse_failures(self, client, test_state, create_fake_model_files):
+        _, shots = self._two_rendered_shots(client, test_state, create_fake_model_files)
+        client.post("/api/settings", json={"openrouterApiKey": FAKE_KEY})
+        test_state.http.queue("post", FakeResponse(status_code=400, text="model does not support images"))
+        failed = client.post(f"/api/film/projects/{PROJECT}/continuity/{shots[1]}/visual-review").json()
+        assert failed["available"] is False and "could not review" in failed["reason"]
+        test_state.http.queue("post", _text("I cannot tell."))
+        unparsed = client.post(f"/api/film/projects/{PROJECT}/continuity/{shots[1]}/visual-review").json()
+        assert unparsed["available"] is False and "recognised category" in unparsed["reason"]
+        assert unparsed["summary"] == "I cannot tell."
+
+    def test_gemini_encodes_images_inline(self):
+        from film.llm_providers import GeminiProvider, LLMMessage
+
+        _, contents = GeminiProvider._encode_contents(  # pyright: ignore[reportPrivateUsage]
+            [LLMMessage(role="user", content="compare", images=["data:image/jpeg;base64,QUJD"])]
+        )
+        parts = contents[0]["parts"]  # type: ignore[index]
+        assert parts[0] == {"text": "compare"}
+        assert parts[1] == {"inline_data": {"mime_type": "image/jpeg", "data": "QUJD"}}

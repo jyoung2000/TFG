@@ -5,6 +5,7 @@ import {
   Cloud,
   Cpu,
   Download,
+  FolderOpen,
   Gauge,
   HardDrive,
   Info,
@@ -55,17 +56,40 @@ function FitBadge({ model }: { model: FilmModelCapability }) {
   )
 }
 
-function StateChip({ model }: { model: FilmModelCapability }) {
-  const map: Record<FilmModelCapability['download_state'], { label: string; className: string }> = {
-    downloaded: { label: 'Downloaded', className: 'bg-emerald-900/60 text-emerald-300' },
-    not_downloaded: { label: 'Not downloaded', className: 'bg-zinc-800 text-zinc-400' },
-    managed_by_wangp: { label: 'Managed by WanGP', className: 'bg-sky-900/60 text-sky-300' },
+/**
+ * One state per model row, in the vocabulary the product uses: ACTIVE (the
+ * configured model), INSTALLED, AVAILABLE (WanGP fetches it on first use /
+ * the app can download it), DOWNLOADING, UPDATE AVAILABLE, INCOMPATIBLE.
+ * `download_state` is the raw mechanism (how the weights get here).
+ */
+function StateChip({ model, downloading }: { model: FilmModelCapability; downloading: boolean }) {
+  const state = downloading && !model.downloaded && model.execution === 'local' ? 'downloading' : model.state
+  const map: Record<string, { label: string; className: string }> = {
+    active: { label: 'Active', className: 'bg-violet-900/60 text-violet-200' },
+    installed: { label: 'Installed', className: 'bg-emerald-900/60 text-emerald-300' },
+    available: { label: 'Available', className: 'bg-zinc-800 text-zinc-300' },
+    downloading: { label: 'Downloading', className: 'bg-sky-900/60 text-sky-300' },
+    update_available: { label: 'Update available', className: 'bg-amber-950/70 text-amber-300' },
+    incompatible: { label: 'Incompatible', className: 'bg-red-950/70 text-red-300' },
+  }
+  const fallback: Record<FilmModelCapability['download_state'], { label: string; className: string }> = {
+    downloaded: map.installed,
+    not_downloaded: map.available,
+    managed_by_wangp: map.available,
     cloud: { label: 'Cloud', className: 'bg-sky-900/60 text-sky-300' },
     not_configured: { label: 'Needs WanGP setup', className: 'bg-amber-950/70 text-amber-300' },
   }
-  const meta = map[model.download_state]
+  const meta = map[state] ?? fallback[model.download_state]
+  const mechanism =
+    model.download_state === 'managed_by_wangp'
+      ? 'WanGP downloads the weights on first use'
+      : model.download_state === 'cloud'
+        ? 'Runs in the LTX cloud — nothing to install'
+        : model.download_state === 'not_configured'
+          ? 'Set WANGP_ROOT to enable'
+          : undefined
   return (
-    <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${meta.className}`}>
+    <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${meta.className}`} title={mechanism}>
       {meta.label}
     </span>
   )
@@ -318,6 +342,34 @@ export function ModelsPanel() {
           {capabilities.gpu_verdict}
         </div>
 
+        {/* Where the weights live + system summary */}
+        <div className="flex items-center gap-2 text-[11px] text-zinc-500">
+          <FolderOpen className="h-3.5 w-3.5 shrink-0" />
+          <span className="truncate font-mono" title={capabilities.models_path}>
+            {capabilities.models_path}
+          </span>
+          <button
+            onClick={() => void window.electronAPI?.showItemInFolder(capabilities.models_path)}
+            className="px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-[10px] text-zinc-300 whitespace-nowrap"
+            title="Reveal the model folder in the file manager"
+          >
+            Open model location
+          </button>
+          <span className="flex-1" />
+          <span className="whitespace-nowrap">
+            {capabilities.system_ram_gb != null ? `${capabilities.system_ram_gb.toFixed(0)} GB RAM` : 'RAM unknown'} ·{' '}
+            {capabilities.cuda_available ? 'CUDA available' : 'no CUDA'}
+          </span>
+        </div>
+        {capabilities.execution_mode === 'wangp' && (
+          <p className="text-[11px] text-zinc-500 leading-relaxed">
+            Models listed as <span className="text-zinc-300">Available</span> come from the WanGP checkout's own
+            definitions (<code className="text-zinc-400">defaults/*.json</code>); WanGP downloads their weights
+            into <code className="text-zinc-400">ckpts/</code> the first time they are used. Switch the active model
+            with <code className="text-zinc-400">WANGP_VIDEO_MODEL_TYPE</code>.
+          </p>
+        )}
+
         {/* Model list with per-model fit */}
         <div className="space-y-2">
           {capabilities.models.map(model => (
@@ -333,18 +385,25 @@ export function ModelsPanel() {
               <div className="flex-1 min-w-0">
                 <div className="text-xs font-medium text-zinc-200 truncate">
                   {model.label}
-                  {!model.required && model.download_state !== 'not_configured' && (
+                  {!model.required && model.download_state !== 'not_configured' && !model.is_active && (
                     <span className="ml-1.5 text-[10px] text-zinc-600">(optional)</span>
                   )}
                 </div>
                 <div className="text-[11px] text-zinc-500">
                   {model.modes.join(' + ')}
+                  {model.family && ` · ${model.family}`}
+                  {model.quantization && ` · ${model.quantization}`}
                   {model.disk_size_gb != null && ` · ${model.disk_size_gb.toFixed(0)} GB on disk`}
                   {model.estimated_min_vram_gb != null &&
-                    ` · needs ~${model.estimated_min_vram_gb.toFixed(0)} GB VRAM`}
+                    ` · needs ~${model.estimated_min_vram_gb.toFixed(0)} GB VRAM${model.vram_is_estimate ? ' (estimate)' : ''}`}
                   {model.supported_resolutions.length > 0 &&
                     ` · up to ${model.supported_resolutions[model.supported_resolutions.length - 1]}`}
                 </div>
+                {model.description && model.execution === 'wangp' && (
+                  <div className="text-[10px] text-zinc-600 mt-0.5 truncate" title={model.description}>
+                    {model.description}
+                  </div>
+                )}
                 {model.download_state === 'not_configured' && (
                   <div className="text-[10px] text-amber-400/80 mt-0.5">
                     Runs LTX on 6 GB+ GPUs. Set WANGP_ROOT to a WanGP checkout — see the README's
@@ -353,7 +412,7 @@ export function ModelsPanel() {
                 )}
               </div>
               <FitBadge model={model} />
-              <StateChip model={model} />
+              <StateChip model={model} downloading={downloading} />
               {model.execution === 'local' && model.downloaded && (
                 <button
                   onClick={() => void removeModel(model)}

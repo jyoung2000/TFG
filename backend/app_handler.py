@@ -258,6 +258,7 @@ class AppHandler:
             film_handler=self.film,
             film_generation_handler=self.film_generation,
             http=http,
+            video_processor=video_processor,
         )
 
         self.downloads.cleanup_downloading_dir()

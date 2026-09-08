@@ -28,7 +28,9 @@
     "prepare:python:win": "powershell -ExecutionPolicy Bypass -File scripts/prepare-python.ps1",
     "build:frontend": "vite build",
     "start:unpacked:mac": "open release/mac-arm64/LTX\\ Desktop.app",
-    "start:unpacked:win": "powershell -Command \"& '.\\release\\win-unpacked\\LTX Desktop.exe'\""
+    "start:unpacked:win": "powershell -Command \"& '.\\release\\win-unpacked\\LTX Desktop.exe'\"",
+    "test:frontend": "vitest run",
+    "test": "pnpm run test:frontend && pnpm run backend:test"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.0",
@@ -61,6 +63,7 @@
     "vite": "^5.3.1",
     "vite-plugin-electron": "^0.28.7",
     "vite-plugin-electron-renderer": "^0.14.5",
+    "vitest": "^3.2.7",
     "wait-on": "^7.2.0"
   }
 }

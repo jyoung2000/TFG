@@ -55,11 +55,30 @@ Chat completions go to `POST https://openrouter.ai/api/v1/chat/completions`
 `response_format: json_object` for the JSON roles). The app also sends the
 public attribution headers OpenRouter asks for (`HTTP-Referer`, `X-Title`).
 
+## Local / OpenAI-compatible endpoints (offline)
+
+Any server speaking the OpenAI chat-completions API works as a provider:
+LM Studio (`http://127.0.0.1:1234/v1`), vLLM, Ollama's OpenAI shim
+(`http://127.0.0.1:11434/v1`), or a gateway. **Settings → API Keys → Local /
+OpenAI-compatible endpoint**: enter the `/v1` base URL, press *Models*
+(`GET <base>/models`), pick a model id, optionally store a key (only if the
+server requires one; kept by the backend like the other keys), press *Test
+connection* (one tiny chat request). Settings fields:
+`openaiCompatibleBaseUrl`, `openaiCompatibleModel`, `openaiCompatibleApiKey`
+(write-only; `hasOpenaiCompatibleApiKey` comes back), removable with
+`DELETE /api/settings/api-keys/openai-compatible`.
+
+The endpoint shares the OpenRouter adapter (`OpenAICompatibleProvider`), so
+tool calling, JSON mode and multimodal review work the same way when the
+served model supports them; errors are prefixed `OPENAI_COMPATIBLE_*`.
+`GET /api/film/director/openai-compatible/models` lists the endpoint's models.
+
 ## Provider selection and roles
 
-`directorProvider` is `auto` (OpenRouter when a key exists, else Gemini),
-`openrouter`, or `gemini`. With OpenRouter, `openrouterModels` maps each role
-to a model id (`''` = `defaultModel`, which defaults to `openai/gpt-4o-mini`):
+`directorProvider` is `auto` (OpenRouter when a key exists, then Gemini, then
+a configured local endpoint), `openrouter`, `gemini`, or `openai_compatible`.
+With OpenRouter, `openrouterModels` maps each role to a model id (`''` =
+`defaultModel`, which defaults to `openai/gpt-4o-mini`):
 
 | Role | Used by |
 |---|---|
@@ -67,7 +86,20 @@ to a model id (`''` = `defaultModel`, which defaults to `openai/gpt-4o-mini`):
 | `script` | Build Film with AI (idea → screenplay + shot plan). |
 | `storyboard` | AI Storyboard (script → cinematographed shots). |
 | `prompt_refinement` | *Refine with AI* on a shot, Quick Mode idea chat. |
-| `continuity` | Continuity explanations (reserved for the continuity assistant). |
+| `continuity` | The optional AI visual continuity review (needs a model that accepts images). |
+
+## Failure handling (tested with fake HTTP, never with a real key)
+
+| Situation | Behaviour |
+|---|---|
+| Invalid key (`401`) | `OPENROUTER_KEY_INVALID`, key never echoed; *Remove* clears it |
+| Rate limit (`429`) | `OPENROUTER_RATE_LIMITED`, UI offers retry |
+| Timeout | `504 … timed out`, retry |
+| Malformed tool arguments | treated as an empty argument set; nameless tool calls are dropped |
+| No choices / `error` object in a 200 body | `502` with the provider's message |
+| Unknown tool name from the model | reported back to the model as an error, loop continues |
+| Runaway tool loop | stops after 12 turns with an explicit error result |
+| Context too large | the model's own error is surfaced; the director already sends a compact summary and truncates tool results |
 
 ## Errors you may see
 

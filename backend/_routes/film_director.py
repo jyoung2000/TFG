@@ -22,6 +22,7 @@ from film.film_api_types import (
     OpenRouterValidateResponse,
     RefinePromptRequest,
     RefinePromptResponse,
+    VisualReviewResponse,
 )
 from state import get_state_service
 from app_handler import AppHandler
@@ -40,6 +41,16 @@ def route_openrouter_models(
     handler: AppHandler = Depends(get_state_service),
 ) -> OpenRouterModelsResponse:
     return handler.film_director.openrouter_models(refresh=refresh)
+
+
+@router.post("/projects/{project_id}/continuity/{shot_id}/visual-review", response_model=VisualReviewResponse)
+def route_visual_review(
+    project_id: str,
+    shot_id: str,
+    handler: AppHandler = Depends(get_state_service),
+) -> VisualReviewResponse:
+    """Optional multimodal review of two rendered shots (never blocks; deterministic checks stay authoritative)."""
+    return handler.film_director.visual_review(project_id, shot_id)
 
 
 @router.get("/director/openai-compatible/models", response_model=OpenRouterModelsResponse)

@@ -7,6 +7,8 @@ the film feature only.
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from film.film_continuity import ContinuityKind, ContinuityLevel, ContinuityWarning
@@ -595,3 +597,26 @@ class GenerateStoryboardResponse(BaseModel):
     shots_created: int
     characters_created: int
     used_llm: bool
+
+
+VisualReviewCategory = Literal["good", "minor_drift", "review_recommended", "likely_break", "unavailable"]
+
+
+class VisualReviewResponse(BaseModel):
+    """Optional multimodal continuity review of two rendered shots.
+
+    ``available`` is False (with ``reason``) when no provider is configured,
+    the provider cannot see images, or either shot has no rendered output —
+    the deterministic checks remain the source of truth either way.
+    """
+
+    available: bool
+    reason: str = ""
+    category: VisualReviewCategory = "unavailable"
+    summary: str = ""
+    issues: list[str] = Field(default_factory=list[str])
+    previous_shot_id: str | None = None
+    # Project-relative paths of the frames that were compared (served by /media).
+    previous_frame_path: str = ""
+    current_frame_path: str = ""
+    context: DirectorContextDetails | None = None
