@@ -1,12 +1,22 @@
 #!/usr/bin/env bash
 # prepare-python.sh
-# Downloads a standalone Python and installs all dependencies for macOS distribution.
+# Downloads a standalone Python and installs all dependencies for macOS/Linux
+# distribution.
 #
 # Dependencies are read from uv.lock (via `uv export`) — pyproject.toml is the
 # single source of truth. No hardcoded dependency lists.
 #
 # Uses python-build-standalone (https://github.com/astral-sh/python-build-standalone)
-# which provides relocatable Python builds for macOS.
+# which provides relocatable Python builds for macOS and Linux.
+#
+# Environment knobs:
+#   PYTHON_VERSION      Full X.Y.Z Python version (default: from backend/.python-version,
+#                       resolved to a known-good patch release when only X.Y is pinned)
+#   PBS_TAG             python-build-standalone release tag
+#   ARCH                Target arch (default: uname -m)
+#   LTX_PYTHON_DEPS     "full" (default) installs every locked dependency;
+#                       "skip" produces a runtime-only bundle (Python + pip, no
+#                       ML deps) for CI/smoke packaging tests — NOT for release.
 #
 # Prerequisites:
 #   - uv must be installed (https://docs.astral.sh/uv/)
@@ -18,16 +28,24 @@ set -euo pipefail
 # ============================================================
 # Configuration
 # ============================================================
-PYTHON_VERSION="${PYTHON_VERSION:-$(cat "$(dirname "$0")/../backend/.python-version" | tr -d '[:space:]')}"
-PBS_TAG="${PBS_TAG:-20260211}"
-OUTPUT_DIR="python-embed"
-ARCH="${ARCH:-$(uname -m)}"
-
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 BACKEND_DIR="$PROJECT_DIR/backend"
+OUTPUT_DIR="python-embed"
 OUTPUT_PATH="$PROJECT_DIR/$OUTPUT_DIR"
 TEMP_DIR="$(mktemp -d)"
+
+PYTHON_VERSION="${PYTHON_VERSION:-$(tr -d '[:space:]' < "$BACKEND_DIR/.python-version")}"
+# python-build-standalone needs a full X.Y.Z version; resolve a bare X.Y pin
+# to the patch release the pinned PBS tag (20260211) actually ships.
+case "$PYTHON_VERSION" in
+  3.12) PYTHON_VERSION="3.12.12" ;;
+  3.13) PYTHON_VERSION="3.13.12" ;;
+esac
+
+PBS_TAG="${PBS_TAG:-20260211}"
+ARCH="${ARCH:-$(uname -m)}"
+DEPS_MODE="${LTX_PYTHON_DEPS:-full}"
 
 # Map architecture names for python-build-standalone
 case "$ARCH" in
@@ -36,12 +54,21 @@ case "$ARCH" in
   *) echo "ERROR: Unsupported architecture: $ARCH"; exit 1 ;;
 esac
 
-PBS_URL="https://github.com/astral-sh/python-build-standalone/releases/download/${PBS_TAG}/cpython-${PYTHON_VERSION}+${PBS_TAG}-${PBS_ARCH}-apple-darwin-install_only_stripped.tar.gz"
+# Map OS to the python-build-standalone platform triple
+OS_NAME="$(uname -s)"
+case "$OS_NAME" in
+  Darwin) PBS_PLATFORM="apple-darwin"; PLATFORM_LABEL="macOS" ;;
+  Linux)  PBS_PLATFORM="unknown-linux-gnu"; PLATFORM_LABEL="Linux" ;;
+  *) echo "ERROR: Unsupported OS: $OS_NAME (use prepare-python.ps1 on Windows)"; exit 1 ;;
+esac
+
+PBS_URL="https://github.com/astral-sh/python-build-standalone/releases/download/${PBS_TAG}/cpython-${PYTHON_VERSION}+${PBS_TAG}-${PBS_ARCH}-${PBS_PLATFORM}-install_only_stripped.tar.gz"
 
 echo "========================================"
 echo "  LTX Video - Python Environment Setup"
-echo "  Platform: macOS ($ARCH)"
+echo "  Platform: $PLATFORM_LABEL ($ARCH)"
 echo "  Python: $PYTHON_VERSION"
+echo "  Dependencies: $DEPS_MODE"
 echo "========================================"
 
 # ============================================================
@@ -80,9 +107,8 @@ echo "Step 2: Generating requirements.txt from uv.lock..."
 
 REQUIREMENTS_FILE="$BACKEND_DIR/requirements-dist.txt"
 
-# Export pinned deps, excluding the project itself.
-# Running on macOS auto-excludes Windows-only deps (triton-windows, pynvml, sageattention)
-# via sys_platform markers in pyproject.toml.
+# Export pinned deps, excluding the project itself. Platform markers in
+# pyproject.toml keep out packages that don't apply to this OS.
 uv export --frozen --no-hashes --no-editable --no-emit-project \
     --no-header --no-annotate \
     --project "$BACKEND_DIR" \
@@ -108,7 +134,7 @@ mkdir -p "$OUTPUT_PATH"
 # Step 4: Download and extract standalone Python
 # ============================================================
 echo ""
-echo "Step 4: Downloading Python $PYTHON_VERSION standalone ($PBS_ARCH)..."
+echo "Step 4: Downloading Python $PYTHON_VERSION standalone ($PBS_ARCH-$PBS_PLATFORM)..."
 echo "  URL: $PBS_URL"
 
 PYTHON_TAR="$TEMP_DIR/python-standalone.tar.gz"
@@ -150,32 +176,83 @@ echo "  pip: $("$PYTHON_EXE" -m pip --version)"
 # ============================================================
 # Step 6: Install all dependencies from requirements.txt
 # ============================================================
-echo ""
-echo "Step 6: Installing dependencies from requirements.txt..."
-echo "  (This may take a while — PyTorch + ML libraries are large)"
+if [ "$DEPS_MODE" = "skip" ]; then
+    echo ""
+    echo "Step 6: SKIPPING dependency installation (LTX_PYTHON_DEPS=skip)."
+    echo "  !! Runtime-only bundle for CI/smoke packaging tests."
+    echo "  !! Do NOT ship this build to users — the backend cannot run without its dependencies."
+else
+    echo ""
+    echo "Step 6: Installing dependencies from requirements.txt..."
+    echo "  (This may take a while — PyTorch + ML libraries are large)"
 
-# No --extra-index-url needed on macOS: standard PyPI torch includes MPS support
-"$PYTHON_EXE" -m pip install -r "$REQUIREMENTS_FILE" \
-    --no-warn-script-location --quiet
+    # macOS: standard PyPI torch includes MPS support, no extra index needed.
+    # Linux: CUDA torch comes from the PyTorch cu128 index (matching uv.lock).
+    PIP_INDEX_ARGS=()
+    if [ "$OS_NAME" = "Linux" ]; then
+        PIP_INDEX_ARGS+=(--extra-index-url "https://download.pytorch.org/whl/cu128")
+    fi
 
-echo "  All dependencies installed"
+    "$PYTHON_EXE" -m pip install -r "$REQUIREMENTS_FILE" \
+        "${PIP_INDEX_ARGS[@]+"${PIP_INDEX_ARGS[@]}"}" \
+        --no-warn-script-location --quiet
+
+    echo "  All dependencies installed"
+
+    # Linux: the bundled runtime auto-detects the sibling Wan2GP checkout and
+    # loads the in-process bridge, so the bridge's own dependencies must be in
+    # the bundle too (Windows does the same in prepare-python.ps1). macOS keeps
+    # the bridge disabled (no CUDA), so only the backend deps are installed.
+    WANGP_REQUIREMENTS="$PROJECT_DIR/Wan2GP/requirements.txt"
+    if [ "$OS_NAME" = "Linux" ] && [ -f "$WANGP_REQUIREMENTS" ]; then
+        echo ""
+        echo "Step 6b: Installing Wan2GP bridge dependencies (Linux)..."
+        "$PYTHON_EXE" -m pip install -r "$WANGP_REQUIREMENTS" \
+            "${PIP_INDEX_ARGS[@]+"${PIP_INDEX_ARGS[@]}"}" \
+            --no-warn-script-location --quiet
+        echo "  Wan2GP bridge dependencies installed"
+    elif [ "$OS_NAME" = "Linux" ]; then
+        echo "  !! Wan2GP/requirements.txt not found — bridge dependencies NOT installed."
+        echo "  !! The packaged app will fall back to API mode for generation."
+    fi
+fi
 echo "  Wan2GP checkout present for packaging"
 
 # ============================================================
-# Step 7: Clean up
+# Step 7: Write dependency hash files
+# ============================================================
+# python-setup.ts compares the bundled python-deps-hash.txt against the
+# runtime's deps-hash.txt to decide whether a downloaded/staged Python
+# environment is current. Both derive from the exported lock state.
+echo ""
+echo "Step 7: Writing dependency hash..."
+if command -v sha256sum &>/dev/null; then
+    DEPS_HASH=$(sha256sum "$REQUIREMENTS_FILE" | cut -d' ' -f1)
+else
+    DEPS_HASH=$(shasum -a 256 "$REQUIREMENTS_FILE" | cut -d' ' -f1)
+fi
+printf '%s\n' "$DEPS_HASH" > "$PROJECT_DIR/python-deps-hash.txt"
+printf '%s\n' "$DEPS_HASH" > "$OUTPUT_PATH/deps-hash.txt"
+echo "  Hash: $DEPS_HASH"
+
+# ============================================================
+# Step 8: Clean up
 # ============================================================
 echo ""
-echo "Step 7: Cleaning up..."
+echo "Step 8: Cleaning up..."
 
 # Remove __pycache__ and .pyc files
 find "$OUTPUT_PATH" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 find "$OUTPUT_PATH" -name "*.pyc" -delete 2>/dev/null || true
 
-# Remove pip cache and pip itself (not needed at runtime)
-rm -rf "$OUTPUT_PATH/lib/python"*/site-packages/pip 2>/dev/null || true
-rm -rf "$OUTPUT_PATH/lib/python"*/site-packages/pip-*.dist-info 2>/dev/null || true
-rm -rf "$OUTPUT_PATH/lib/python"*/site-packages/setuptools 2>/dev/null || true
-rm -rf "$OUTPUT_PATH/lib/python"*/site-packages/setuptools-*.dist-info 2>/dev/null || true
+# Remove pip cache and pip itself (not needed at runtime) — keep pip in
+# runtime-only bundles so smoke environments can still install into them.
+if [ "$DEPS_MODE" != "skip" ]; then
+    rm -rf "$OUTPUT_PATH/lib/python"*/site-packages/pip 2>/dev/null || true
+    rm -rf "$OUTPUT_PATH/lib/python"*/site-packages/pip-*.dist-info 2>/dev/null || true
+    rm -rf "$OUTPUT_PATH/lib/python"*/site-packages/setuptools 2>/dev/null || true
+    rm -rf "$OUTPUT_PATH/lib/python"*/site-packages/setuptools-*.dist-info 2>/dev/null || true
+fi
 
 # Remove test directories to save space
 find "$OUTPUT_PATH/lib" -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
@@ -183,7 +260,8 @@ find "$OUTPUT_PATH/lib" -type d -name "test" -exec rm -rf {} + 2>/dev/null || tr
 
 # Remove files only needed for building native extensions, not at runtime.
 # This cuts ~14k files and speeds up macOS codesigning dramatically.
-# NOTE: Windows needs .h files for sageattention/triton — this script is macOS only.
+# NOTE: Windows needs .h files for sageattention/triton — this script never
+# targets Windows (see prepare-python.ps1).
 rm -rf "$OUTPUT_PATH/include" "$OUTPUT_PATH/share" 2>/dev/null || true
 find "$OUTPUT_PATH/lib" -type d -name "include" -exec rm -rf {} + 2>/dev/null || true
 find "$OUTPUT_PATH" -name "*.pyi" -delete 2>/dev/null || true
@@ -196,26 +274,21 @@ find "$OUTPUT_PATH" -name "*.cuh" -delete 2>/dev/null || true
 find "$OUTPUT_PATH" -name "*.cu" -delete 2>/dev/null || true
 find "$OUTPUT_PATH" -name "*.cmake" -delete 2>/dev/null || true
 
-# Remove temp directory and generated requirements file
+# Remove temp directory
 rm -rf "$TEMP_DIR"
-rm -f "$REQUIREMENTS_FILE"
-
-echo "  Cleanup complete"
 
 # ============================================================
-# Step 8: Verify installation
+# Step 9: Verify critical imports
 # ============================================================
+if [ "$DEPS_MODE" != "skip" ]; then
 echo ""
-echo "Step 8: Verifying installation..."
-
+echo "Step 9: Verifying critical imports..."
 "$PYTHON_EXE" -c "
 import sys
 print(f'  Python: {sys.version}')
 try:
     import torch
     print(f'  PyTorch: {torch.__version__}')
-    mps = hasattr(torch.backends, 'mps') and torch.backends.mps.is_available()
-    print(f'  MPS available: {mps}')
 except ImportError as e:
     print(f'  PyTorch import FAILED: {e}')
     sys.exit(1)
@@ -238,10 +311,11 @@ except ImportError as e:
     print(f'  ltx-pipelines: FAILED - {e}')
     sys.exit(1)
 "
+fi
 
 # Calculate size
 SIZE_BYTES=$(du -sb "$OUTPUT_PATH" 2>/dev/null | cut -f1 || du -sk "$OUTPUT_PATH" | awk '{print $1 * 1024}')
-SIZE_GB=$(echo "scale=2; $SIZE_BYTES / 1073741824" | bc)
+SIZE_GB=$(awk "BEGIN {printf \"%.2f\", $SIZE_BYTES / 1073741824}")
 
 echo ""
 echo "========================================"

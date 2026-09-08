@@ -22,10 +22,12 @@ set -euo pipefail
 UNPACK=false
 PLATFORM=""
 PUBLISH=""
+SIGNED=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --unpack) UNPACK=true ;;
+    --signed) SIGNED=true ;;
     --publish)
       PUBLISH="$2"
       shift
@@ -36,7 +38,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     *)
       echo "Unknown option: $1"
-      echo "Usage: $0 [--platform mac|win] [--publish always|never|onTag] [--unpack]"
+      echo "Usage: $0 [--platform mac|win|linux] [--publish always|never|onTag] [--unpack] [--signed]"
       exit 1
       ;;
   esac
@@ -82,16 +84,25 @@ case "$PLATFORM" in
   linux) BUILDER_ARGS="--linux" ;;
 esac
 
+# Signing is opt-in: the default config produces unsigned builds that work
+# without release credentials. --signed (or Azure credentials in the env)
+# selects electron-builder-signed.yml, which extends the base config.
+CONFIG_ARGS=""
+if [ "$SIGNED" = true ] || [ -n "${AZURE_TENANT_ID:-}" ]; then
+  CONFIG_ARGS="--config electron-builder-signed.yml"
+  echo "Using signed release configuration."
+fi
+
 if [ "$UNPACK" = true ]; then
   echo "Packaging unpacked app (fast mode)..."
-  pnpm exec electron-builder $BUILDER_ARGS --dir
+  pnpm exec electron-builder $BUILDER_ARGS $CONFIG_ARGS --dir
 else
   PUBLISH_ARGS=""
   if [ -n "$PUBLISH" ]; then
     PUBLISH_ARGS="--publish $PUBLISH"
   fi
   echo "Packaging installer..."
-  pnpm exec electron-builder $BUILDER_ARGS $PUBLISH_ARGS
+  pnpm exec electron-builder $BUILDER_ARGS $CONFIG_ARGS $PUBLISH_ARGS
 fi
 echo ""
 
@@ -113,6 +124,11 @@ if [ "$UNPACK" = true ]; then
       echo ""
       echo "Unpacked app ready!"
       echo "Run: $RELEASE_DIR/win-unpacked/LTX Desktop.exe"
+      ;;
+    linux)
+      echo ""
+      echo "Unpacked app ready!"
+      echo "Run: $RELEASE_DIR/linux-unpacked/ltx-desktop"
       ;;
   esac
 else

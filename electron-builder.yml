@@ -44,18 +44,15 @@ extraResources:
     to: python-deps-hash.txt
 
 win:
+  # Unsigned by default so personal/local builds work out of the box.
+  # Signed release builds use electron-builder-signed.yml (extends this file
+  # and adds azureSignOptions) — see scripts/create-installer.*.
   target:
     - target: nsis
       arch:
         - x64
   icon: resources/icon.ico
   artifactName: ${productName}-Setup.${ext}
-  azureSignOptions:
-    publisherName: Lightricks Ltd
-    endpoint: https://eus.codesigning.azure.net/
-    certificateProfileName: ltx-desktop-trusted
-    codeSigningAccountName: ltx-trusted
-    excludeEnvironmentCredential: true
 
 nsis:
   oneClick: false
@@ -93,6 +90,44 @@ mac:
   icon: resources/icon.icns
   category: public.app-category.video
   artifactName: ${productName}-${arch}.${ext}
+
+linux:
+  # Like macOS, Linux bundles the prepared Python runtime into resources/python
+  # (electron/python-setup.ts getPythonDir() resolves it there). AppImage is the
+  # primary "installer" (self-contained, chmod +x and run); .deb installs
+  # system-wide for Debian/Ubuntu.
+  extraResources:
+    - from: python-embed
+      to: python
+      filter:
+        - "**/*"
+        - "!__pycache__/**"
+        - "!*.pyc"
+  target:
+    - target: AppImage
+      arch:
+        - x64
+    - target: deb
+      arch:
+        - x64
+  icon: resources/icon.png
+  category: AudioVideo
+  synopsis: Local AI filmmaking studio powered by LTX video models
+  maintainer: LTX Desktop contributors
+  artifactName: ${productName}-${version}-${arch}.${ext}
+  executableName: ltx-desktop
+
+deb:
+  depends:
+    - libgtk-3-0
+    - libnotify4
+    - libnss3
+    - libxss1
+    - libxtst6
+    - xdg-utils
+    - libatspi2.0-0
+    - libuuid1
+    - libsecret-1-0
 
 dmg:
   contents:

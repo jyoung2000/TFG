@@ -257,8 +257,11 @@ export async function startPythonBackend(): Promise<void> {
         LTX_LOG_FILE: getCurrentLogFilename(),
         LTX_APP_DATA_DIR: getAppDataDir(),
         PYTORCH_ENABLE_MPS_FALLBACK: '1',
-        // Set PYTHONHOME for bundled Python on macOS so it finds its stdlib
-        ...(!isDev && process.platform !== 'win32' ? {
+        // Set PYTHONHOME for the bundled Python on macOS/Linux so it finds its
+        // stdlib — but only when the resolved interpreter actually is the
+        // bundled one; forcing it onto an LTX_BACKEND_PYTHON override or a
+        // venv would break that interpreter's own module resolution.
+        ...(!isDev && process.platform !== 'win32' && pythonPath.startsWith(getPythonDir()) ? {
           PYTHONHOME: getPythonDir(),
         } : {}),
       },

@@ -1,0 +1,16 @@
+# Signed release configuration: everything from electron-builder.yml plus
+# Azure Trusted Signing for Windows. Used by CI/release builds that have the
+# Azure credentials in the environment:
+#
+#   pnpm exec electron-builder --win --config electron-builder-signed.yml
+#
+# Local/personal builds use the default (unsigned) electron-builder.yml.
+extends: ./electron-builder.yml
+
+win:
+  azureSignOptions:
+    publisherName: Lightricks Ltd
+    endpoint: https://eus.codesigning.azure.net/
+    certificateProfileName: ltx-desktop-trusted
+    codeSigningAccountName: ltx-trusted
+    excludeEnvironmentCredential: true

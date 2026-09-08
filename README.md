@@ -45,16 +45,27 @@ Docs: [Storyboard](docs/STORYBOARD.md) ·
 [Architecture](docs/FILMMAKING_INTEGRATION_ARCHITECTURE.md) ·
 [Upstream attribution](docs/INTEGRATED_UPSTREAMS.md)
 
-### Building the Windows installer
+### Building installers
 
-`pnpm build:win` (on Windows) runs the full pipeline — typecheck, frontend
-build, embedded-Python preparation, then electron-builder — and produces the
-NSIS installer **`release/LTX Desktop-Setup.exe`**, which installs the app
-(including the filmmaking studio and the Python backend) on the user's
-machine. The config signs with Azure Trusted Signing when credentials are
-present; for personal unsigned builds, remove the `azureSignOptions` block
-from `electron-builder.yml`. `pnpm build:fast:win` produces an unpacked app
-for quick local testing.
+**Windows** — `pnpm build:win` (on Windows) runs the full pipeline —
+typecheck, frontend build, Python preparation, then electron-builder — and
+produces the NSIS installer **`release/LTX Desktop-Setup.exe`**. The
+installed app downloads its Python runtime on first launch (validated
+against the bundled `python-deps-hash.txt`). Builds are **unsigned by
+default** so personal builds just work; release builds with Azure Trusted
+Signing credentials in the environment (or `create-installer.ps1 -Signed`)
+automatically use `electron-builder-signed.yml`.
+
+**Linux** — `bash scripts/local-build.sh --platform linux` produces
+**`release/LTX Desktop-<version>-x86_64.AppImage`** (self-contained:
+`chmod +x` and run) and **`release/LTX Desktop-<version>-amd64.deb`**
+(`sudo apt install ./…deb`, then launch `ltx-desktop`). The Python runtime
+and all locked dependencies (including CUDA PyTorch from the cu128 index)
+are prepared by `scripts/prepare-python.sh` and bundled into the package,
+mirroring the macOS layout. `LTX_PYTHON_DEPS=skip` builds a runtime-only
+bundle for CI/packaging smoke tests — never ship that to users.
+
+**macOS** — `pnpm build:mac` produces the DMG as before.
 
 ## Windows WanGP Quick Start
 

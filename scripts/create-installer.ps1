@@ -7,6 +7,7 @@
 
 param(
     [switch]$Unpack,
+    [switch]$Signed,
     [string]$Publish = ""
 )
 
@@ -29,17 +30,26 @@ if (-not (Test-Path "python-embed")) {
     exit 1
 }
 
+# Signing is opt-in: the default config produces unsigned builds that work
+# without release credentials. Azure credentials in the env (or -Signed)
+# select electron-builder-signed.yml, which extends the base config.
+$ConfigArgs = @()
+if ($Signed -or $env:AZURE_TENANT_ID) {
+    $ConfigArgs = @("--config", "electron-builder-signed.yml")
+    Write-Host "Using signed release configuration." -ForegroundColor Yellow
+}
+
 # Build with electron-builder
 if ($Unpack) {
     Write-Host "Packaging unpacked app (fast mode)..." -ForegroundColor Yellow
-    pnpm exec electron-builder --win --dir
+    pnpm exec electron-builder --win @ConfigArgs --dir
 } else {
     Write-Host "Packaging installer..." -ForegroundColor Yellow
     $PublishArgs = @()
     if ($Publish -ne "") {
         $PublishArgs = @("--publish", $Publish)
     }
-    pnpm exec electron-builder --win @PublishArgs
+    pnpm exec electron-builder --win @ConfigArgs @PublishArgs
 }
 
 if ($LASTEXITCODE -ne 0) {
