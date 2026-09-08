@@ -40,7 +40,7 @@ from handlers.base import StateHandlerBase
 from handlers.film_handler import FilmHandler
 from handlers.generation_handler import GenerationHandler
 from handlers.video_generation_handler import VideoGenerationHandler, get_allowed_durations
-from runtime_config.model_download_specs import MODEL_FILE_ORDER
+from runtime_config.model_download_specs import MODEL_FILE_ORDER, resolve_required_model_types
 from runtime_config.runtime_config import RuntimeConfig
 from services.interfaces import GpuInfo, TaskRunner, VideoProcessor
 from state.app_state_types import AppState
@@ -450,6 +450,48 @@ class FilmGenerationHandler(StateHandlerBase):
 
     # ---- Capabilities ----------------------------------------------------
 
+    def _gpu_verdict(self, vram_gb: float | None, execution_mode: str) -> tuple[str, str]:
+        """One-sentence compatibility verdict + severity for the detected GPU.
+
+        Thresholds come from this repository's documented requirements: the
+        WanGP bridge runs on 6 GB+ VRAM; the native local pipeline on ~32 GB.
+        """
+        if execution_mode == "api":
+            if vram_gb is None:
+                return (
+                    "No CUDA GPU detected — generation runs through the cloud API. "
+                    "Local generation needs an NVIDIA GPU (6 GB+ with WanGP).",
+                    "none",
+                )
+            return (
+                f"Cloud API mode — your {vram_gb:.0f} GB GPU is not used for generation. "
+                "A WanGP checkout enables local generation on 6 GB+ GPUs.",
+                "partial",
+            )
+        if vram_gb is None:
+            return (
+                "GPU VRAM could not be detected — compatibility badges are unavailable. "
+                "Downloads still work; generation will report clear errors if the GPU is insufficient.",
+                "partial",
+            )
+        if vram_gb >= _NATIVE_LOCAL_MIN_VRAM_GB:
+            return (
+                f"{vram_gb:.0f} GB VRAM fits every local path: the native LTX pipeline "
+                f"(~{_NATIVE_LOCAL_MIN_VRAM_GB:.0f} GB) and WanGP ({_WANGP_MIN_VRAM_GB:.0f} GB+).",
+                "ok",
+            )
+        if vram_gb >= _WANGP_MIN_VRAM_GB:
+            return (
+                f"{vram_gb:.0f} GB VRAM fits the WanGP path ({_WANGP_MIN_VRAM_GB:.0f} GB+). "
+                f"The native local pipeline needs ~{_NATIVE_LOCAL_MIN_VRAM_GB:.0f} GB and may not run.",
+                "ok" if execution_mode == "wangp" else "partial",
+            )
+        return (
+            f"{vram_gb:.0f} GB VRAM is below the documented {_WANGP_MIN_VRAM_GB:.0f} GB minimum "
+            "for local generation — use the cloud API mode.",
+            "none",
+        )
+
     def capabilities(self) -> FilmCapabilitiesResponse:
         gpu_name = self._gpu_info.get_device_name()
         vram_gb_int = self._gpu_info.get_vram_total_gb()
@@ -459,6 +501,15 @@ class FilmGenerationHandler(StateHandlerBase):
             if minimum is None or vram_gb is None:
                 return None
             return vram_gb >= minimum
+
+        with self.lock:
+            settings = self.state.app_settings
+            has_api_key = bool(settings.ltx_api_key.strip())
+            use_local_text_encoder = settings.use_local_text_encoder
+            available = dict(self.state.available_files)
+
+        total_required_download_gb: float | None = None
+        text_encoder_optional = False
 
         models: list[FilmModelCapability] = []
         if self._config.wangp_enabled:
@@ -519,10 +570,19 @@ class FilmGenerationHandler(StateHandlerBase):
                 )
         else:
             execution_mode = "local"
-            available = self.state.available_files
+            required_types = resolve_required_model_types(
+                self._config.required_model_types,
+                has_api_key=has_api_key,
+                use_local_text_encoder=use_local_text_encoder,
+            )
+            text_encoder_optional = "text_encoder" not in required_types
+            missing_required_bytes = 0
             for model_type in MODEL_FILE_ORDER:
                 spec = self._config.spec_for(model_type)
                 downloaded = available.get(model_type) is not None
+                required = model_type in required_types
+                if required and not downloaded:
+                    missing_required_bytes += spec.expected_size_bytes
                 is_video = model_type in ("checkpoint", "upsampler", "text_encoder")
                 minimum = _NATIVE_LOCAL_MIN_VRAM_GB if is_video else None
                 models.append(
@@ -537,18 +597,45 @@ class FilmGenerationHandler(StateHandlerBase):
                         downloaded=downloaded,
                         download_state="downloaded" if downloaded else "not_downloaded",
                         execution="local",
+                        required=required,
                         disk_size_gb=round(spec.expected_size_bytes / 1_000_000_000, 1),
                         estimated_min_vram_gb=minimum,
                         fits_gpu=fits(minimum),
                         supported_resolutions=_LOCAL_RESOLUTIONS if is_video else [],
                     )
                 )
+            total_required_download_gb = round(missing_required_bytes / 1_000_000_000, 1)
+            # Advisory row: the low-VRAM WanGP path exists even when the bridge
+            # is not configured — the compatible option for 6-31 GB GPUs.
+            models.append(
+                FilmModelCapability(
+                    id="wangp-bridge",
+                    label="WanGP bridge (low-VRAM local path)",
+                    modes=["video", "image"],
+                    supports_image_to_video=True,
+                    supports_text_to_video=True,
+                    supports_reference_images=True,
+                    supports_audio=True,
+                    downloaded=False,
+                    download_state="not_configured",
+                    execution="wangp",
+                    required=False,
+                    estimated_min_vram_gb=_WANGP_MIN_VRAM_GB,
+                    fits_gpu=fits(_WANGP_MIN_VRAM_GB),
+                    supported_resolutions=_LOCAL_RESOLUTIONS,
+                )
+            )
 
+        verdict, verdict_level = self._gpu_verdict(vram_gb, execution_mode)
         return FilmCapabilitiesResponse(
             gpu_name=gpu_name,
             gpu_vram_gb=vram_gb,
             execution_mode=execution_mode,
+            gpu_verdict=verdict,
+            gpu_verdict_level=verdict_level,
             models=models,
+            total_required_download_gb=total_required_download_gb,
+            text_encoder_optional=text_encoder_optional,
             vram_note=(
                 "VRAM figures are from this app's documentation: the WanGP bridge runs on "
                 "as low as 6 GB VRAM; the native local LTX pipeline targets ~32 GB. "

@@ -342,8 +342,9 @@ export interface FilmModelCapability {
   supports_reference_images: boolean
   supports_audio: boolean
   downloaded: boolean
-  download_state: 'downloaded' | 'not_downloaded' | 'managed_by_wangp' | 'cloud'
+  download_state: 'downloaded' | 'not_downloaded' | 'managed_by_wangp' | 'cloud' | 'not_configured'
   execution: 'local' | 'wangp' | 'api'
+  required: boolean
   disk_size_gb: number | null
   estimated_min_vram_gb: number | null
   fits_gpu: boolean | null
@@ -354,7 +355,11 @@ export interface FilmCapabilities {
   gpu_name: string | null
   gpu_vram_gb: number | null
   execution_mode: 'wangp' | 'api' | 'local'
+  gpu_verdict: string
+  gpu_verdict_level: 'ok' | 'partial' | 'none'
   models: FilmModelCapability[]
+  total_required_download_gb: number | null
+  text_encoder_optional: boolean
   vram_note: string
 }
 

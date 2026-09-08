@@ -203,8 +203,11 @@ class FilmModelCapability(BaseModel):
     supports_reference_images: bool
     supports_audio: bool
     downloaded: bool
-    download_state: str  # "downloaded" | "not_downloaded" | "managed_by_wangp" | "cloud"
+    # "downloaded" | "not_downloaded" | "managed_by_wangp" | "cloud" |
+    # "not_configured" (advisory row: a compatible path that needs setup)
+    download_state: str
     execution: str  # "local" | "wangp" | "api"
+    required: bool = True
     disk_size_gb: float | None = None
     estimated_min_vram_gb: float | None = None
     fits_gpu: bool | None = None
@@ -215,7 +218,16 @@ class FilmCapabilitiesResponse(BaseModel):
     gpu_name: str | None
     gpu_vram_gb: float | None
     execution_mode: str  # "wangp" | "api" | "local"
+    # One-sentence compatibility verdict for the detected GPU, plus a severity
+    # for the UI: "ok" (a local path fits), "partial" (only some paths fit),
+    # "none" (no local generation on this hardware).
+    gpu_verdict: str
+    gpu_verdict_level: str
     models: list[FilmModelCapability]
+    # Total size of required-but-missing local model files ('' mode otherwise).
+    total_required_download_gb: float | None
+    # True when the text encoder can be skipped (cloud text encoding via API key).
+    text_encoder_optional: bool
     vram_note: str
 
 

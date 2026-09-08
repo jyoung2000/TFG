@@ -60,12 +60,19 @@ leaves shots in `ready`/`failed` states instead of losing them.
 Derived from the actual runtime, never a hardcoded catalog:
 
 - execution mode from `RuntimeConfig` (wangp / api / local),
-- the real model-download specs (ids, descriptions, on-disk sizes) and their
-  live downloaded state for local mode,
+- the real model-download specs (ids, descriptions, on-disk sizes), their
+  live downloaded state and required/optional flags for local mode (the text
+  encoder becomes optional when an LTX API key enables cloud text encoding),
 - detected GPU name + VRAM from the `GpuInfo` service,
-- VRAM guidance from this repository's own documentation (WanGP bridge: ~6 GB
-  minimum; native local pipeline: ~32 GB; API: none) with a `fits_gpu` flag
-  per model.
+- a per-GPU `gpu_verdict` (+ severity) and per-model `fits_gpu` flags using
+  this repository's documented figures (WanGP bridge: ~6 GB minimum; native
+  local pipeline: ~32 GB; API: none),
+- `total_required_download_gb` — the real size of what's still missing,
+- in local mode, an advisory **WanGP bridge** row so 6–31 GB GPUs see their
+  compatible path (with setup pointer) even before configuring it.
 
-The Models sub-tab renders this and drives the existing
-`/api/models/download` pipeline (with live progress) for anything missing.
+The Models sub-tab renders all of this — GPU summary, color-coded verdict,
+per-model fit badges ("Fits this GPU" / "Incompatible with this GPU"),
+required/optional markers — and drives the existing `/api/models/download`
+pipeline (with live progress and a sized download button, plus a
+skip-text-encoder toggle when cloud encoding makes it optional).

@@ -317,6 +317,58 @@ class TestCapabilities:
         assert checkpoint["downloaded"] is False
         assert checkpoint["download_state"] == "not_downloaded"
 
+    def test_mid_vram_gpu_fits_wangp_but_not_native(self, client, fake_services):
+        fake_services.gpu_info.gpu_name = "GeForce RTX 4070"
+        fake_services.gpu_info.vram_gb = 12
+        payload = client.get("/api/film/capabilities").json()
+        assert payload["gpu_vram_gb"] == 12.0
+        checkpoint = next(m for m in payload["models"] if m["id"] == "checkpoint")
+        assert checkpoint["fits_gpu"] is False  # native path needs ~32 GB
+        advisory = next(m for m in payload["models"] if m["id"] == "wangp-bridge")
+        assert advisory["download_state"] == "not_configured"
+        assert advisory["fits_gpu"] is True  # WanGP path fits a 12 GB GPU
+        assert payload["gpu_verdict_level"] == "partial"
+        assert "WanGP" in payload["gpu_verdict"]
+
+    def test_high_vram_gpu_fits_everything(self, client, fake_services):
+        fake_services.gpu_info.vram_gb = 48
+        payload = client.get("/api/film/capabilities").json()
+        checkpoint = next(m for m in payload["models"] if m["id"] == "checkpoint")
+        assert checkpoint["fits_gpu"] is True
+        assert payload["gpu_verdict_level"] == "ok"
+
+    def test_tiny_vram_gpu_verdict_none(self, client, fake_services):
+        fake_services.gpu_info.vram_gb = 4
+        payload = client.get("/api/film/capabilities").json()
+        assert payload["gpu_verdict_level"] == "none"
+        advisory = next(m for m in payload["models"] if m["id"] == "wangp-bridge")
+        assert advisory["fits_gpu"] is False
+
+    def test_required_download_total_without_api_key(self, client):
+        payload = client.get("/api/film/capabilities").json()
+        # No API key: the text encoder is required, so the total covers
+        # checkpoint (43) + upsampler (1.9) + text encoder (25) + zit (31).
+        assert payload["text_encoder_optional"] is False
+        assert payload["total_required_download_gb"] == 100.9
+        encoder = next(m for m in payload["models"] if m["id"] == "text_encoder")
+        assert encoder["required"] is True
+
+    def test_api_key_makes_text_encoder_optional(self, client, test_state):
+        test_state.state.app_settings.ltx_api_key = "key"
+        payload = client.get("/api/film/capabilities").json()
+        assert payload["text_encoder_optional"] is True
+        assert payload["total_required_download_gb"] == 75.9
+        encoder = next(m for m in payload["models"] if m["id"] == "text_encoder")
+        assert encoder["required"] is False
+
+    def test_downloaded_files_reduce_the_total(
+        self, client, test_state, create_fake_model_files
+    ):
+        create_fake_model_files(include_zit=True)
+        test_state.models.refresh_available_files()
+        payload = client.get("/api/film/capabilities").json()
+        assert payload["total_required_download_gb"] == 0.0
+
 
 class TestOutputServing:
     def test_output_route_serves_from_outputs_dir_only(
