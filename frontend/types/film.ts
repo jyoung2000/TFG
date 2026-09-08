@@ -365,6 +365,20 @@ export const CONTINUITY_LEVEL_META: Record<ContinuityLevel, { label: string; dot
   broken: { label: 'Continuity broken', dot: 'bg-red-500', text: 'text-red-300' },
 }
 
+export interface PackageSummary {
+  project_id: string
+  project_name: string
+  schema_version: number
+  scenes: number
+  shots: number
+  assets: number
+  media_files: number
+  includes_outputs: boolean
+  total_bytes: number
+  warnings: string[]
+  path: string
+}
+
 export type QualityPreset = 'project' | 'fast_preview' | 'balanced' | 'quality' | 'custom'
 
 export interface FilmQualityProfile {

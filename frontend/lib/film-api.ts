@@ -16,6 +16,7 @@ import type {
   FilmBuildPlan,
   OpenRouterModelInfo,
   OpenRouterValidation,
+  PackageSummary,
   ProjectContinuity,
   FilmAssetKind,
   FilmCapabilities,
@@ -250,6 +251,21 @@ export const filmApi = {
     request<{ status: string; queue: FilmQueue }>(`/api/film/queue/${enc(shotId)}/prioritize`, { method: 'POST' }).then(r => r.queue),
 
   capabilities: () => request<FilmCapabilities>('/api/film/capabilities'),
+
+  exportPackage: (projectId: string, destinationPath: string, includeOutputs: boolean) =>
+    request<PackageSummary>(`/api/film/projects/${enc(projectId)}/export`, {
+      method: 'POST',
+      body: JSON.stringify({ destination_path: destinationPath, include_outputs: includeOutputs }),
+    }),
+
+  inspectPackage: (packagePath: string) =>
+    request<PackageSummary>(`/api/film/packages/inspect?package_path=${enc(packagePath)}`),
+
+  importPackage: (projectId: string, packagePath: string, replace: boolean) =>
+    request<{ summary: PackageSummary; project: FilmProject }>(`/api/film/projects/${enc(projectId)}/import`, {
+      method: 'POST',
+      body: JSON.stringify({ package_path: packagePath, replace }),
+    }),
 
   removeModel: (modelType: string) =>
     request<{ name: string; downloaded: boolean }>(`/api/models/${enc(modelType)}`, { method: 'DELETE' }),

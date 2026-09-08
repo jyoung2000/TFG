@@ -22,6 +22,7 @@ import { AssetsPanel } from './AssetsPanel'
 import { BuildFilmDialog } from './BuildFilmDialog'
 import { DirectorBar } from './DirectorBar'
 import { ModelsPanel } from './ModelsPanel'
+import { PackageMenu } from './PackageMenu'
 import { ScriptPanel } from './ScriptPanel'
 import { ShotCard } from './ShotCard'
 import { ShotDetailDrawer } from './ShotDetailDrawer'
@@ -394,6 +395,7 @@ export function FilmSpace() {
             <span className="text-[11px] text-zinc-600 tabular-nums">
               {scenes.length} scenes · {totalShots} shots · {totalDuration.toFixed(1)}s
             </span>
+            <PackageMenu />
             <Button size="sm" variant="secondary" onClick={() => setShowBuild(true)} className="gap-1" title="Describe an idea and get an editable scene/shot plan">
               <Sparkles className="h-3.5 w-3.5 text-violet-400" /> Build with AI
             </Button>

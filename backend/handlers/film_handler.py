@@ -20,10 +20,14 @@ from film.film_api_types import (
     CreateSceneRequest,
     ContinuityResponse,
     CreateShotRequest,
+    ExportPackageRequest,
     FixContinuityRequest,
     FixContinuityResponse,
     ImportGenerationRequest,
     ImportGenerationResponse,
+    ImportPackageRequest,
+    ImportPackageResponse,
+    PackageSummaryResponse,
     ProjectContinuityResponse,
     ReorderRequest,
     ShotContinuitySummary,
@@ -53,6 +57,14 @@ from film.film_models import (
     ShotStatus,
     ShotVersion,
     now_ms,
+)
+from film.film_package import (
+    PACKAGE_EXTENSION,
+    FilmPackageError,
+    PackageSummary,
+    export_package,
+    import_package,
+    inspect_package,
 )
 from film.film_prompt import synthesize_prompt
 from film.film_store import FilmStore, FilmStoreError
@@ -477,6 +489,72 @@ class FilmHandler(StateHandlerBase):
             project.scenes.append(scene)
             self._save(project)
             return ImportGenerationResponse(project=project, scene_id=scene.id, shot_id=shot.id, version_number=1)
+
+    # ---- Packages (export / import) ---------------------------------------
+
+    @staticmethod
+    def _summary_response(summary: PackageSummary, path: str = "") -> PackageSummaryResponse:
+        return PackageSummaryResponse(
+            project_id=summary.project_id,
+            project_name=summary.project_name,
+            schema_version=summary.schema_version,
+            scenes=summary.scenes,
+            shots=summary.shots,
+            assets=summary.assets,
+            media_files=summary.media_files,
+            includes_outputs=summary.includes_outputs,
+            total_bytes=summary.total_bytes,
+            warnings=summary.warnings,
+            path=path,
+        )
+
+    def export_package(self, project_id: str, req: ExportPackageRequest) -> PackageSummaryResponse:
+        raw = req.destination_path.strip()
+        if not raw:
+            raise HTTPError(400, "destination_path is required")
+        destination = Path(raw).expanduser()
+        if not destination.is_absolute():
+            raise HTTPError(400, "destination_path must be an absolute path")
+        if destination.suffix.lower() != PACKAGE_EXTENSION:
+            destination = destination.with_name(destination.name + PACKAGE_EXTENSION)
+        if destination.is_dir():
+            raise HTTPError(400, "destination_path points at a directory")
+        with self.lock:
+            self._load(project_id)  # 400 on bad id; creates the facet if missing
+            try:
+                summary = export_package(self._store, project_id, destination, include_outputs=req.include_outputs)
+            except (FilmStoreError, FilmPackageError, OSError) as exc:
+                raise HTTPError(400, f"Export failed: {exc}") from exc
+        return self._summary_response(summary, path=str(destination))
+
+    def inspect_package(self, package_path: str) -> PackageSummaryResponse:
+        path = Path(package_path.strip()).expanduser()
+        if not path.is_absolute():
+            raise HTTPError(400, "package_path must be an absolute path")
+        try:
+            summary = inspect_package(path)
+        except FilmPackageError as exc:
+            raise HTTPError(400, str(exc)) from exc
+        return self._summary_response(summary, path=str(path))
+
+    def import_package(self, project_id: str, req: ImportPackageRequest) -> ImportPackageResponse:
+        path = Path(req.package_path.strip()).expanduser()
+        if not path.is_absolute():
+            raise HTTPError(400, "package_path must be an absolute path")
+        with self.lock:
+            current = self._load(project_id)
+            if (current.scenes or current.assets or current.script.content.strip()) and not req.replace:
+                raise HTTPError(
+                    409,
+                    "This project already has content. Import into a new project, or pass replace=true to overwrite it.",
+                )
+            try:
+                project, summary = import_package(self._store, path, project_id)
+            except FilmPackageError as exc:
+                raise HTTPError(400, str(exc)) from exc
+            except FilmStoreError as exc:
+                raise HTTPError(400, str(exc)) from exc
+        return ImportPackageResponse(summary=self._summary_response(summary, path=str(path)), project=project)
 
     # ---- Continuity / media ----------------------------------------------
 

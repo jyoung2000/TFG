@@ -13,11 +13,15 @@ from film.film_api_types import (
     CreateAssetRequest,
     CreateSceneRequest,
     CreateShotRequest,
+    ExportPackageRequest,
     FilmProjectResponse,
     FixContinuityRequest,
     FixContinuityResponse,
     ImportGenerationRequest,
     ImportGenerationResponse,
+    ImportPackageRequest,
+    ImportPackageResponse,
+    PackageSummaryResponse,
     PoseResponse,
     ProjectContinuityResponse,
     PromoteVersionResponse,
@@ -68,6 +72,32 @@ def route_update_film_settings(
     handler: AppHandler = Depends(get_state_service),
 ) -> FilmProjectResponse:
     return FilmProjectResponse(project=handler.film.update_settings(project_id, req))
+
+
+@router.post("/projects/{project_id}/export", response_model=PackageSummaryResponse)
+def route_export_package(
+    project_id: str,
+    req: ExportPackageRequest,
+    handler: AppHandler = Depends(get_state_service),
+) -> PackageSummaryResponse:
+    return handler.film.export_package(project_id, req)
+
+
+@router.post("/projects/{project_id}/import", response_model=ImportPackageResponse)
+def route_import_package(
+    project_id: str,
+    req: ImportPackageRequest,
+    handler: AppHandler = Depends(get_state_service),
+) -> ImportPackageResponse:
+    return handler.film.import_package(project_id, req)
+
+
+@router.get("/packages/inspect", response_model=PackageSummaryResponse)
+def route_inspect_package(
+    package_path: str = Query(min_length=1),
+    handler: AppHandler = Depends(get_state_service),
+) -> PackageSummaryResponse:
+    return handler.film.inspect_package(package_path)
 
 
 @router.post("/projects/{project_id}/import-generation", response_model=ImportGenerationResponse)
