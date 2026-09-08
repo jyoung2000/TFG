@@ -1,181 +1,136 @@
 # LTX Desktop - Installer Build Guide
 
-This guide explains how to build a distributable installer for **LTX Desktop**.
+This guide explains how to build a distributable installer for **LTX Desktop**
+on Windows, Linux and macOS, and — just as important — what has and has not
+been verified for each. A green `pnpm build:*` exit code is **not** installer
+success; see *Verification status* and `RELEASE_CHECKLIST.md`.
 
 - For running from source and debugging: see [`README.md`](../README.md) and [`CONTRIBUTING.md`](CONTRIBUTING.md).
 - For end-user requirements and first-run behavior: see [`README.md`](../README.md).
 
 ## What Gets Bundled
 
-The installer includes:
-- **Electron app** (React frontend + Electron shell)
-- **Embedded Python** (version from [`backend/.python-version`](../backend/.python-version)) with all dependencies pre-installed:
-  - PyTorch (CUDA on Windows, MPS on macOS)
-  - FastAPI, Diffusers, Transformers
-  - LTX-2 inference packages
-  - Wan2GP runtime deps on Windows
-  - All other required libraries
-- **Backend Python code**
-- **Wan2GP source checkout** in `resources/Wan2GP` for Windows local generation
+| Component | Windows (NSIS `.exe`) | Linux (AppImage / `.deb`) | macOS (`.dmg`) |
+|---|---|---|---|
+| Electron app (React frontend + main process) | ✔ | ✔ | ✔ |
+| Backend Python code (`resources/backend`) | ✔ | ✔ | ✔ |
+| `Wan2GP` checkout (`resources/Wan2GP`) | ✔ | ✔ | ✔ (bridge disabled — no CUDA) |
+| Embedded Python runtime + locked deps | **downloaded on first launch** into `%LOCALAPPDATA%\LTXDesktop\python`, validated against the bundled `python-deps-hash.txt` | bundled in `resources/python` (prepared by `scripts/prepare-python.sh`: CUDA PyTorch from the cu128 index **plus** `Wan2GP/requirements.txt`) | bundled in `resources/python` (MPS PyTorch) |
+| ffmpeg for export | ✔ (`ffmpeg-static`) | ✔ | ✔ |
 
-**NOT bundled** (downloaded at runtime):
-- Model weights (downloaded on first run; can be large) from Hugging Face
+**NOT bundled** (downloaded at runtime): model weights (large, from Hugging
+Face; the Models tab shows what fits the GPU and downloads only what is
+missing).
 
-The embedded Python is **fully isolated** from the target system's Python — it lives inside `{install_dir}/resources/python/` and never modifies system settings.
+The embedded Python is **fully isolated** from the target system's Python —
+it lives inside the install/app-data directory and never modifies system
+settings. `LTX_BACKEND_PYTHON=/path/to/python` overrides it for debugging.
 
 ## Prerequisites
 
-Before building, ensure you have:
+1. **Node.js 18+** and **pnpm 10** (`corepack enable`)
+2. **uv** - https://docs.astral.sh/uv/ (exports the locked requirements)
+3. **git** - needed for git-based Python packages and the Wan2GP checkout
+4. **Internet connection** (Python runtime, packages, Wan2GP)
+5. **~15 GB free space** (Python environment + build artifacts)
 
-1. **Node.js 18+** - https://nodejs.org/
-2. **uv** - https://docs.astral.sh/uv/ (Python package manager)
-3. **git** - needed for git-based Python packages
-4. **Internet connection** (for downloading Python and packages)
-5. **~15GB free space** (for Python environment + build artifacts)
-
-### Platform-Specific
-
-- **Windows**: PowerShell 5.1+ (comes with Windows 10/11)
-- **macOS**: Xcode Command Line Tools (`xcode-select --install`)
+Platform-specific: Windows needs PowerShell 5.1+; macOS needs the Xcode
+Command Line Tools; Linux needs `fakeroot`/`dpkg` for the `.deb` (electron-
+builder downloads its own tooling for the AppImage).
 
 ## Quick Build
 
-### macOS
 ```bash
-pnpm build:mac
+pnpm build:win      # Windows, on Windows          → release/LTX Desktop-<version>-Setup.exe
+pnpm build:mac      # macOS, on macOS              → release/LTX Desktop-<version>-arm64.dmg
+bash scripts/local-build.sh --platform linux   # Linux → release/LTX Desktop-<version>-x86_64.AppImage + -amd64.deb
 ```
 
-### Windows
-```powershell
-pnpm build:win
-```
+Each runs: typecheck → frontend build → Python preparation → electron-builder.
 
-This will:
-1. Download a standalone Python distribution (version from [`backend/.python-version`](../backend/.python-version))
-2. Install all Python dependencies (~10GB on Windows with CUDA, ~2-3GB on macOS with MPS)
-3. Ensure a `Wan2GP/` checkout exists in the repo root
-4. Build the frontend
-5. Package everything with electron-builder
-6. Create a DMG (macOS) or NSIS installer (Windows) in the `release/` folder
+### Code signing is opt-in
+
+`electron-builder.yml` produces **unsigned** builds so a clean checkout
+builds without secrets. Release builds with Azure Trusted Signing set
+`AZURE_TENANT_ID`/`AZURE_CLIENT_ID`/`AZURE_CLIENT_SECRET` (or pass
+`-Signed` / `--signed`) and the scripts switch to
+`electron-builder-signed.yml`, which `extends` the base config and adds
+`win.azureSignOptions`.
 
 ## Build Options
 
-### macOS
-
 ```bash
-# Full build
-pnpm build:mac
-
-# Skip Python setup (if already prepared)
-pnpm build:mac:skip-python
-
-# Fast rebuild (unpacked, skip Python + pnpm install)
-pnpm build:fast:mac
-
-# Just prepare Python environment
-pnpm prepare:python:mac
+# skip Python preparation when python-embed/ is already there
+pnpm build:win:skip-python   |  pnpm build:mac:skip-python  |  bash scripts/local-build.sh --platform linux --skip-python
+# unpacked app only (fast iteration)
+pnpm build:fast:win          |  pnpm build:fast:mac         |  bash scripts/local-build.sh --platform linux --unpack
+# just the Python environment
+pnpm prepare:python:win      |  pnpm prepare:python:mac     |  bash scripts/prepare-python.sh
+# runtime-only Python bundle for CI/packaging smoke tests (backend cannot run — never ship)
+LTX_PYTHON_DEPS=skip bash scripts/prepare-python.sh
 ```
 
-### Windows
+`local-build.sh` / `local-build.ps1` accept `--platform`, `--skip-python`,
+`--clean`, `--unpack`; `create-installer.*` accept `--signed`/`-Signed`
+and `--publish`.
 
-```powershell
-# Full build
-pnpm build:win
+## Verification status (be honest here)
 
-# Skip Python setup (if already prepared)
-pnpm build:win:skip-python
+| Platform | Built from clean checkout | Installs | Launches + packaged backend starts | Generation | Uninstall |
+|---|---|---|---|---|---|
+| **Linux** AppImage + `.deb` | ✔ built in CI-like Linux container (runtime-only Python bundle: `LTX_PYTHON_DEPS=skip`, no CUDA) | `.deb` inspected (control, postinst, desktop entry, `/opt/LTX Desktop/resources/{backend,Wan2GP,python}`) | ✔ AppImage launched with `--appimage-extract-and-run --no-sandbox`; Home, Storyboard and Models panel verified over CDP, backend `isPackaged=true` | not possible in the container (no GPU, no API key) | not exercised |
+| **Windows** NSIS | pipeline fixed to build unsigned by default; **not buildable on Linux/macOS (no Wine)** | **unverified** | **unverified** | **unverified** | **unverified** |
+| **macOS** DMG | unchanged from upstream; not built in this environment | unverified | unverified | unverified | unverified |
 
-# Just prepare Python environment
-pnpm prepare:python:win
-
-# Fast rebuild (unpacked, skip Python + pnpm install)
-pnpm build:fast:win
-
-# Clean build
-powershell -File scripts/local-build.ps1 -Clean
-```
-
-### Build Script Options
-
-The `local-build.sh` script accepts:
-- `--platform mac|win` — Target platform (auto-detected if omitted)
-- `--skip-python` — Use existing `python-embed/` directory
-- `--clean` — Remove build artifacts before starting
-- `--unpack` — Build unpacked app only (faster, no installer/DMG)
+**Remaining P0 for Windows** (must be done on a Windows machine, see
+`RELEASE_CHECKLIST.md` § 2): fresh clone → `pnpm build:win` → install on a
+clean VM → launch → first-run Python download → backend health → one quick
+video → ffmpeg export → uninstall. Record installer SHA-256 and the tested
+OS/GPU.
 
 ## Build Output
 
-### macOS
 ```
 release/
-  └── LTX Desktop-<version>-arm64.dmg
-```
-
-### Windows
-```
-release/
-  └── LTX Desktop-<version>-Setup.exe
+  LTX Desktop-<version>-Setup.exe          # Windows (NSIS)
+  LTX Desktop-<version>-x86_64.AppImage    # Linux
+  LTX Desktop-<version>-amd64.deb          # Linux
+  LTX Desktop-<version>-arm64.dmg          # macOS
 ```
 
 ## Application Icon
 
-Place icon files in `resources/` before building:
-- `icon.ico` — Windows (multi-size ICO: 256x256, 128x128, 64x64, 48x48, 32x32, 16x16)
-- `icon.png` — macOS (1024x1024 recommended)
+Place icon files in `resources/` before building: `icon.ico` (Windows,
+multi-size) and `icon.png` (macOS/Linux, 1024×1024).
 
 ## Troubleshooting
 
-### "Python not found" during build
-Ensure you have internet access. The script downloads Python automatically.
-
-### Build fails with CUDA errors
-The build doesn't require a GPU. CUDA packages are pre-built binaries.
-
-### macOS: "App is damaged" or Gatekeeper warning
-On unsigned builds, macOS Gatekeeper may block the app. Right-click the app and select "Open", or run:
-```bash
-xattr -dr com.apple.quarantine /Applications/LTX\ Desktop.app
-```
-
-### Installer is too large
-Expected sizes:
-- **Windows**: ~10GB (PyTorch CUDA ~2.5GB + ML libraries ~5GB + Python ~200MB + Electron ~100MB)
-- **macOS**: ~2-3GB (PyTorch MPS is much smaller than CUDA variant)
-
-### Runtime / first-run issues
-End-user topics like system requirements, first-run setup, and model download behavior are documented in [`README.md`](../README.md).
+- **"Python not found" during build** — the script downloads a
+  python-build-standalone runtime; it needs internet and maps
+  `backend/.python-version` (`3.12`/`3.13`) to an available PBS build.
+- **pip cannot reach `download.pytorch.org`** — corporate proxies sometimes
+  block it; the Linux build needs it for CUDA wheels. Configure the proxy or
+  build on a machine with access.
+- **Build fails with CUDA errors** — the build does not need a GPU; CUDA
+  packages are pre-built binaries.
+- **macOS: "App is damaged" / Gatekeeper** — unsigned builds: right-click →
+  Open, or `xattr -dr com.apple.quarantine "/Applications/LTX Desktop.app"`.
+- **Linux AppImage does not start** — on systems without FUSE run it with
+  `--appimage-extract-and-run`; in containers add `--no-sandbox`.
+- **Installer is too large** — expected: Windows ~10 GB (PyTorch CUDA +
+  ML libraries), Linux several GB with CUDA wheels + Wan2GP deps, macOS
+  ~2-3 GB.
+- **First-run issues** — see `README.md` (data locations, model downloads,
+  API keys).
 
 ## Advanced: Manual Build Steps
 
-### macOS
 ```bash
-# 1. Prepare Python environment
-bash scripts/prepare-python.sh
-
-# 2. Install dependencies
-pnpm install
-
-# 3. Build frontend
-pnpm build:frontend
-
-# 4. Build DMG
-npx electron-builder --mac
-
-# Or build unpacked app (faster, for testing)
-npx electron-builder --mac --dir
-```
-
-### Windows
-```powershell
-# 1. Prepare Python environment
-./scripts/prepare-python.ps1
-
-# 2. Install dependencies
-pnpm install
-
-# 3. Build frontend
-pnpm build:frontend
-
-# 4. Build installer
-npx electron-builder --win
+# 1. Python environment
+bash scripts/prepare-python.sh            # macOS / Linux
+./scripts/prepare-python.ps1              # Windows
+# 2. Dependencies + frontend
+pnpm install && pnpm build:frontend
+# 3. Package
+npx electron-builder --mac                # or --win / --linux; add --dir for unpacked
 ```

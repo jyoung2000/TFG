@@ -54,7 +54,7 @@ const inputClass =
   'w-full bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-xs text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-violet-600'
 
 export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetailDrawerProps) {
-  const { film, refresh, capabilities, isGenerating } = useFilm()
+  const { film, refresh, capabilities, isGenerating, setShotContinuity } = useFilm()
   const { currentProjectId, addAsset, updateTimeline, getActiveTimeline } = useProjects()
   const projectId = film?.id ?? ''
 
@@ -99,13 +99,14 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
         if (!cancelled) {
           setWarnings(next.warnings)
           setContinuityLevel(next.level)
+          setShotContinuity(shot.id, next.level, next.warnings.length)
         }
       })
       .catch(() => {})
     return () => {
       cancelled = true
     }
-  }, [projectId, shot.id, shot.updated_at])
+  }, [projectId, shot.id, shot.updated_at, setShotContinuity])
 
   useEffect(() => {
     let cancelled = false
@@ -170,6 +171,7 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
         const result = await filmApi.fixContinuity(projectId, shot.id, warning.kind, warning.subject_id)
         setWarnings(result.report.warnings)
         setContinuityLevel(result.report.level)
+        setShotContinuity(shot.id, result.report.level, result.report.warnings.length)
         setFixNote(result.message)
         await refresh()
       } catch (e) {
@@ -178,7 +180,7 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
         setBusy(null)
       }
     },
-    [projectId, shot.id, refresh],
+    [projectId, shot.id, refresh, setShotContinuity],
   )
 
   const setQualityPreset = useCallback(

@@ -9,14 +9,32 @@ LTX Desktop is an open-source desktop app for generating videos with LTX models 
 
 Check the WanGP repo for more information (docs, Discord, and more): https://github.com/deepbeepmeep/Wan2GP
 
+## What do you want to make?
+
+Home offers two entry points that share one engine and one project model:
+
+- **Quick video** — describe an idea (an assistant can draft the prompt when
+  an AI key is configured), pick model/length, generate a clip. From the
+  result: *Generate again*, *Save to project*, *Open in Video Editor*, or
+  **Edit in Film Maker**, which turns the clip into a film project as
+  Scene 1 / Shot 1 / version 1 with prompt, negative prompt, model,
+  resolution, duration, fps, seed and output preserved.
+- **Filmmaker Studio** — a project's Storyboard tab (below).
+
+Overview: [`docs/FILMMAKING.md`](docs/FILMMAKING.md).
+
 ## Filmmaking Studio
 
 This build turns LTX Desktop into a local AI filmmaking workstation. Every
 project has a **Storyboard** tab (between Gen Space and Video Editor) where a
 film goes from script to timeline without leaving the app:
 
+0. **Build Film with AI** — describe the idea and get an editable plan
+   (characters, locations, scenes, shots with framing and duration) to apply
+   as a draft storyboard; works offline with a deterministic planner.
 1. Write or import a **script**; generate a draft storyboard from it (a
-   deterministic offline parser, or Gemini for AI cinematography).
+   deterministic offline parser, or the AI Director model for AI
+   cinematography).
 2. Define reusable **characters, locations, props and styles** once — every
    shot that references them inherits their look, and continuity checks warn
    about drift (wardrobe changes, location mismatches, missing references).
@@ -25,25 +43,39 @@ film goes from script to timeline without leaving the app:
    (the camera is solved for you), set up over-the-shoulder relationships,
    choose a camera move, and **Capture** a reference frame.
 4. **Generate Preview** (fast, clamped settings) or **Generate Final**
-   through the existing WanGP/LTX pipeline — the capture conditions the
-   generation. Versions are kept per shot with compare/promote/retry.
-5. Approve shots and **Send to Timeline** — outputs land in the existing
-   Video Editor for assembly and export.
-6. Or type instructions to the **AI Director** bar ("six second medium OTS
-   shot, Sarah foreground, slow push-in") — it plans and executes native
-   commands against the same storyboard state (Gemini API key required).
+   (quality profile: Fast Preview / Balanced / Quality / Custom, recommended
+   per GPU) through the existing WanGP/LTX pipeline — the capture conditions
+   the generation. One production queue with pause/resume, per-job cancel
+   and prioritize, live progress and restart recovery; versions are kept
+   per shot with compare/promote/retry.
+5. Continuity levels (good / minor / significant / broken) on every card,
+   with one-click fixes in the shot drawer.
+6. Approve shots and **Send to Timeline** — outputs land in the existing
+   Video Editor for assembly and export. **Export**/**Import** `.ltxfilm`
+   packages move a whole film between machines.
+7. Or type instructions to the **AI Director** bar ("six second medium OTS
+   shot, Sarah foreground, slow push-in") — it runs tool calls against the
+   same storyboard state the UI edits, and every reply can show exactly what
+   context was sent. Powered by **OpenRouter** (any model; key in
+   Settings → API Keys or `OPENROUTER_API_KEY`) or Gemini. Everything else
+   works without any AI key.
 
 The **Models** sub-tab shows the detected GPU and VRAM, which models fit it,
-their real on-disk sizes, and downloads anything missing through the
-built-in model manager.
+their real on-disk sizes, quality profiles, downloads anything missing and
+removes models you no longer need. A **Simple / Advanced** toggle hides the
+power-user surfaces for a first film.
 
-Docs: [Storyboard](docs/STORYBOARD.md) ·
+Docs: [Filmmaking overview](docs/FILMMAKING.md) ·
+[Storyboard](docs/STORYBOARD.md) ·
 [Shot Composer](docs/SHOT_COMPOSER.md) ·
-[Generation Pipeline](docs/GENERATION_PIPELINE.md) ·
 [AI Director](docs/AI_DIRECTOR.md) ·
+[OpenRouter](docs/OPENROUTER.md) ·
+[Generation Pipeline](docs/GENERATION_PIPELINE.md) ·
 [Continuity](docs/CONTINUITY.md) ·
+[Project format & packages](docs/PROJECT_FORMAT.md) ·
 [Architecture](docs/FILMMAKING_INTEGRATION_ARCHITECTURE.md) ·
-[Upstream attribution](docs/INTEGRATED_UPSTREAMS.md)
+[Upstream attribution](docs/INTEGRATED_UPSTREAMS.md) ·
+[Hardening audit](docs/FINAL_HARDENING_AUDIT.md)
 
 ### Building installers
 
@@ -240,8 +272,8 @@ In API-only mode, available resolutions/durations may be limited to what the API
 
 ## Install
 
-1. Windows: download the latest installer from GitHub Releases: [Releases](../../releases)
-2. Linux: use the source/dev setup described in **Linux WanGP Quick Start** or **Development (quickstart)**
+1. Windows: download the latest installer from GitHub Releases: [Releases](../../releases), or build it yourself with `pnpm build:win` (see **Building installers**)
+2. Linux: the AppImage/.deb from Releases or `bash scripts/local-build.sh --platform linux`; or the source/dev setup described in **Linux WanGP Quick Start** / **Development (quickstart)**
 3. Launch **LTX Desktop** and complete first-run setup
 
 ## First run & data locations
@@ -283,9 +315,23 @@ Used for Z Image Turbo text-to-image generation in API mode. When enabled, image
 
 Create an API key in the [fal dashboard](https://fal.ai/dashboard/keys).
 
+### OpenRouter API key (optional — AI Director)
+
+Powers the AI Director, Build Film with AI, AI Storyboard, prompt refinement
+and the Quick-video assistant with any model on openrouter.ai. Set it in
+**Settings → API Keys → OpenRouter** (validated on save, models listed for
+per-role selection) or export `OPENROUTER_API_KEY`. The key is kept by the
+local backend in its settings file, is never returned to the UI or written
+into project files, and only travels in the `Authorization` header to
+`https://openrouter.ai/api/v1/*`. Prompts, the compact project summary and
+tool results are sent to the selected model. Details and limits:
+[`docs/OPENROUTER.md`](docs/OPENROUTER.md).
+
 ### Gemini API key (optional)
 
-Used for AI prompt suggestions. When enabled, prompt context and frames may be sent to Google Gemini.
+Alternative AI Director provider; also used for AI prompt suggestions when
+filling timeline gaps. When enabled, prompt context and frames may be sent
+to Google Gemini.
 
 ## Architecture
 
@@ -372,6 +418,9 @@ LTX Desktop collects minimal, anonymous usage analytics (app version, platform, 
 ## Docs
 
 - [`INSTALLER.md`](docs/INSTALLER.md) - building installers
+- [`RELEASE_CHECKLIST.md`](docs/RELEASE_CHECKLIST.md) - what must be verified before a release
+- [`FILMMAKING.md`](docs/FILMMAKING.md) - filmmaking workflow overview (links to every film doc)
+- [`FINAL_HARDENING_AUDIT.md`](docs/FINAL_HARDENING_AUDIT.md) - audit of what is implemented, verified, and not
 - [`TELEMETRY.md`](docs/TELEMETRY.md) - telemetry and privacy
 - [`backend/architecture.md`](backend/architecture.md) - backend architecture
 - [`backend/WANGP_BACKEND.md`](backend/WANGP_BACKEND.md) - WanGP bridge configuration

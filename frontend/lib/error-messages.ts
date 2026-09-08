@@ -63,6 +63,13 @@ const RULES: { match: RegExp; title: string; detail: string; action: ErrorAction
     actionLabel: 'Open API Keys',
   },
   {
+    match: /No module named 'mmgp'|No module named 'wgp'|WanGP bridge .*not available|WanGP .*unavailable/i,
+    title: 'WanGP bridge dependencies are missing',
+    detail: 'The backend found a Wan2GP checkout but its Python packages are not installed. Install Wan2GP/requirements.txt into the backend Python (setup-dev.ps1 does this on Windows), or unset WANGP_ROOT to use API mode.',
+    action: 'open-models',
+    actionLabel: 'Open Models',
+  },
+  {
     match: /Models not downloaded/i,
     title: 'Models are not downloaded yet',
     detail: 'Download the required models first (Storyboard → Models shows what fits your GPU).',

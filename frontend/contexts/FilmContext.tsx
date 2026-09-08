@@ -29,6 +29,8 @@ interface FilmContextType {
   /** Project-wide continuity summary (refreshed with the project). */
   continuity: ProjectContinuity | null
   continuityLevelFor: (shotId: string) => ContinuityLevel | null
+  /** Keep the card markers in step with a fresh per-shot report (drawer fetch/fix). */
+  setShotContinuity: (shotId: string, level: ContinuityLevel, warningCount: number) => void
   setQueue: (queue: FilmQueue) => void
 }
 
@@ -137,6 +139,22 @@ export function FilmProvider({ children }: { children: React.ReactNode }) {
     [continuity],
   )
 
+  const setShotContinuity = useCallback((shotId: string, level: ContinuityLevel, warningCount: number) => {
+    setContinuity(prev => {
+      if (!prev) return prev
+      const existing = prev.shots.find(s => s.shot_id === shotId)
+      if (existing && existing.level === level && existing.warning_count === warningCount) return prev
+      const shots = existing
+        ? prev.shots.map(s => (s.shot_id === shotId ? { ...s, level, warning_count: warningCount } : s))
+        : [...prev.shots, { shot_id: shotId, scene_id: '', level, warning_count: warningCount }]
+      const rank: Record<ContinuityLevel, number> = { good: 0, minor: 1, significant: 2, broken: 3 }
+      const worst = shots.reduce<ContinuityLevel>((acc, s) => (rank[s.level] > rank[acc] ? s.level : acc), 'good')
+      const counts: Record<string, number> = { good: 0, minor: 0, significant: 0, broken: 0 }
+      for (const s of shots) counts[s.level] = (counts[s.level] ?? 0) + 1
+      return { level: worst, shots, counts }
+    })
+  }, [])
+
   const isGenerating = queue.active !== null || queue.pending.length > 0
 
   const value = useMemo(
@@ -154,8 +172,9 @@ export function FilmProvider({ children }: { children: React.ReactNode }) {
       findShot,
       continuity,
       continuityLevelFor,
+      setShotContinuity,
     }),
-    [film, isLoading, error, refresh, setFilm, queue, capabilities, refreshCapabilities, isGenerating, findShot, continuity, continuityLevelFor],
+    [film, isLoading, error, refresh, setFilm, queue, capabilities, refreshCapabilities, isGenerating, findShot, continuity, continuityLevelFor, setShotContinuity],
   )
 
   return <FilmContext.Provider value={value}>{children}</FilmContext.Provider>
