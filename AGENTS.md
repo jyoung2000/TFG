@@ -81,6 +81,27 @@ Key patterns:
 - Pyright strict mode (`backend/pyrightconfig.json`)
 - Dependencies in `backend/pyproject.toml`
 
+## Film / Storyboard Feature
+
+The Storyboard tab is a filmmaking layer over the host (see
+`docs/FILMMAKING_INTEGRATION_ARCHITECTURE.md`):
+
+- **Backend**: `backend/film/` (domain models, JSON store with schema
+  migration, prompt synthesis, continuity, script parser) +
+  `handlers/film_handler.py`, `handlers/film_generation_handler.py` (queue
+  that delegates to `VideoGenerationHandler` — never a parallel engine),
+  `handlers/film_director_handler.py` (command registry + Gemini planning) +
+  `_routes/film*.py`. Film API request/response models live in
+  `backend/film/film_api_types.py`. Persistence:
+  `<outputs>/film_projects/<project-id>/`.
+- **Frontend**: `frontend/views/film/` (storyboard/assets/script/models UI)
+  and `frontend/views/film/composer/` (plain-three.js Shot Composer,
+  lazy-loaded; solver adapted from Open Media — keep the attribution
+  headers). Types mirror the backend in `frontend/types/film.ts`
+  (snake_case, no mapping layer). Film state comes from `FilmContext`,
+  which treats the backend store as the single source of truth.
+- Tests: `backend/tests/test_film_*.py` (integration-style, fake services).
+
 ## Key File Locations
 
 - Backend architecture doc: `backend/architecture.md`
@@ -88,3 +109,4 @@ Key patterns:
 - Electron builder config: `electron-builder.yml`
 - Video editor (largest frontend file): `frontend/views/VideoEditor.tsx`
 - Project types: `frontend/types/project.ts`
+- Film domain schema: `backend/film/film_models.py` / `frontend/types/film.ts`

@@ -9,6 +9,53 @@ LTX Desktop is an open-source desktop app for generating videos with LTX models 
 
 Check the WanGP repo for more information (docs, Discord, and more): https://github.com/deepbeepmeep/Wan2GP
 
+## Filmmaking Studio
+
+This build turns LTX Desktop into a local AI filmmaking workstation. Every
+project has a **Storyboard** tab (between Gen Space and Video Editor) where a
+film goes from script to timeline without leaving the app:
+
+1. Write or import a **script**; generate a draft storyboard from it (a
+   deterministic offline parser, or Gemini for AI cinematography).
+2. Define reusable **characters, locations, props and styles** once — every
+   shot that references them inherits their look, and continuity checks warn
+   about drift (wardrobe changes, location mismatches, missing references).
+3. Open any shot in the native 3D **Shot Composer**: pose articulated
+   figures, pick shot size / camera angle / elevation / composition presets
+   (the camera is solved for you), set up over-the-shoulder relationships,
+   choose a camera move, and **Capture** a reference frame.
+4. **Generate Preview** (fast, clamped settings) or **Generate Final**
+   through the existing WanGP/LTX pipeline — the capture conditions the
+   generation. Versions are kept per shot with compare/promote/retry.
+5. Approve shots and **Send to Timeline** — outputs land in the existing
+   Video Editor for assembly and export.
+6. Or type instructions to the **AI Director** bar ("six second medium OTS
+   shot, Sarah foreground, slow push-in") — it plans and executes native
+   commands against the same storyboard state (Gemini API key required).
+
+The **Models** sub-tab shows the detected GPU and VRAM, which models fit it,
+their real on-disk sizes, and downloads anything missing through the
+built-in model manager.
+
+Docs: [Storyboard](docs/STORYBOARD.md) ·
+[Shot Composer](docs/SHOT_COMPOSER.md) ·
+[Generation Pipeline](docs/GENERATION_PIPELINE.md) ·
+[AI Director](docs/AI_DIRECTOR.md) ·
+[Continuity](docs/CONTINUITY.md) ·
+[Architecture](docs/FILMMAKING_INTEGRATION_ARCHITECTURE.md) ·
+[Upstream attribution](docs/INTEGRATED_UPSTREAMS.md)
+
+### Building the Windows installer
+
+`pnpm build:win` (on Windows) runs the full pipeline — typecheck, frontend
+build, embedded-Python preparation, then electron-builder — and produces the
+NSIS installer **`release/LTX Desktop-Setup.exe`**, which installs the app
+(including the filmmaking studio and the Python backend) on the user's
+machine. The config signs with Azure Trusted Signing when credentials are
+present; for personal unsigned builds, remove the `azureSignOptions` block
+from `electron-builder.yml`. `pnpm build:fast:win` produces an unpacked app
+for quick local testing.
+
 ## Windows WanGP Quick Start
 
 Use one of these two setup paths for local WanGP-backed generation on Windows.

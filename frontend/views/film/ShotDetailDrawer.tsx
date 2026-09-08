@@ -279,7 +279,11 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
           {shot.title || 'Shot'}
         </span>
         {note && <span className="text-[10px] text-zinc-500 truncate max-w-[8rem]">{note}</span>}
-        <button onClick={onClose} className="p-1 rounded hover:bg-zinc-800 text-zinc-400">
+        <button
+          onClick={onClose}
+          aria-label="Close shot details"
+          className="p-1 rounded hover:bg-zinc-800 text-zinc-400"
+        >
           <X className="h-4 w-4" />
         </button>
       </div>

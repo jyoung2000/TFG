@@ -406,7 +406,7 @@ export function FilmSpace() {
       {composerTarget && film && (
         <Suspense
           fallback={
-            <div className="fixed inset-0 z-50 bg-zinc-950 flex items-center justify-center">
+            <div className="fixed inset-0 z-[55] bg-zinc-950 flex items-center justify-center">
               <Loader2 className="h-6 w-6 text-violet-500 animate-spin" />
             </div>
           }

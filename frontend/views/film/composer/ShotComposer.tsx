@@ -372,7 +372,7 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
   }
 
   return (
-    <div className="fixed inset-0 z-50 bg-zinc-950 flex flex-col">
+    <div className="fixed inset-0 z-[55] bg-zinc-950 flex flex-col">
       {/* Header */}
       <header className="flex items-center gap-3 px-4 py-2.5 border-b border-zinc-800 bg-zinc-900/80">
         <Aperture className="h-4 w-4 text-violet-400" />
@@ -403,7 +403,11 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
           )}
           Capture Shot
         </Button>
-        <button onClick={onClose} className="p-2 rounded hover:bg-zinc-800 text-zinc-400">
+        <button
+          onClick={onClose}
+          aria-label="Close composer"
+          className="p-2 rounded hover:bg-zinc-800 text-zinc-400"
+        >
           <X className="h-4 w-4" />
         </button>
       </header>

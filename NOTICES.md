@@ -63,6 +63,28 @@ used by LTX Desktop.
 - **lucide-react** — Copyright (c) Lucide contributors — ISC License
 - **react-dropzone** — Copyright (c) Param Aggarwal — MIT License
 - **tailwind-merge** — Copyright (c) dcastil — MIT License
+- **three** — Copyright (c) three.js authors — MIT License
+
+---
+
+## Adapted Open-Source Projects
+
+The filmmaking features adapt designs and code from the following projects
+(see docs/INTEGRATED_UPSTREAMS.md for the exact components and commits):
+
+- **BlueFish** — https://github.com/bluefish2026/BlueFish —
+  Apache License 2.0. Filmmaking domain-model concepts (unified
+  character/location/prop entities, scene/storyboard-shot structure,
+  script-to-storyboard generation contract, style-prompt assembly) were
+  adapted; no source files were copied. Per BlueFish's trademark policy, the
+  "Blue Fish" name and branding are not used by this application.
+
+- **Open Media (shot-composer)** — https://github.com/Anujatk1999/open-media —
+  Copyright (c) 2026 Anujatk1999 — MIT License. The shot-solver framing
+  algorithm, cinematography preset vocabularies, camera-motion keyframe
+  builders, composition-scene state shape, viewport capture flow, and the
+  AI-command-registry design were adapted (ported to plain three.js and this
+  app's backend architecture).
 
 ---
 
