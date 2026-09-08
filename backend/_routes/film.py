@@ -14,6 +14,8 @@ from film.film_api_types import (
     CreateSceneRequest,
     CreateShotRequest,
     FilmProjectResponse,
+    ImportGenerationRequest,
+    ImportGenerationResponse,
     PoseResponse,
     PromoteVersionResponse,
     ReorderRequest,
@@ -63,6 +65,15 @@ def route_update_film_settings(
     handler: AppHandler = Depends(get_state_service),
 ) -> FilmProjectResponse:
     return FilmProjectResponse(project=handler.film.update_settings(project_id, req))
+
+
+@router.post("/projects/{project_id}/import-generation", response_model=ImportGenerationResponse)
+def route_import_generation(
+    project_id: str,
+    req: ImportGenerationRequest,
+    handler: AppHandler = Depends(get_state_service),
+) -> ImportGenerationResponse:
+    return handler.film.import_generation(project_id, req)
 
 
 # ---- Assets ------------------------------------------------------------

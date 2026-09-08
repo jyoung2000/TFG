@@ -9,6 +9,7 @@ interface GenerationState {
   statusMessage: string
   videoUrl: string | null
   videoPath: string | null  // Original file path for upscaling
+  videoSeed: number | null  // Seed the backend used (null when the API chose it)
   imageUrl: string | null
   imagePath: string | null  // Original file path for first image
   imageUrls: string[]  // For multiple image variations
@@ -109,6 +110,7 @@ export function useGeneration(): UseGenerationReturn {
     statusMessage: '',
     videoUrl: null,
     videoPath: null,
+    videoSeed: null,
     imageUrl: null,
     imagePath: null,
     imageUrls: [],
@@ -134,6 +136,7 @@ export function useGeneration(): UseGenerationReturn {
       statusMessage: statusMsg,
       videoUrl: null,
       videoPath: null,
+      videoSeed: null,
       imageUrl: null,
       imagePath: null,
       imageUrls: [],
@@ -245,6 +248,7 @@ export function useGeneration(): UseGenerationReturn {
           statusMessage: 'Complete!',
           videoUrl: fileUrl,
           videoPath: result.video_path,  // Keep original path for API calls
+          videoSeed: typeof result.seed === 'number' ? result.seed : null,
           imageUrl: null,
           imagePath: null,
           imageUrls: [],
@@ -346,6 +350,7 @@ export function useGeneration(): UseGenerationReturn {
       statusMessage: numImages > 1 ? `Generating ${numImages} images...` : 'Generating image...',
       videoUrl: null,
       videoPath: null,
+      videoSeed: null,
       imageUrl: null,
       imagePath: null,
       imageUrls: [],
@@ -436,6 +441,7 @@ export function useGeneration(): UseGenerationReturn {
             statusMessage: 'Complete!',
             videoUrl: null,
             videoPath: null,
+      videoSeed: null,
             imageUrl: fileUrls[0],  // First image for backwards compatibility
             imagePath: rawPaths[0],  // First image path
             imageUrls: fileUrls,    // All images
@@ -481,6 +487,7 @@ export function useGeneration(): UseGenerationReturn {
       statusMessage: '',
       videoUrl: null,
       videoPath: null,
+      videoSeed: null,
       imageUrl: null,
       imagePath: null,
       imageUrls: [],

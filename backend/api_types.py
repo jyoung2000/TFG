@@ -180,6 +180,9 @@ class SuggestGapPromptResponse(BaseModel):
 class GenerateVideoResponse(BaseModel):
     status: str
     video_path: str | None = None
+    # Seed actually used (None when the remote API picks its own), so callers
+    # can reproduce or remake the clip.
+    seed: int | None = None
 
 
 class GenerateImageResponse(BaseModel):

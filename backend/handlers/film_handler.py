@@ -19,6 +19,8 @@ from film.film_api_types import (
     CreateAssetRequest,
     CreateSceneRequest,
     CreateShotRequest,
+    ImportGenerationRequest,
+    ImportGenerationResponse,
     ReorderRequest,
     SavePoseRequest,
     ShotCaptureRequest,
@@ -36,7 +38,9 @@ from film.film_models import (
     FilmScene,
     FilmShot,
     ShotCharacter,
+    ShotGenerationSettings,
     ShotStatus,
+    ShotVersion,
     now_ms,
 )
 from film.film_prompt import synthesize_prompt
@@ -402,6 +406,66 @@ class FilmHandler(StateHandlerBase):
             shot.updated_at = now_ms()
             self._save(project)
             return shot
+
+    # ---- Quick Mode → Film conversion ------------------------------------
+
+    def import_generation(self, project_id: str, req: ImportGenerationRequest) -> ImportGenerationResponse:
+        """Wrap an already-rendered clip as a new scene/shot whose version 1 is
+        that clip, so a Quick Mode result can be edited in the Film Maker with
+        prompt, model, resolution, duration, seed and output all preserved."""
+        prompt = req.prompt.strip()
+        if not prompt:
+            raise HTTPError(400, "prompt is required")
+        output = Path(req.output_path).expanduser()
+        if not output.is_absolute() or not output.is_file():
+            raise HTTPError(400, f"Generated video not found: {req.output_path}")
+        duration = max(0.5, min(60.0, float(req.duration_seconds)))
+        fps = max(1, min(120, int(req.fps)))
+        aspect: str = req.aspect_ratio if req.aspect_ratio in ("16:9", "9:16") else "16:9"
+        with self.lock:
+            project = self._load(project_id)
+            if req.project_name and not project.name:
+                project.name = req.project_name
+            scene = FilmScene(order=len(project.scenes), title=f"Scene {len(project.scenes) + 1}", description=prompt[:200])
+            shot = FilmShot(
+                order=0,
+                title=req.title.strip() or "Shot 1",
+                description=prompt,
+                duration_seconds=duration,
+                visual_prompt=prompt,
+                negative_prompt=req.negative_prompt,
+                prompt_locked=True,
+                generation=ShotGenerationSettings(
+                    model=req.model,
+                    resolution=req.resolution,
+                    fps=fps,
+                    seed=req.seed,
+                    aspect_ratio=aspect,  # type: ignore[arg-type]
+                    use_capture_as_reference=False,
+                ),
+                status="review",
+            )
+            shot.versions.append(
+                ShotVersion(
+                    number=1,
+                    kind="final",
+                    status="complete",
+                    prompt=prompt,
+                    negative_prompt=req.negative_prompt,
+                    model=req.model,
+                    resolution=req.resolution,
+                    fps=fps,
+                    duration_seconds=duration,
+                    seed=req.seed,
+                    capture_path=req.input_image_path if req.mode == "image-to-video" else "",
+                    output_path=str(output),
+                )
+            )
+            shot.current_version = 1
+            scene.shots.append(shot)
+            project.scenes.append(scene)
+            self._save(project)
+            return ImportGenerationResponse(project=project, scene_id=scene.id, shot_id=shot.id, version_number=1)
 
     # ---- Continuity / media ----------------------------------------------
 

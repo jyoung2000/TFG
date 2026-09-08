@@ -38,9 +38,10 @@ interface ProjectContextType {
   getActiveTimeline: (projectId: string) => Timeline | null
   
   // Navigation helpers
-  openProject: (id: string) => void
+  openProject: (id: string, tab?: ProjectTab) => void
   goHome: () => void
   openPlayground: () => void
+  openQuickMode: () => void
   
   // Cross-view communication (editor → gen space)
   genSpaceEditImageUrl: string | null
@@ -485,19 +486,24 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
     return active || project.timelines[0]
   }, [projects])
   
-  const openProject = useCallback((id: string) => {
+  const openProject = useCallback((id: string, tab: ProjectTab = 'gen-space') => {
     setCurrentProjectId(id)
     setCurrentView('project')
-    setCurrentTab('gen-space')
+    setCurrentTab(tab)
   }, [])
-  
+
   const goHome = useCallback(() => {
     setCurrentView('home')
     setCurrentProjectId(null)
   }, [])
-  
+
   const openPlayground = useCallback(() => {
     setCurrentView('playground')
+  }, [])
+
+  const openQuickMode = useCallback(() => {
+    setCurrentProjectId(null)
+    setCurrentView('quick')
   }, [])
   
   return (
@@ -530,6 +536,7 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
       openProject,
       goHome,
       openPlayground,
+      openQuickMode,
       genSpaceEditImageUrl,
       setGenSpaceEditImageUrl,
       genSpaceEditMode,

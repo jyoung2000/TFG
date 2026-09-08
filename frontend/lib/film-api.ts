@@ -64,6 +64,30 @@ export const filmApi = {
       body: JSON.stringify({ settings }),
     }).then(r => r.project),
 
+  importGeneration: (
+    projectId: string,
+    data: {
+      prompt: string
+      output_path: string
+      negative_prompt?: string
+      model?: string
+      resolution?: string
+      duration_seconds?: number
+      fps?: number
+      seed?: number | null
+      aspect_ratio?: string
+      camera_motion?: string
+      mode?: string
+      input_image_path?: string
+      title?: string
+      project_name?: string
+    },
+  ) =>
+    request<{ project: FilmProject; scene_id: string; shot_id: string; version_number: number }>(
+      `/api/film/projects/${enc(projectId)}/import-generation`,
+      { method: 'POST', body: JSON.stringify(data) },
+    ),
+
   createAsset: (projectId: string, data: { kind: FilmAssetKind; name: string } & Partial<FilmAsset>) =>
     request<{ asset: FilmAsset }>(`/api/film/projects/${enc(projectId)}/assets`, {
       method: 'POST',

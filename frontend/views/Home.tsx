@@ -1,9 +1,9 @@
 import { useState } from 'react'
-import { Plus, Folder, MoreVertical, Trash2, Pencil, Sparkles } from 'lucide-react'
+import { Clapperboard, Plus, Folder, MoreVertical, Trash2, Pencil, Sparkles, Zap } from 'lucide-react'
 import { useProjects } from '../contexts/ProjectContext'
 import { LtxLogo } from '../components/LtxLogo'
 import { Button } from '../components/ui/button'
-import type { Project } from '../types/project'
+import type { Project, ProjectTab } from '../types/project'
 
 function formatDate(timestamp: number): string {
   const date = new Date(timestamp)
@@ -105,18 +105,24 @@ function ProjectCard({ project, onOpen, onDelete, onRename }: {
 }
 
 export function Home() {
-  const { projects, createProject, deleteProject, renameProject, openProject, openPlayground } = useProjects()
+  const { projects, createProject, deleteProject, renameProject, openProject, openPlayground, openQuickMode } = useProjects()
   const [isCreating, setIsCreating] = useState(false)
+  const [createTarget, setCreateTarget] = useState<ProjectTab>('gen-space')
   const [newProjectName, setNewProjectName] = useState('')
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
+
+  const startCreate = (target: ProjectTab) => {
+    setCreateTarget(target)
+    setIsCreating(true)
+  }
 
   const handleCreateProject = () => {
     if (newProjectName.trim()) {
       const project = createProject(newProjectName.trim())
       setNewProjectName('')
       setIsCreating(false)
-      openProject(project.id)
+      openProject(project.id, createTarget)
     }
   }
   
@@ -151,7 +157,21 @@ export function Home() {
             <h4 className="px-3 text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-2">
               Quick Actions
             </h4>
-            <button 
+            <button
+              onClick={openQuickMode}
+              className="w-full px-3 py-2 rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-white text-left text-sm flex items-center gap-2 transition-colors"
+            >
+              <Zap className="h-4 w-4" />
+              Quick video
+            </button>
+            <button
+              onClick={() => startCreate('storyboard')}
+              className="w-full px-3 py-2 rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-white text-left text-sm flex items-center gap-2 transition-colors"
+            >
+              <Clapperboard className="h-4 w-4" />
+              New film
+            </button>
+            <button
               onClick={openPlayground}
               className="w-full px-3 py-2 rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-white text-left text-sm flex items-center gap-2 transition-colors"
             >
@@ -181,7 +201,7 @@ export function Home() {
         
         <div className="p-4 border-t border-zinc-800">
           <button
-            onClick={() => setIsCreating(true)}
+            onClick={() => startCreate('gen-space')}
             className="w-full px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium flex items-center justify-center gap-2 transition-colors"
           >
             <Plus className="h-4 w-4" />
@@ -206,23 +226,62 @@ export function Home() {
           <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/30 to-black/10" />
           <div className="absolute bottom-6 left-8 z-10">
             <h1 className="text-3xl font-bold text-white mb-2 drop-shadow-lg">LTX Desktop</h1>
-            <p className="text-zinc-200 drop-shadow-md">Create and manage your video projects</p>
+            <p className="text-zinc-200 drop-shadow-md">Local AI video — from a single clip to a full storyboarded film</p>
           </div>
         </div>
-        
+
+        {/* What do you want to make? */}
+        <div className="px-8 pt-8">
+          <h2 className="text-xl font-semibold text-white mb-4">What do you want to make?</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <button
+              onClick={openQuickMode}
+              className="group text-left rounded-xl border border-zinc-800 bg-zinc-900 hover:border-violet-600 p-5 transition-colors"
+            >
+              <div className="flex items-center gap-2 mb-2">
+                <span className="p-2 rounded-lg bg-violet-600/20 text-violet-300">
+                  <Zap className="h-5 w-5" />
+                </span>
+                <span className="text-base font-semibold text-white">Quick video</span>
+              </div>
+              <p className="text-sm text-zinc-400 leading-relaxed">
+                Describe an idea, refine it with the assistant, and generate one clip in minutes. Every result can be
+                saved to a project or promoted to a film as Scene 1 / Shot 1.
+              </p>
+              <span className="inline-block mt-3 text-xs text-violet-300 group-hover:text-violet-200">Start a quick video →</span>
+            </button>
+            <button
+              onClick={() => startCreate('storyboard')}
+              className="group text-left rounded-xl border border-zinc-800 bg-zinc-900 hover:border-blue-500 p-5 transition-colors"
+            >
+              <div className="flex items-center gap-2 mb-2">
+                <span className="p-2 rounded-lg bg-blue-600/20 text-blue-300">
+                  <Clapperboard className="h-5 w-5" />
+                </span>
+                <span className="text-base font-semibold text-white">Filmmaker Studio</span>
+              </div>
+              <p className="text-sm text-zinc-400 leading-relaxed">
+                Script, characters and locations, a storyboard with a 3D shot composer, continuity checks, an AI Director,
+                a production queue, and a timeline for the final cut.
+              </p>
+              <span className="inline-block mt-3 text-xs text-blue-300 group-hover:text-blue-200">Create a film project →</span>
+            </button>
+          </div>
+        </div>
+
         {/* Projects Grid */}
         <div className="p-8">
           <div className="flex items-center justify-between mb-6">
             <h2 className="text-xl font-semibold text-white">Projects</h2>
           </div>
-          
+
           {projects.length === 0 ? (
             <div className="text-center py-16">
               <Folder className="h-16 w-16 text-zinc-700 mx-auto mb-4" />
               <h3 className="text-lg font-medium text-zinc-400 mb-2">No projects yet</h3>
               <p className="text-zinc-500 mb-6">Create your first project to get started</p>
-              <Button 
-                onClick={() => setIsCreating(true)}
+              <Button
+                onClick={() => startCreate('gen-space')}
                 className="bg-blue-600 hover:bg-blue-500"
               >
                 <Plus className="h-4 w-4 mr-2" />
@@ -253,7 +312,14 @@ export function Home() {
       {isCreating && (
         <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50">
           <div className="bg-zinc-900 rounded-xl p-6 w-full max-w-md border border-zinc-800">
-            <h2 className="text-xl font-semibold text-white mb-4">Create New Project</h2>
+            <h2 className="text-xl font-semibold text-white mb-1">
+              {createTarget === 'storyboard' ? 'Create New Film' : 'Create New Project'}
+            </h2>
+            <p className="text-xs text-zinc-500 mb-4">
+              {createTarget === 'storyboard'
+                ? 'Opens in the Storyboard tab — every project also has a Gen Space and a Video Editor.'
+                : 'Opens in Gen Space — switch to Storyboard any time to make it a film.'}
+            </p>
             <input
               type="text"
               value={newProjectName}

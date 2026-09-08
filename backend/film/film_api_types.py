@@ -135,6 +135,33 @@ class UpdateShotRequest(BaseModel):
     status: str | None = None
 
 
+class ImportGenerationRequest(BaseModel):
+    """Turn a finished Quick Mode / Gen Space clip into Scene 1 / Shot 1 with
+    the clip as version 1, preserving everything needed to remake it."""
+
+    prompt: str
+    output_path: str
+    negative_prompt: str = ""
+    model: str = ""
+    resolution: str = ""
+    duration_seconds: float = 4.0
+    fps: int = 24
+    seed: int | None = None
+    aspect_ratio: str = "16:9"
+    camera_motion: str = "none"
+    mode: str = "text-to-video"  # text-to-video | image-to-video | audio-to-video
+    input_image_path: str = ""
+    title: str = ""
+    project_name: str = ""
+
+
+class ImportGenerationResponse(BaseModel):
+    project: FilmProject
+    scene_id: str
+    shot_id: str
+    version_number: int
+
+
 class ShotCaptureRequest(BaseModel):
     image_base64: str
     composition: CompositionScene
