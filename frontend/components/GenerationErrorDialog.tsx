@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { AlertCircle, ChevronDown, ChevronRight, X } from 'lucide-react'
+import { describeError, requestSettings } from '../lib/error-messages'
 
 interface GenerationErrorDialogProps {
   error: string
@@ -7,6 +8,12 @@ interface GenerationErrorDialogProps {
 }
 
 function getHumanMessage(error: string): string {
+  // Coded errors (API keys, credits, models, strict continuity) get a
+  // specific explanation; the heuristics below cover the rest.
+  const friendly = describeError(error)
+  if (friendly.title !== 'Something went wrong') {
+    return `${friendly.title}. ${friendly.detail}`
+  }
   const lower = error.toLowerCase()
   if (lower.includes('409') || lower.includes('already')) {
     return 'A generation is already in progress. Please wait for it to finish or cancel it.'
@@ -31,6 +38,7 @@ function getHumanMessage(error: string): string {
 
 export function GenerationErrorDialog({ error, onDismiss }: GenerationErrorDialogProps) {
   const [detailsExpanded, setDetailsExpanded] = useState(false)
+  const friendly = describeError(error)
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
@@ -43,6 +51,7 @@ export function GenerationErrorDialog({ error, onDismiss }: GenerationErrorDialo
           </div>
           <button
             onClick={onDismiss}
+            aria-label="Dismiss error"
             className="p-1.5 rounded-lg hover:bg-zinc-800 text-zinc-500 hover:text-zinc-300 transition-colors"
           >
             <X className="h-4 w-4" />
@@ -73,7 +82,18 @@ export function GenerationErrorDialog({ error, onDismiss }: GenerationErrorDialo
         </div>
 
         {/* Footer */}
-        <div className="px-6 py-4 border-t border-zinc-800 flex justify-end">
+        <div className="px-6 py-4 border-t border-zinc-800 flex justify-end gap-2">
+          {friendly.action === 'open-api-keys' && (
+            <button
+              onClick={() => {
+                onDismiss()
+                requestSettings('apiKeys')
+              }}
+              className="px-4 py-2 bg-zinc-800 text-zinc-100 text-sm font-medium rounded-lg hover:bg-zinc-700 transition-colors"
+            >
+              {friendly.actionLabel}
+            </button>
+          )}
           <button
             onClick={onDismiss}
             className="px-4 py-2 bg-zinc-100 text-zinc-900 text-sm font-medium rounded-lg hover:bg-white transition-colors"

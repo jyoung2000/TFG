@@ -28,6 +28,9 @@ export function createWindow(): BrowserWindow {
       preload: preloadPath,
       contextIsolation: true,
       nodeIntegration: false,
+      // Electron's default since v20; stated explicitly so a future change is a
+      // deliberate, reviewable one. The preload only uses contextBridge/ipcRenderer.
+      sandbox: true,
       webSecurity: isDev ? false : true,
     },
     backgroundColor: '#1a1a1a',

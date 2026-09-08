@@ -75,11 +75,23 @@ export function ShotCard({
   return (
     <div
       draggable
+      role="button"
+      tabIndex={0}
+      aria-pressed={isSelected}
+      aria-label={`Shot ${sceneNumber}.${shotNumber}${shot.title ? `: ${shot.title}` : ''} — ${status.label}${levelMeta && level !== 'good' ? `, ${levelMeta.label}` : ''}`}
       onDragStart={onDragStart}
       onDragOver={onDragOver}
       onDrop={onDrop}
       onClick={onOpen}
-      className={`group w-52 shrink-0 rounded-lg border bg-zinc-900 overflow-hidden cursor-pointer transition-colors ${
+      onKeyDown={event => {
+        if (event.key === 'Enter' || event.key === ' ') {
+          event.preventDefault()
+          onOpen()
+        } else if (event.key.toLowerCase() === 'c' && !event.metaKey && !event.ctrlKey) {
+          onCompose()
+        }
+      }}
+      className={`group w-52 shrink-0 rounded-lg border bg-zinc-900 overflow-hidden cursor-pointer transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400 ${
         isSelected ? 'border-violet-500' : 'border-zinc-800 hover:border-zinc-600'
       }`}
     >
@@ -135,7 +147,7 @@ export function ShotCard({
             {location && <span className="truncate text-zinc-600">· {location}</span>}
           </div>
         )}
-        <div className="flex items-center gap-1 pt-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+        <div className="flex items-center gap-1 pt-0.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-within:opacity-100 transition-opacity">
           <button
             onClick={event => {
               event.stopPropagation()
@@ -151,6 +163,7 @@ export function ShotCard({
               onDuplicate()
             }}
             title="Duplicate shot"
+            aria-label="Duplicate shot"
             className="p-1 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-400"
           >
             <Copy className="h-3 w-3" />
@@ -161,6 +174,7 @@ export function ShotCard({
               onDelete()
             }}
             title="Delete shot"
+            aria-label="Delete shot"
             className="p-1 rounded bg-zinc-800 hover:bg-red-900/70 text-zinc-400 hover:text-red-300"
           >
             <Trash2 className="h-3 w-3" />

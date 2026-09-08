@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
 import { ChevronDown, ChevronUp, Info, Loader2, Megaphone, Send, Trash2 } from 'lucide-react'
+import { ErrorNotice } from '../../components/ErrorNotice'
 import { useAppSettings } from '../../contexts/AppSettingsContext'
 import { useFilm } from '../../contexts/FilmContext'
 import { filmApi } from '../../lib/film-api'
+import { requestSettings } from '../../lib/error-messages'
+import { useUiMode } from '../../lib/ui-mode'
 import type { DirectorChatMessage, DirectorContextDetails, DirectorStatus } from '../../types/film'
 
 interface Turn extends DirectorChatMessage {
@@ -32,6 +35,7 @@ export function DirectorBar({
   const [expanded, setExpanded] = useState(false)
   const [status, setStatus] = useState<DirectorStatus | null>(null)
   const [showContextFor, setShowContextFor] = useState<number | null>(null)
+  const [uiMode] = useUiMode()
 
   useEffect(() => {
     let cancelled = false
@@ -101,8 +105,14 @@ export function DirectorBar({
         <div className="max-w-4xl mx-auto px-3 pt-2 max-h-56 overflow-y-auto space-y-1.5" role="log" aria-live="polite">
           {turns.map((turn, index) => (
             <div key={index} className={`text-[11px] ${turn.role === 'user' ? 'text-zinc-300' : turn.error ? 'text-red-300' : 'text-violet-200'}`}>
-              <span className="text-zinc-600 mr-1">{turn.role === 'user' ? 'You' : 'Director'}</span>
-              {turn.content}
+              {turn.error ? (
+                <ErrorNotice error={turn.content} compact />
+              ) : (
+                <>
+                  <span className="text-zinc-600 mr-1">{turn.role === 'user' ? 'You' : 'Director'}</span>
+                  {turn.content}
+                </>
+              )}
               {turn.steps && turn.steps.length > 0 && (
                 <span className="ml-1 text-zinc-500">
                   ·{' '}
@@ -114,7 +124,7 @@ export function DirectorBar({
                   ))}
                 </span>
               )}
-              {turn.context && (
+              {turn.context && uiMode === 'advanced' && (
                 <button
                   onClick={() => setShowContextFor(showContextFor === index ? null : index)}
                   className="ml-2 inline-flex items-center gap-0.5 text-[10px] text-zinc-500 hover:text-zinc-300 underline underline-offset-2"
@@ -182,7 +192,11 @@ export function DirectorBar({
         {!expanded && lastTurn && lastTurn.role === 'assistant' && (
           <span className={`truncate ${lastTurn.error ? 'text-red-400' : 'text-zinc-400'}`}>{lastTurn.content}</span>
         )}
-        {status?.message && !enabled && <span className="text-amber-500/80 truncate">{status.message}</span>}
+        {!enabled && (
+          <button onClick={() => requestSettings('apiKeys')} className="text-amber-400/90 hover:text-amber-200 underline underline-offset-2">
+            Connect OpenRouter or Gemini to enable the AI Director
+          </button>
+        )}
       </div>
     </div>
   )

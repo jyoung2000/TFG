@@ -4,6 +4,7 @@ import { useAppSettings } from '../../contexts/AppSettingsContext'
 import { useFilm } from '../../contexts/FilmContext'
 import { filmApi } from '../../lib/film-api'
 import { Button } from '../../components/ui/button'
+import { ErrorNotice } from '../../components/ErrorNotice'
 import {
   CAMERA_MOVES,
   SHOT_SIZES,
@@ -169,8 +170,8 @@ export function BuildFilmDialog({ onClose, onApplied }: { onClose: () => void; o
               {!hasDirectorProvider && (
                 <span className="text-[11px] text-amber-400">No AI key configured — offline planning still works.</span>
               )}
-              {error && <span className="text-[11px] text-red-400 truncate">{error}</span>}
             </div>
+            {error && <ErrorNotice error={error} compact onRetry={() => void build(true)} />}
           </div>
 
           {/* Plan editor */}

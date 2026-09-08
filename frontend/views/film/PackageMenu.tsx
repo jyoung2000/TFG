@@ -35,7 +35,13 @@ export function PackageMenu() {
     try {
       const summary: PackageSummary = await filmApi.exportPackage(film.id, destination, includeOutputs)
       setNote(`Exported ${summary.scenes} scenes / ${summary.shots} shots, ${summary.media_files} files (${formatBytes(summary.total_bytes)})`)
-      void window.electronAPI.showItemInFolder(summary.path)
+      try {
+        // The backend may have appended .ltxfilm; approve the final path before revealing it.
+        await window.electronAPI.approveLocalPath?.(summary.path)
+        await window.electronAPI.showItemInFolder(summary.path)
+      } catch {
+        // Revealing the file is a convenience only.
+      }
     } catch (e) {
       setNote(`Export failed: ${e instanceof Error ? e.message : e}`)
     } finally {

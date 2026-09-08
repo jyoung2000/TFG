@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useMemo, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react'
 import {
   ArrowUpToLine,
   Clapperboard,
@@ -10,12 +10,14 @@ import {
   Pause,
   Play,
   Plus,
+  SlidersHorizontal,
   Sparkles,
   Trash2,
   XCircle,
 } from 'lucide-react'
 import { useFilm } from '../../contexts/FilmContext'
 import { filmApi } from '../../lib/film-api'
+import { useUiMode } from '../../lib/ui-mode'
 import { Button } from '../../components/ui/button'
 import type { FilmScene, FilmShot, VersionKind } from '../../types/film'
 import { AssetsPanel } from './AssetsPanel'
@@ -230,6 +232,11 @@ export function FilmSpace() {
   const [composerShotId, setComposerShotId] = useState<string | null>(null)
   const [showBuild, setShowBuild] = useState(false)
   const [showQueue, setShowQueue] = useState(false)
+  const [uiMode, setUiMode] = useUiMode()
+  const visibleTabs = uiMode === 'simple' ? TABS.filter(t => t.id === 'storyboard' || t.id === 'assets') : TABS
+  useEffect(() => {
+    if (uiMode === 'simple' && (tab === 'script' || tab === 'models')) setTab('storyboard')
+  }, [uiMode, tab])
 
   const scenes = useMemo(
     () => (film ? [...film.scenes].sort((a, b) => a.order - b.order) : []),
@@ -323,10 +330,12 @@ export function FilmSpace() {
     <div className="h-full flex flex-col bg-background">
       {/* Sub-tab bar + queue status */}
       <div className="flex items-center gap-2 px-4 py-2 border-b border-zinc-800">
-        <div className="flex items-center gap-0.5 bg-zinc-900 rounded-lg p-0.5">
-          {TABS.map(t => (
+        <div className="flex items-center gap-0.5 bg-zinc-900 rounded-lg p-0.5" role="tablist" aria-label="Film workspace">
+          {visibleTabs.map(t => (
             <button
               key={t.id}
+              role="tab"
+              aria-selected={tab === t.id}
               onClick={() => setTab(t.id)}
               className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
                 tab === t.id ? 'bg-zinc-800 text-white' : 'text-zinc-500 hover:text-zinc-300'
@@ -337,6 +346,15 @@ export function FilmSpace() {
             </button>
           ))}
         </div>
+        <button
+          onClick={() => setUiMode(uiMode === 'simple' ? 'advanced' : 'simple')}
+          className="flex items-center gap-1 px-2 py-1 rounded text-[10px] text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800"
+          title={uiMode === 'simple' ? 'Simple mode hides script/models tabs, export/import, quality profiles and context details' : 'Switch to simple mode'}
+          aria-pressed={uiMode === 'simple'}
+        >
+          <SlidersHorizontal className="h-3 w-3" />
+          {uiMode === 'simple' ? 'Simple' : 'Advanced'}
+        </button>
         <span className="flex-1" />
         {(isGenerating || queue.paused) && (
           <div className="relative flex items-center gap-2 text-[11px] text-amber-300">
@@ -395,7 +413,7 @@ export function FilmSpace() {
             <span className="text-[11px] text-zinc-600 tabular-nums">
               {scenes.length} scenes · {totalShots} shots · {totalDuration.toFixed(1)}s
             </span>
-            <PackageMenu />
+            {uiMode === 'advanced' && <PackageMenu />}
             <Button size="sm" variant="secondary" onClick={() => setShowBuild(true)} className="gap-1" title="Describe an idea and get an editable scene/shot plan">
               <Sparkles className="h-3.5 w-3.5 text-violet-400" /> Build with AI
             </Button>

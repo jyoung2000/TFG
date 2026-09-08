@@ -19,6 +19,7 @@ import { useFilm } from '../../contexts/FilmContext'
 import { copyToAssetFolder } from '../../lib/asset-copy'
 import { filmApi, filmMediaUrl, filmOutputUrl } from '../../lib/film-api'
 import { logger } from '../../lib/logger'
+import { useUiMode } from '../../lib/ui-mode'
 import { Button } from '../../components/ui/button'
 import type { Asset, TimelineClip } from '../../types/project'
 import { DEFAULT_COLOR_CORRECTION } from '../../types/project'
@@ -75,6 +76,7 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
   const [versionUrls, setVersionUrls] = useState<Record<number, string>>({})
   const [refineNote, setRefineNote] = useState('')
   const { hasDirectorProvider } = useAppSettings()
+  const [uiMode] = useUiMode()
 
   useEffect(() => {
     setDraft({
@@ -536,7 +538,7 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
               )}
             </div>
           )}
-          {capabilities && capabilities.profiles.length > 0 && (
+          {uiMode === 'advanced' && capabilities && capabilities.profiles.length > 0 && (
             <Row label="Quality profile (final renders)">
               <select
                 className={inputClass}

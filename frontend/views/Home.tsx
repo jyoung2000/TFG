@@ -5,6 +5,8 @@ import { LtxLogo } from '../components/LtxLogo'
 import { Button } from '../components/ui/button'
 import type { Project, ProjectTab } from '../types/project'
 
+const GETTING_STARTED_KEY = 'ltx-getting-started'
+
 function formatDate(timestamp: number): string {
   const date = new Date(timestamp)
   return date.toLocaleDateString('en-US', { 
@@ -111,6 +113,22 @@ export function Home() {
   const [newProjectName, setNewProjectName] = useState('')
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState('')
+  const [showGettingStarted, setShowGettingStarted] = useState(() => {
+    try {
+      return localStorage.getItem(GETTING_STARTED_KEY) !== 'dismissed'
+    } catch {
+      return true
+    }
+  })
+
+  const dismissGettingStarted = () => {
+    setShowGettingStarted(false)
+    try {
+      localStorage.setItem(GETTING_STARTED_KEY, 'dismissed')
+    } catch {
+      // best effort
+    }
+  }
 
   const startCreate = (target: ProjectTab) => {
     setCreateTarget(target)
@@ -229,6 +247,47 @@ export function Home() {
             <p className="text-zinc-200 drop-shadow-md">Local AI video — from a single clip to a full storyboarded film</p>
           </div>
         </div>
+
+        {/* First-run getting started (dismissible) */}
+        {showGettingStarted && (
+          <div className="mx-8 mt-6 rounded-xl border border-zinc-800 bg-zinc-900/70 p-4" role="region" aria-label="Getting started">
+            <div className="flex items-start gap-3">
+              <div className="flex-1">
+                <h3 className="text-sm font-semibold text-white mb-2">Getting started</h3>
+                <ol className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs text-zinc-400">
+                  <li className="rounded-lg bg-zinc-950/50 p-3">
+                    <span className="text-zinc-200 font-medium">1. Check your GPU and models</span>
+                    <p className="mt-1 leading-relaxed">
+                      Storyboard → Models detects your GPU, says which models fit its VRAM, and downloads only what is
+                      missing. Quality profiles are recommended per GPU.
+                    </p>
+                  </li>
+                  <li className="rounded-lg bg-zinc-950/50 p-3">
+                    <span className="text-zinc-200 font-medium">2. Make a quick video</span>
+                    <p className="mt-1 leading-relaxed">
+                      Describe an idea, generate one clip, then promote it to a film with <em>Edit in Film Maker</em> — the
+                      clip becomes Scene 1 / Shot 1 with its prompt, seed and settings kept.
+                    </p>
+                  </li>
+                  <li className="rounded-lg bg-zinc-950/50 p-3">
+                    <span className="text-zinc-200 font-medium">3. Optional: connect an AI Director</span>
+                    <p className="mt-1 leading-relaxed">
+                      An OpenRouter (or Gemini) key in Settings → API Keys unlocks Build Film with AI, the director bar and
+                      prompt refinement. Everything else runs offline.
+                    </p>
+                  </li>
+                </ol>
+              </div>
+              <button
+                onClick={dismissGettingStarted}
+                className="text-xs text-zinc-500 hover:text-white px-2 py-1 rounded hover:bg-zinc-800"
+                aria-label="Dismiss getting started"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* What do you want to make? */}
         <div className="px-8 pt-8">

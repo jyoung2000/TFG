@@ -89,7 +89,10 @@ export function registerFileHandlers(): void {
 
   ipcMain.handle('show-item-in-folder', async (_event, filePath: string) => {
     const { shell } = await import('electron')
-    shell.showItemInFolder(filePath)
+    // Same allow-list as every other path-taking handler: app roots plus
+    // paths the user picked in a native dialog.
+    const normalizedPath = validatePath(filePath, getAllowedRoots())
+    shell.showItemInFolder(normalizedPath)
   })
 
   ipcMain.handle('read-local-file', async (_event, filePath: string) => {
@@ -173,7 +176,12 @@ export function registerFileHandlers(): void {
   })
 
   ipcMain.handle('search-directory-for-files', async (_event, dir: string, filenames: string[]) => {
-    return searchDirectoryForFiles(dir, filenames)
+    const normalizedDir = validatePath(dir, getAllowedRoots())
+    const wanted = (Array.isArray(filenames) ? filenames : [])
+      .filter((name): name is string => typeof name === 'string')
+      .map(name => path.basename(name))
+      .slice(0, 500)
+    return searchDirectoryForFiles(normalizedDir, wanted)
   })
 
   ipcMain.handle('copy-to-project-assets', async (_event, srcPath: string, projectId: string) => {
@@ -200,7 +208,12 @@ export function registerFileHandlers(): void {
 
   ipcMain.handle('set-project-assets-path', async (_event, newPath: string) => {
     try {
-      setProjectAssetsPath(newPath)
+      // Directory must come from the picker (approved) or live under an app root.
+      const normalizedPath = validatePath(newPath, getAllowedRoots())
+      if (!fs.existsSync(normalizedPath) || !fs.statSync(normalizedPath).isDirectory()) {
+        throw new Error(`Not a directory: ${normalizedPath}`)
+      }
+      setProjectAssetsPath(normalizedPath)
       return { success: true }
     } catch (error) {
       return { success: false, error: String(error) }
@@ -209,9 +222,13 @@ export function registerFileHandlers(): void {
 
   ipcMain.handle('check-files-exist', async (_event, filePaths: string[]) => {
     const results: Record<string, boolean> = {}
-    for (const p of filePaths) {
+    const roots = getAllowedRoots()
+    for (const p of (Array.isArray(filePaths) ? filePaths : []).slice(0, 2000)) {
+      if (typeof p !== 'string') continue
       try {
-        results[p] = fs.existsSync(p)
+        // Only answer for paths the renderer is allowed to touch; anything
+        // else reads as "missing" rather than acting as a filesystem probe.
+        results[p] = fs.existsSync(validatePath(p, roots))
       } catch {
         results[p] = false
       }
