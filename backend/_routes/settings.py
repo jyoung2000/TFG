@@ -6,6 +6,7 @@ import logging
 
 from fastapi import APIRouter, Depends
 
+from _routes._errors import HTTPError
 from state.app_settings import SettingsResponse, UpdateSettingsRequest, to_settings_response
 from api_types import StatusResponse
 from state import get_state_service
@@ -34,4 +35,25 @@ def route_post_settings(
         ", ".join(sorted(changed_roots)) if changed_roots else "none",
     )
 
+    return StatusResponse(status="ok")
+
+
+_KEY_FIELDS = {
+    "ltx": "ltx_api_key",
+    "fal": "fal_api_key",
+    "gemini": "gemini_api_key",
+    "openrouter": "openrouter_api_key",
+}
+
+
+@router.delete("/settings/api-keys/{provider}", response_model=StatusResponse)
+def route_clear_api_key(
+    provider: str,
+    handler: AppHandler = Depends(get_state_service),
+) -> StatusResponse:
+    field = _KEY_FIELDS.get(provider)
+    if field is None:
+        raise HTTPError(404, f"Unknown API key provider: {provider}")
+    handler.settings.clear_api_key(field)
+    logger.info("Cleared stored %s API key", provider)
     return StatusResponse(status="ok")

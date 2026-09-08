@@ -10,8 +10,10 @@ import {
   Sparkles,
   ThumbsDown,
   ThumbsUp,
+  Wand2,
   X,
 } from 'lucide-react'
+import { useAppSettings } from '../../contexts/AppSettingsContext'
 import { useProjects } from '../../contexts/ProjectContext'
 import { useFilm } from '../../contexts/FilmContext'
 import { copyToAssetFolder } from '../../lib/asset-copy'
@@ -67,6 +69,8 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
   const [note, setNote] = useState('')
   const [captureUrl, setCaptureUrl] = useState<string | null>(null)
   const [versionUrls, setVersionUrls] = useState<Record<number, string>>({})
+  const [refineNote, setRefineNote] = useState('')
+  const { hasDirectorProvider } = useAppSettings()
 
   useEffect(() => {
     setDraft({
@@ -147,6 +151,35 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
       setBusy(null)
     }
   }, [projectId, scene.id, shot.id, shot.visual_prompt, draft, refresh])
+
+  const refinePrompt = useCallback(async () => {
+    if (!projectId) return
+    setBusy('refine')
+    setRefineNote('')
+    try {
+      const result = await filmApi.refinePrompt(projectId, scene.id, shot.id)
+      setRefineNote(`Refined by ${result.context.provider} · ${result.context.model}`)
+      await refresh()
+    } catch (e) {
+      setRefineNote(`Refine failed: ${e instanceof Error ? e.message : e}`)
+    } finally {
+      setBusy(null)
+    }
+  }, [projectId, scene.id, shot.id, refresh])
+
+  const unlockPrompt = useCallback(async () => {
+    if (!projectId) return
+    setBusy('unlock')
+    try {
+      await filmApi.updateShot(projectId, scene.id, shot.id, { prompt_locked: false })
+      await refresh()
+      setRefineNote('Prompt re-synthesized from shot fields')
+    } catch (e) {
+      setRefineNote(`Unlock failed: ${e instanceof Error ? e.message : e}`)
+    } finally {
+      setBusy(null)
+    }
+  }, [projectId, scene.id, shot.id, refresh])
 
   const generate = useCallback(
     async (kind: VersionKind) => {
@@ -380,6 +413,28 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
               onChange={e => setDraft(d => ({ ...d, visual_prompt: e.target.value }))}
             />
           </Row>
+          <div className="flex items-center gap-1.5">
+            <button
+              onClick={() => void refinePrompt()}
+              disabled={busy !== null || !hasDirectorProvider}
+              className="flex items-center gap-1 px-2 py-1 rounded bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 text-[10px] text-violet-300"
+              title={hasDirectorProvider ? 'Rewrite the prompt with the AI Director (keeps cast, wardrobe, framing)' : 'Needs an OpenRouter or Gemini key'}
+            >
+              {busy === 'refine' ? <Loader2 className="h-3 w-3 animate-spin" /> : <Wand2 className="h-3 w-3" />}
+              Refine with AI
+            </button>
+            {shot.prompt_locked && (
+              <button
+                onClick={() => void unlockPrompt()}
+                disabled={busy !== null}
+                className="px-2 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-[10px] text-zinc-400"
+                title="Re-synthesize the prompt from the shot's structured fields"
+              >
+                Unlock & re-synthesize
+              </button>
+            )}
+            {refineNote && <span className="text-[10px] text-zinc-500 truncate">{refineNote}</span>}
+          </div>
           <Button size="sm" variant="secondary" onClick={() => void saveDraft()} disabled={busy !== null} className="w-full gap-1.5">
             {busy === 'save' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
             Save shot

@@ -16,6 +16,7 @@ import { filmApi } from '../../lib/film-api'
 import { Button } from '../../components/ui/button'
 import type { FilmScene, FilmShot, VersionKind } from '../../types/film'
 import { AssetsPanel } from './AssetsPanel'
+import { BuildFilmDialog } from './BuildFilmDialog'
 import { DirectorBar } from './DirectorBar'
 import { ModelsPanel } from './ModelsPanel'
 import { ScriptPanel } from './ScriptPanel'
@@ -223,6 +224,7 @@ export function FilmSpace() {
   const [tab, setTab] = useState<FilmTab>('storyboard')
   const [selectedShotId, setSelectedShotId] = useState<string | null>(null)
   const [composerShotId, setComposerShotId] = useState<string | null>(null)
+  const [showBuild, setShowBuild] = useState(false)
 
   const scenes = useMemo(
     () => (film ? [...film.scenes].sort((a, b) => a.order - b.order) : []),
@@ -331,6 +333,9 @@ export function FilmSpace() {
             <span className="text-[11px] text-zinc-600 tabular-nums">
               {scenes.length} scenes · {totalShots} shots · {totalDuration.toFixed(1)}s
             </span>
+            <Button size="sm" variant="secondary" onClick={() => setShowBuild(true)} className="gap-1" title="Describe an idea and get an editable scene/shot plan">
+              <Sparkles className="h-3.5 w-3.5 text-violet-400" /> Build with AI
+            </Button>
             <Button size="sm" variant="secondary" onClick={() => void addScene()} className="gap-1">
               <Plus className="h-3.5 w-3.5" /> Scene
             </Button>
@@ -368,15 +373,18 @@ export function FilmSpace() {
                   <Clapperboard className="h-10 w-10 text-zinc-800 mx-auto mb-3" />
                   <h3 className="text-sm font-semibold text-zinc-300">Storyboard is empty</h3>
                   <p className="text-xs text-zinc-600 mt-1 mb-4">
-                    Write a script and generate a draft storyboard, or start adding scenes by hand.
-                    Every shot can then be composed in 3D, captured, and generated with the local
-                    model.
+                    Describe an idea and let the AI Director draft scenes and shots, write a script and
+                    generate a storyboard from it, or start adding scenes by hand. Every shot can then be
+                    composed in 3D, captured, and generated with the local model.
                   </p>
                   <div className="flex items-center justify-center gap-2">
+                    <Button size="sm" onClick={() => setShowBuild(true)} className="gap-1">
+                      <Sparkles className="h-3.5 w-3.5" /> Build Film with AI
+                    </Button>
                     <Button size="sm" variant="secondary" onClick={() => setTab('script')} className="gap-1">
                       <FileText className="h-3.5 w-3.5" /> Write script
                     </Button>
-                    <Button size="sm" onClick={() => void addScene()} className="gap-1">
+                    <Button size="sm" variant="secondary" onClick={() => void addScene()} className="gap-1">
                       <Plus className="h-3.5 w-3.5" /> First scene
                     </Button>
                   </div>
@@ -400,6 +408,16 @@ export function FilmSpace() {
 
       {tab === 'storyboard' && (
         <DirectorBar selectedSceneId={selected?.scene.id ?? null} selectedShotId={selectedShotId} />
+      )}
+
+      {showBuild && film && (
+        <BuildFilmDialog
+          onClose={() => setShowBuild(false)}
+          onApplied={() => {
+            setShowBuild(false)
+            setTab('storyboard')
+          }}
+        />
       )}
 
       {/* Shot Composer overlay */}

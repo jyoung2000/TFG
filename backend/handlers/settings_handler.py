@@ -20,6 +20,8 @@ from state.app_state_types import AppState
 
 logger = logging.getLogger(__name__)
 
+_CLEARABLE_KEYS = frozenset({"ltx_api_key", "gemini_api_key", "fal_api_key", "openrouter_api_key"})
+
 
 class SettingsHandler(StateHandlerBase):
     def __init__(self, state: AppState, lock: RLock, settings_file: Path) -> None:
@@ -63,7 +65,7 @@ class SettingsHandler(StateHandlerBase):
     def update_settings(self, patch: UpdateSettingsRequest) -> tuple[AppSettings, AppSettings, set[str]]:
         patch_payload = strip_none_values(ensure_json_object(patch.model_dump(by_alias=False, exclude_unset=True)))
 
-        for key_field in ("ltx_api_key", "gemini_api_key", "fal_api_key"):
+        for key_field in ("ltx_api_key", "gemini_api_key", "fal_api_key", "openrouter_api_key"):
             if key_field in patch_payload and patch_payload[key_field] == "":
                 del patch_payload[key_field]
 
@@ -83,6 +85,17 @@ class SettingsHandler(StateHandlerBase):
         changed_paths = collect_changed_paths(before_payload, after_payload)
         self.save_settings()
         return before, after, changed_paths
+
+    @with_state_lock
+    def clear_api_key(self, key_field: str) -> None:
+        """Remove a stored secret. Empty patches are ignored by update_settings,
+        so clearing needs an explicit path (used when a key is revoked/invalid)."""
+        if key_field not in _CLEARABLE_KEYS:
+            raise ValueError(f"Unknown API key field: {key_field}")
+        payload = ensure_json_object(self.state.app_settings.model_dump(by_alias=False))
+        payload[key_field] = ""
+        self.state.app_settings = AppSettings.model_validate(payload)
+        self.save_settings()
 
     def _trim_prompt_cache(self) -> None:
         te = self.state.text_encoder

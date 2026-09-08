@@ -4,8 +4,17 @@ import { backendFetch, getBackendCredentials } from './backend'
 import type {
   CompositionScene,
   ContinuityWarning,
+  DirectorChatMessage,
+  DirectorChatResponse,
   DirectorCommandResult,
+  DirectorContextDetails,
+  DirectorInstructResponse,
+  DirectorRole,
+  DirectorStatus,
   FilmAsset,
+  FilmBuildPlan,
+  OpenRouterModelInfo,
+  OpenRouterValidation,
   FilmAssetKind,
   FilmCapabilities,
   FilmPose,
@@ -203,14 +212,69 @@ export const filmApi = {
       { method: 'POST', body: JSON.stringify({ name, params }) },
     ).then(r => r.results),
 
-  directorInstruct: (projectId: string, instruction: string, sceneId?: string, shotId?: string) =>
-    request<{ plan_summary: string; results: DirectorCommandResult[] }>(
-      `/api/film/projects/${enc(projectId)}/director/instruct`,
-      {
-        method: 'POST',
-        body: JSON.stringify({ instruction, scene_id: sceneId ?? null, shot_id: shotId ?? null }),
-      },
+  directorInstruct: (
+    projectId: string,
+    instruction: string,
+    sceneId?: string,
+    shotId?: string,
+    history: DirectorChatMessage[] = [],
+  ) =>
+    request<DirectorInstructResponse>(`/api/film/projects/${enc(projectId)}/director/instruct`, {
+      method: 'POST',
+      body: JSON.stringify({
+        instruction,
+        scene_id: sceneId ?? null,
+        shot_id: shotId ?? null,
+        history,
+      }),
+    }),
+
+  directorStatus: () => request<DirectorStatus>('/api/film/director/status'),
+
+  openrouterModels: (refresh = false) =>
+    request<{ models: OpenRouterModelInfo[]; fetched_at_ms: number; cached: boolean }>(
+      `/api/film/director/openrouter/models${refresh ? '?refresh=true' : ''}`,
     ),
+
+  validateOpenrouterKey: () =>
+    request<OpenRouterValidation>('/api/film/director/openrouter/validate', { method: 'POST' }),
+
+  directorChat: (
+    messages: DirectorChatMessage[],
+    options: { role?: DirectorRole; model_hint?: string; duration_seconds?: number } = {},
+  ) =>
+    request<DirectorChatResponse>('/api/film/director/chat', {
+      method: 'POST',
+      body: JSON.stringify({ messages, ...options }),
+    }),
+
+  refinePrompt: (projectId: string, sceneId: string, shotId: string, guidance = '') =>
+    request<{ shot: FilmShot; previous_prompt: string; context: DirectorContextDetails }>(
+      `/api/film/projects/${enc(projectId)}/scenes/${enc(sceneId)}/shots/${enc(shotId)}/refine-prompt`,
+      { method: 'POST', body: JSON.stringify({ guidance }) },
+    ),
+
+  buildFilm: (
+    projectId: string,
+    data: { idea: string; target_scenes?: number; target_shots_per_scene?: number; use_llm: boolean; style?: string },
+  ) =>
+    request<{ plan: FilmBuildPlan; used_llm: boolean; context: DirectorContextDetails | null }>(
+      `/api/film/projects/${enc(projectId)}/build`,
+      { method: 'POST', body: JSON.stringify(data) },
+    ),
+
+  applyBuild: (projectId: string, plan: FilmBuildPlan, replaceExisting: boolean) =>
+    request<{
+      status: string
+      scenes_created: number
+      shots_created: number
+      characters_created: number
+      locations_created: number
+      project: FilmProject
+    }>(`/api/film/projects/${enc(projectId)}/build/apply`, {
+      method: 'POST',
+      body: JSON.stringify({ plan, replace_existing: replaceExisting }),
+    }),
 
   generateStoryboard: (
     projectId: string,

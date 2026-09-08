@@ -5,6 +5,7 @@ import { useAppSettings, type AppSettings } from '../contexts/AppSettingsContext
 import { backendFetch } from '../lib/backend'
 import { logger } from '../lib/logger'
 import { ApiKeyHelperRow, LtxApiKeyInput, LtxApiKeyHelperRow } from './LtxApiKeyInput'
+import { OpenRouterSettings } from './OpenRouterSettings'
 
 interface TextEncoderStatus {
   downloaded: boolean
@@ -21,7 +22,7 @@ interface SettingsModalProps {
 type TabId = 'general' | 'apiKeys' | 'inference' | 'promptEnhancer' | 'about'
 
 export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProps) {
-  const { settings, updateSettings, saveLtxApiKey, saveFalApiKey, saveGeminiApiKey, forceApiGenerations } = useAppSettings()
+  const { settings, updateSettings, saveLtxApiKey, saveFalApiKey, saveGeminiApiKey, clearApiKey, forceApiGenerations } = useAppSettings()
   const onSettingsChange = (next: AppSettings) => updateSettings(next)
   const [activeTab, setActiveTab] = useState<TabId>('general')
   const [ltxApiKeyInput, setLtxApiKeyInput] = useState('')
@@ -870,15 +871,19 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
                 </div>
               </div>
 
+              <OpenRouterSettings />
+
               {/* Gemini API Key Section */}
               <div className="space-y-4 pt-4 border-t border-zinc-800">
                 <div className="flex items-center gap-2">
                   <Sparkles className="h-4 w-4 text-purple-400" />
                   <h3 className="text-sm font-semibold text-white">Gemini API</h3>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400">Optional</span>
                 </div>
 
                 <p className="text-xs text-zinc-500 leading-relaxed">
-                  Your Gemini API key is used for AI-powered prompt suggestions when filling timeline gaps.
+                  Alternative AI Director provider, also used for prompt suggestions when filling timeline gaps.
+                  Stored by the local backend only.
                 </p>
 
                 <div className="bg-zinc-800/50 rounded-lg p-4 space-y-3">
@@ -890,6 +895,8 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
                       onChange={(e) => setGeminiApiKeyInput(e.target.value)}
                       placeholder={settings.hasGeminiApiKey ? 'Enter new key to replace...' : 'Enter your Gemini API key...'}
                       onKeyDown={(e) => e.stopPropagation()}
+                      aria-label="Gemini API key"
+                      autoComplete="off"
                       className="flex-1 px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-sm text-white placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                     />
                     <button
@@ -919,10 +926,20 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
                       ) : (
                         <>
                           <AlertCircle className="h-3 w-3" />
-                          API key required
+                          Optional
                         </>
                       )}
                     </div>
+                    {settings.hasGeminiApiKey && (
+                      <button
+                        onClick={() => {
+                          if (window.confirm('Remove the stored Gemini API key?')) void clearApiKey('gemini')
+                        }}
+                        className="text-xs text-zinc-400 hover:text-red-300"
+                      >
+                        Remove key
+                      </button>
+                    )}
                   </div>
                   <div className="flex items-center gap-2 text-xs">
                     <a

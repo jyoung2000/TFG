@@ -370,6 +370,133 @@ export interface DirectorCommandResult {
   error: string
 }
 
+/** What the backend sent to the model — shown as "context details" in the UI. */
+export interface DirectorContextDetails {
+  provider: string
+  model: string
+  role: string
+  steps: number
+  tool_calls: number
+  prompt_chars: number
+  project_summary_chars: number
+  prompt_tokens: number | null
+  completion_tokens: number | null
+  scope: string
+}
+
+export interface DirectorChatMessage {
+  role: 'user' | 'assistant'
+  content: string
+}
+
+export interface DirectorInstructResponse {
+  plan_summary: string
+  results: DirectorCommandResult[]
+  reply: string
+  context: DirectorContextDetails | null
+}
+
+export interface DirectorChatResponse {
+  reply: string
+  suggested_prompt: string
+  suggested_negative_prompt: string
+  suggested_duration_seconds: number | null
+  context: DirectorContextDetails
+}
+
+export type DirectorRole = 'script' | 'storyboard' | 'director' | 'continuity' | 'prompt_refinement'
+
+export const DIRECTOR_ROLES: { id: DirectorRole; label: string; hint: string }[] = [
+  { id: 'director', label: 'Director', hint: 'Natural-language commands in the storyboard' },
+  { id: 'script', label: 'Script', hint: 'Build Film with AI — idea to screenplay and shot plan' },
+  { id: 'storyboard', label: 'Storyboard', hint: 'Script to cinematographed shots' },
+  { id: 'prompt_refinement', label: 'Prompt refinement', hint: 'Rewrites shot prompts and Quick Mode ideas' },
+  { id: 'continuity', label: 'Continuity', hint: 'Continuity explanations and fixes' },
+]
+
+export interface DirectorStatus {
+  provider_setting: 'auto' | 'gemini' | 'openrouter'
+  active_provider: 'openrouter' | 'gemini' | 'none'
+  gemini_configured: boolean
+  openrouter_configured: boolean
+  openrouter_key_source: 'settings' | 'env' | 'none'
+  roles: { role: DirectorRole; provider: string; model: string }[]
+  tools: { name: string; description: string }[]
+  message: string
+}
+
+export interface OpenRouterModelInfo {
+  id: string
+  name: string
+  context_length: number | null
+  prompt_price: string
+  completion_price: string
+  supports_tools: boolean
+  supports_json: boolean
+}
+
+export interface OpenRouterValidation {
+  valid: boolean
+  label: string
+  usage: number | null
+  limit: number | null
+  is_free_tier: boolean | null
+  message: string
+}
+
+// ---- Build Film with AI ----
+
+export interface FilmBuildShot {
+  title: string
+  description: string
+  action: string
+  dialogue: string
+  shot_size: ShotSize
+  camera_angle: CameraAngle
+  camera_elevation: CameraElevation
+  composition: CompositionId
+  camera_move: CameraMove
+  duration_seconds: number
+  characters: string[]
+  location: string
+}
+
+export interface FilmBuildScene {
+  title: string
+  description: string
+  location: string
+  time_of_day: string
+  mood: string
+  lighting: string
+  characters: string[]
+  shots: FilmBuildShot[]
+}
+
+export interface FilmBuildCharacter {
+  name: string
+  description: string
+  appearance: string
+  wardrobe: string
+}
+
+export interface FilmBuildLocation {
+  name: string
+  description: string
+  environment: string
+  lighting: string
+  atmosphere: string
+}
+
+export interface FilmBuildPlan {
+  title: string
+  logline: string
+  style: string
+  script: string
+  characters: FilmBuildCharacter[]
+  locations: FilmBuildLocation[]
+  scenes: FilmBuildScene[]
+}
+
 export const SHOT_STATUS_META: Record<ShotStatus, { label: string; className: string }> = {
   draft: { label: 'Draft', className: 'bg-zinc-700 text-zinc-300' },
   composed: { label: 'Composed', className: 'bg-sky-900/70 text-sky-300' },

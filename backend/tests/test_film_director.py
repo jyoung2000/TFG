@@ -160,7 +160,7 @@ class TestDirectorInstruct:
             json={"instruction": "do something"},
         )
         assert response.status_code == 400
-        assert "GEMINI_API_KEY_MISSING" in response.text
+        assert "AI_DIRECTOR_KEY_MISSING" in response.text
 
     def test_instruct_stops_on_first_failure(self, client, test_state):
         test_state.state.app_settings.gemini_api_key = "key"

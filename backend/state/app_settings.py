@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
-from typing import Any, TypeGuard, TypeVar, cast, get_args
+import os
+from typing import Any, Literal, TypeGuard, TypeVar, cast, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, create_model, field_validator
+
+# Canonical environment variable for the OpenRouter secret. The settings file
+# value wins when present; the env var is the fallback for users who prefer
+# not to persist the key on disk.
+OPENROUTER_API_KEY_ENV = "OPENROUTER_API_KEY"
+
+DirectorProvider = Literal["auto", "gemini", "openrouter"]
 
 
 def _to_camel_case(field_name: str) -> str:
@@ -59,6 +67,21 @@ class ProModelSettings(SettingsBaseModel):
         return _clamp_int(value, minimum=1, maximum=100, default=20)
 
 
+class OpenRouterRoleModels(SettingsBaseModel):
+    """Preferred OpenRouter model per AI Director role ('' = use default_model)."""
+
+    default_model: str = "openai/gpt-4o-mini"
+    script: str = ""
+    storyboard: str = ""
+    director: str = ""
+    continuity: str = ""
+    prompt_refinement: str = ""
+
+    def for_role(self, role: str) -> str:
+        chosen = getattr(self, role, "") if role in type(self).model_fields else ""
+        return str(chosen).strip() or self.default_model.strip() or "openai/gpt-4o-mini"
+
+
 class AppSettings(SettingsBaseModel):
     use_torch_compile: bool = False
     load_on_startup: bool = False
@@ -72,8 +95,25 @@ class AppSettings(SettingsBaseModel):
     prompt_enhancer_enabled_t2v: bool = True
     prompt_enhancer_enabled_i2v: bool = False
     gemini_api_key: str = ""
+    openrouter_api_key: str = ""
+    director_provider: DirectorProvider = "auto"
+    openrouter_models: OpenRouterRoleModels = Field(default_factory=OpenRouterRoleModels)
     seed_locked: bool = False
     locked_seed: int = 42
+
+    def resolved_openrouter_api_key(self) -> str:
+        """Settings-file key first, OPENROUTER_API_KEY env var as fallback."""
+        stored = self.openrouter_api_key.strip()
+        if stored:
+            return stored
+        return os.environ.get(OPENROUTER_API_KEY_ENV, "").strip()
+
+    def openrouter_key_source(self) -> Literal["settings", "env", "none"]:
+        if self.openrouter_api_key.strip():
+            return "settings"
+        if os.environ.get(OPENROUTER_API_KEY_ENV, "").strip():
+            return "env"
+        return "none"
 
     @field_validator("prompt_cache_size", mode="before")
     @classmethod
@@ -143,6 +183,10 @@ class SettingsResponse(SettingsBaseModel):
     prompt_enhancer_enabled_t2v: bool = True
     prompt_enhancer_enabled_i2v: bool = False
     has_gemini_api_key: bool = False
+    has_openrouter_api_key: bool = False
+    openrouter_key_source: str = "none"
+    director_provider: DirectorProvider = "auto"
+    openrouter_models: OpenRouterRoleModels = Field(default_factory=OpenRouterRoleModels)
     seed_locked: bool = False
     locked_seed: int = 42
 
@@ -152,9 +196,12 @@ def to_settings_response(settings: AppSettings) -> SettingsResponse:
     ltx_key = data.pop("ltx_api_key", "")
     fal_key = data.pop("fal_api_key", "")
     gemini_key = data.pop("gemini_api_key", "")
+    data.pop("openrouter_api_key", "")
     data["has_ltx_api_key"] = bool(ltx_key)
     data["has_fal_api_key"] = bool(fal_key)
     data["has_gemini_api_key"] = bool(gemini_key)
+    data["has_openrouter_api_key"] = bool(settings.resolved_openrouter_api_key())
+    data["openrouter_key_source"] = settings.openrouter_key_source()
     return SettingsResponse.model_validate(data)
 
 

@@ -20,7 +20,7 @@ JOHN walks fast through the rain, phone pressed to his ear.`
 
 export function ScriptPanel({ onStoryboardCreated }: { onStoryboardCreated: () => void }) {
   const { film, refresh, setFilm } = useFilm()
-  const { settings } = useAppSettings()
+  const { hasDirectorProvider } = useAppSettings()
   const [content, setContent] = useState('')
   const [savedContent, setSavedContent] = useState('')
   const [busy, setBusy] = useState<'save' | 'generate' | null>(null)
@@ -126,12 +126,12 @@ export function ScriptPanel({ onStoryboardCreated }: { onStoryboardCreated: () =
         <Button
           size="sm"
           onClick={() => void generateStoryboard(true)}
-          disabled={busy !== null || !content.trim() || !settings.hasGeminiApiKey}
+          disabled={busy !== null || !content.trim() || !hasDirectorProvider}
           className="gap-1.5"
           title={
-            settings.hasGeminiApiKey
-              ? 'Gemini breaks the script into cinematographed shots'
-              : 'Add a Gemini API key in Settings to enable AI storyboarding'
+            hasDirectorProvider
+              ? 'The AI Director model breaks the script into cinematographed shots'
+              : 'Add an OpenRouter or Gemini API key in Settings to enable AI storyboarding'
           }
         >
           <Sparkles className="h-3.5 w-3.5" />

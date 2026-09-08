@@ -10,6 +10,18 @@ export interface FastModelSettings {
   useUpscaler: boolean
 }
 
+export type DirectorProviderSetting = 'auto' | 'gemini' | 'openrouter'
+
+/** Preferred OpenRouter model per AI Director role ('' = defaultModel). */
+export interface OpenRouterRoleModels {
+  defaultModel: string
+  script: string
+  storyboard: string
+  director: string
+  continuity: string
+  prompt_refinement: string
+}
+
 export interface AppSettings {
   useTorchCompile: boolean
   loadOnStartup: boolean
@@ -17,6 +29,10 @@ export interface AppSettings {
   userPrefersLtxApiVideoGenerations: boolean
   hasFalApiKey: boolean
   hasGeminiApiKey: boolean
+  hasOpenrouterApiKey: boolean
+  openrouterKeySource: 'settings' | 'env' | 'none'
+  directorProvider: DirectorProviderSetting
+  openrouterModels: OpenRouterRoleModels
   useLocalTextEncoder: boolean
   fastModel: FastModelSettings
   proModel: InferenceSettings
@@ -27,6 +43,15 @@ export interface AppSettings {
   lockedSeed: number
 }
 
+export const DEFAULT_OPENROUTER_ROLE_MODELS: OpenRouterRoleModels = {
+  defaultModel: 'openai/gpt-4o-mini',
+  script: '',
+  storyboard: '',
+  director: '',
+  continuity: '',
+  prompt_refinement: '',
+}
+
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   useTorchCompile: false,
   loadOnStartup: true,
@@ -34,6 +59,10 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   userPrefersLtxApiVideoGenerations: false,
   hasFalApiKey: false,
   hasGeminiApiKey: false,
+  hasOpenrouterApiKey: false,
+  openrouterKeySource: 'none',
+  directorProvider: 'auto',
+  openrouterModels: DEFAULT_OPENROUTER_ROLE_MODELS,
   useLocalTextEncoder: false,
   fastModel: { useUpscaler: true },
   proModel: { steps: 20, useUpscaler: true },
@@ -55,6 +84,11 @@ interface AppSettingsContextValue {
   saveLtxApiKey: (value: string) => Promise<void>
   saveFalApiKey: (value: string) => Promise<void>
   saveGeminiApiKey: (value: string) => Promise<void>
+  saveOpenrouterApiKey: (value: string) => Promise<void>
+  /** Remove a stored secret (e.g. after the provider rejected it). */
+  clearApiKey: (provider: 'ltx' | 'fal' | 'gemini' | 'openrouter') => Promise<void>
+  /** True when any AI Director provider (OpenRouter or Gemini) has a key. */
+  hasDirectorProvider: boolean
   forceApiGenerations: boolean
   shouldVideoGenerateWithLtxApi: boolean
 }
@@ -81,6 +115,10 @@ function normalizeAppSettings(data: Partial<AppSettings>): AppSettings {
     userPrefersLtxApiVideoGenerations: data.userPrefersLtxApiVideoGenerations ?? DEFAULT_APP_SETTINGS.userPrefersLtxApiVideoGenerations,
     hasFalApiKey: data.hasFalApiKey ?? DEFAULT_APP_SETTINGS.hasFalApiKey,
     hasGeminiApiKey: data.hasGeminiApiKey ?? DEFAULT_APP_SETTINGS.hasGeminiApiKey,
+    hasOpenrouterApiKey: data.hasOpenrouterApiKey ?? DEFAULT_APP_SETTINGS.hasOpenrouterApiKey,
+    openrouterKeySource: data.openrouterKeySource ?? DEFAULT_APP_SETTINGS.openrouterKeySource,
+    directorProvider: data.directorProvider ?? DEFAULT_APP_SETTINGS.directorProvider,
+    openrouterModels: { ...DEFAULT_OPENROUTER_ROLE_MODELS, ...(data.openrouterModels ?? {}) },
     useLocalTextEncoder: data.useLocalTextEncoder ?? DEFAULT_APP_SETTINGS.useLocalTextEncoder,
     fastModel: data.fastModel ?? DEFAULT_APP_SETTINGS.fastModel,
     proModel: data.proModel ?? DEFAULT_APP_SETTINGS.proModel,
@@ -210,7 +248,15 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
     if (!isLoaded || backendProcessStatus !== 'alive') return
     const syncTimer = setTimeout(async () => {
       try {
-        const { hasLtxApiKey: _a, hasFalApiKey: _b, hasGeminiApiKey: _c, ...syncPayload } = settings
+        // Derived/read-only fields never go back to the backend.
+        const {
+          hasLtxApiKey: _a,
+          hasFalApiKey: _b,
+          hasGeminiApiKey: _c,
+          hasOpenrouterApiKey: _d,
+          openrouterKeySource: _e,
+          ...syncPayload
+        } = settings
         await backendFetch('/api/settings', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -270,8 +316,37 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
     await refreshSettings()
   }, [refreshSettings])
 
+  const saveOpenrouterApiKey = useCallback(async (value: string) => {
+    const response = await backendFetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ openrouterApiKey: value }),
+    })
+    if (!response.ok) {
+      const detail = await response.text()
+      throw new Error(detail || 'Failed to save OpenRouter API key.')
+    }
+    await refreshSettings()
+  }, [refreshSettings])
+
+  const clearApiKey = useCallback(async (provider: 'ltx' | 'fal' | 'gemini' | 'openrouter') => {
+    const response = await backendFetch(`/api/settings/api-keys/${provider}`, { method: 'DELETE' })
+    if (!response.ok) {
+      const detail = await response.text()
+      throw new Error(detail || `Failed to clear ${provider} API key.`)
+    }
+    await refreshSettings()
+  }, [refreshSettings])
+
   const shouldVideoGenerateWithLtxApi =
     forceApiGenerations || (settings.userPrefersLtxApiVideoGenerations && settings.hasLtxApiKey)
+
+  const hasDirectorProvider =
+    settings.directorProvider === 'openrouter'
+      ? settings.hasOpenrouterApiKey
+      : settings.directorProvider === 'gemini'
+        ? settings.hasGeminiApiKey
+        : settings.hasOpenrouterApiKey || settings.hasGeminiApiKey
 
   const contextValue = useMemo<AppSettingsContextValue>(
     () => ({
@@ -283,10 +358,27 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
       saveLtxApiKey,
       saveFalApiKey,
       saveGeminiApiKey,
+      saveOpenrouterApiKey,
+      clearApiKey,
+      hasDirectorProvider,
       forceApiGenerations,
       shouldVideoGenerateWithLtxApi,
     }),
-    [forceApiGenerations, isLoaded, refreshSettings, runtimePolicyLoaded, saveFalApiKey, saveGeminiApiKey, saveLtxApiKey, settings, shouldVideoGenerateWithLtxApi, updateSettings],
+    [
+      clearApiKey,
+      forceApiGenerations,
+      hasDirectorProvider,
+      isLoaded,
+      refreshSettings,
+      runtimePolicyLoaded,
+      saveFalApiKey,
+      saveGeminiApiKey,
+      saveLtxApiKey,
+      saveOpenrouterApiKey,
+      settings,
+      shouldVideoGenerateWithLtxApi,
+      updateSettings,
+    ],
   )
 
   return <AppSettingsContext.Provider value={contextValue}>{children}</AppSettingsContext.Provider>
