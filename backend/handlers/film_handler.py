@@ -18,10 +18,15 @@ from film.film_api_types import (
     AddAssetReferenceRequest,
     CreateAssetRequest,
     CreateSceneRequest,
+    ContinuityResponse,
     CreateShotRequest,
+    FixContinuityRequest,
+    FixContinuityResponse,
     ImportGenerationRequest,
     ImportGenerationResponse,
+    ProjectContinuityResponse,
     ReorderRequest,
+    ShotContinuitySummary,
     SavePoseRequest,
     ShotCaptureRequest,
     UpdateAssetRequest,
@@ -30,7 +35,13 @@ from film.film_api_types import (
     UpdateScriptRequest,
     UpdateShotRequest,
 )
-from film.film_continuity import ContinuityWarning, check_shot_continuity
+from film.film_continuity import (
+    ContinuityReport,
+    ContinuityWarning,
+    check_shot_continuity,
+    continuity_level,
+    shot_continuity_report,
+)
 from film.film_models import (
     FilmAsset,
     FilmPose,
@@ -470,13 +481,97 @@ class FilmHandler(StateHandlerBase):
     # ---- Continuity / media ----------------------------------------------
 
     def continuity(self, project_id: str, shot_id: str) -> list[ContinuityWarning]:
+        return self.continuity_report(project_id, shot_id).warnings
+
+    def continuity_report(self, project_id: str, shot_id: str) -> ContinuityReport:
         with self.lock:
             project = self._load(project_id)
         found = project.find_shot(shot_id)
         if found is None:
             raise HTTPError(404, f"Shot not found: {shot_id}")
         scene, shot = found
-        return check_shot_continuity(project, scene, shot)
+        return shot_continuity_report(project, scene, shot)
+
+    def project_continuity(self, project_id: str) -> ProjectContinuityResponse:
+        with self.lock:
+            project = self._load(project_id)
+        summaries: list[ShotContinuitySummary] = []
+        counts: dict[str, int] = {"good": 0, "minor": 0, "significant": 0, "broken": 0}
+        worst: list[ContinuityWarning] = []
+        for scene in sorted(project.scenes, key=lambda s: s.order):
+            for shot in sorted(scene.shots, key=lambda s: s.order):
+                warnings = check_shot_continuity(project, scene, shot)
+                level = continuity_level(warnings)
+                counts[level] = counts.get(level, 0) + 1
+                worst.extend(warnings)
+                summaries.append(
+                    ShotContinuitySummary(shot_id=shot.id, scene_id=scene.id, level=level, warning_count=len(warnings))
+                )
+        return ProjectContinuityResponse(level=continuity_level(worst), shots=summaries, counts=counts)
+
+    def fix_continuity(self, project_id: str, shot_id: str, req: FixContinuityRequest) -> FixContinuityResponse:
+        """Apply the built-in repair for one warning kind. Each fix is the same
+        mutation the user could make by hand in the UI."""
+        with self.lock:
+            project = self._load(project_id)
+            found = project.find_shot(shot_id)
+            if found is None:
+                raise HTTPError(404, f"Shot not found: {shot_id}")
+            scene, shot = found
+            message = ""
+            kind = req.kind
+            if kind == "character_not_in_scene":
+                ids = [c.asset_id for c in shot.characters if not req.subject_id or c.asset_id == req.subject_id]
+                added = [i for i in ids if i not in scene.character_ids]
+                scene.character_ids.extend(added)
+                message = f"Added {len(added)} character(s) to the scene's cast."
+            elif kind == "prop_not_in_scene":
+                ids = [p for p in shot.prop_ids if not req.subject_id or p == req.subject_id]
+                added = [i for i in ids if i not in scene.prop_ids]
+                scene.prop_ids.extend(added)
+                message = f"Added {len(added)} prop(s) to the scene."
+            elif kind == "location_mismatch":
+                if scene.location_id is None:
+                    raise HTTPError(400, "The scene has no location to align to")
+                shot.location_id = scene.location_id
+                message = "Shot now uses the scene's location."
+            elif kind == "missing_asset":
+                before = len(shot.characters) + len(shot.prop_ids) + (1 if shot.location_id else 0)
+                shot.characters = [c for c in shot.characters if project.asset(c.asset_id) is not None]
+                shot.prop_ids = [p for p in shot.prop_ids if project.asset(p) is not None]
+                if shot.location_id is not None and project.asset(shot.location_id) is None:
+                    shot.location_id = None
+                scene.character_ids = [c for c in scene.character_ids if project.asset(c) is not None]
+                scene.prop_ids = [p for p in scene.prop_ids if project.asset(p) is not None]
+                after = len(shot.characters) + len(shot.prop_ids) + (1 if shot.location_id else 0)
+                message = f"Removed {before - after} dangling reference(s)."
+            elif kind == "missing_capture":
+                shot.generation.use_capture_as_reference = False
+                message = "The shot will generate from text only until a capture exists."
+            elif kind == "missing_previous_output":
+                shot.generation.continue_from_previous = False
+                message = "Continue-from-previous turned off for this shot."
+            elif kind == "duration_invalid":
+                shot.duration_seconds = 4.0
+                message = "Duration set to 4 seconds."
+            else:
+                report = shot_continuity_report(project, scene, shot)
+                return FixContinuityResponse(
+                    fixed=False,
+                    message="This warning needs a creative decision — regenerate the earlier shot or restore the wardrobe.",
+                    report=ContinuityResponse(level=report.level, warnings=report.warnings),
+                    shot=shot,
+                )
+            self._refresh_prompt(project, scene, shot)
+            shot.updated_at = now_ms()
+            self._save(project)
+            report = shot_continuity_report(project, scene, shot)
+            return FixContinuityResponse(
+                fixed=True,
+                message=message,
+                report=ContinuityResponse(level=report.level, warnings=report.warnings),
+                shot=shot,
+            )
 
     def media_path(self, project_id: str, relative: str) -> Path:
         try:

@@ -217,7 +217,7 @@ export interface ShotGenerationSettings {
   aspect_ratio: '16:9' | '9:16'
   use_capture_as_reference: boolean
   continue_from_previous: boolean
-  quality_preset: 'fast_preview' | 'balanced' | 'quality' | 'custom'
+  quality_preset: QualityPreset
 }
 
 export interface ShotVersion {
@@ -294,6 +294,7 @@ export interface FilmProjectSettings {
   default_negative_prompt: string
   inter_shot_gap_seconds: number
   strict_continuity: boolean
+  default_quality_preset: 'fast_preview' | 'balanced' | 'quality' | 'custom'
   preview_resolution: string
   preview_max_seconds: number
 }
@@ -326,11 +327,54 @@ export interface QueuedJob {
 export interface FilmQueue {
   active: QueuedJob | null
   pending: QueuedJob[]
+  paused: boolean
+  /** Host generation progress (0-100) for the active job. */
+  progress: number | null
+  phase: string
 }
+
+export type ContinuityLevel = 'good' | 'minor' | 'significant' | 'broken'
+export type ContinuitySeverity = 'minor' | 'significant' | 'broken'
 
 export interface ContinuityWarning {
   kind: string
   message: string
+  severity: ContinuitySeverity
+  /** Human-readable suggested fix. */
+  fix: string
+  /** True when the backend can repair it via POST …/continuity/{shot}/fix. */
+  auto_fixable: boolean
+  subject_id: string
+}
+
+export interface ContinuityReport {
+  level: ContinuityLevel
+  warnings: ContinuityWarning[]
+}
+
+export interface ProjectContinuity {
+  level: ContinuityLevel
+  shots: { shot_id: string; scene_id: string; level: ContinuityLevel; warning_count: number }[]
+  counts: Record<string, number>
+}
+
+export const CONTINUITY_LEVEL_META: Record<ContinuityLevel, { label: string; dot: string; text: string }> = {
+  good: { label: 'Continuity good', dot: 'bg-emerald-400', text: 'text-emerald-300' },
+  minor: { label: 'Minor continuity notes', dot: 'bg-amber-300', text: 'text-amber-200' },
+  significant: { label: 'Significant continuity issues', dot: 'bg-orange-400', text: 'text-orange-300' },
+  broken: { label: 'Continuity broken', dot: 'bg-red-500', text: 'text-red-300' },
+}
+
+export type QualityPreset = 'project' | 'fast_preview' | 'balanced' | 'quality' | 'custom'
+
+export interface FilmQualityProfile {
+  id: QualityPreset
+  label: string
+  model: string
+  resolution: string
+  description: string
+  recommended: boolean
+  fits_gpu: boolean | null
 }
 
 export interface FilmModelCapability {
@@ -361,6 +405,7 @@ export interface FilmCapabilities {
   total_required_download_gb: number | null
   text_encoder_optional: boolean
   vram_note: string
+  profiles: FilmQualityProfile[]
 }
 
 export interface DirectorCommandResult {
@@ -523,6 +568,6 @@ export function defaultGenerationSettings(): ShotGenerationSettings {
     aspect_ratio: '16:9',
     use_capture_as_reference: true,
     continue_from_previous: false,
-    quality_preset: 'balanced',
+    quality_preset: 'project',
   }
 }

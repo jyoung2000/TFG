@@ -376,4 +376,7 @@ class TestContinuity:
         kinds = {w["kind"] for w in response.json()["warnings"]}
         assert "location_mismatch" in kinds
         assert "character_not_in_scene" in kinds
-        assert "missing_capture" in kinds
+        # An uncomposed draft is not flagged for a missing capture (it simply
+        # generates from text); only a composed-but-uncaptured shot is.
+        assert "missing_capture" not in kinds
+        assert response.json()["level"] == "significant"

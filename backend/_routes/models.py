@@ -10,6 +10,7 @@ from api_types import (
     DownloadProgressResponse,
     ModelDownloadRequest,
     ModelDownloadStartResponse,
+    ModelFileStatus,
     ModelInfo,
     ModelsStatusResponse,
     TextEncoderDownloadResponse,
@@ -26,6 +27,17 @@ router = APIRouter(prefix="/api", tags=["models"])
 @router.get("/models", response_model=list[ModelInfo])
 def route_models_list(handler: AppHandler = Depends(get_state_service)) -> list[ModelInfo]:
     return handler.models.get_models_list()
+
+
+@router.delete("/models/{model_type}", response_model=ModelFileStatus)
+def route_remove_model(model_type: str, handler: AppHandler = Depends(get_state_service)) -> ModelFileStatus:
+    """Remove a downloaded model so it can be re-downloaded (update) or freed."""
+    if model_type not in ("checkpoint", "upsampler", "text_encoder", "zit"):
+        raise HTTPError(404, f"Unknown model type: {model_type}")
+    busy = handler.downloads.is_download_running() or handler.generation.is_generation_running()
+    result = handler.models.remove_model(model_type, busy=busy)  # type: ignore[arg-type]
+    logger.info("Removed model %s", model_type)
+    return result
 
 
 @router.get("/models/status", response_model=ModelsStatusResponse)

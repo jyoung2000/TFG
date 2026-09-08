@@ -1,7 +1,15 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { filmApi } from '../lib/film-api'
 import { logger } from '../lib/logger'
-import type { FilmCapabilities, FilmProject, FilmQueue, FilmScene, FilmShot } from '../types/film'
+import type {
+  ContinuityLevel,
+  FilmCapabilities,
+  FilmProject,
+  FilmQueue,
+  FilmScene,
+  FilmShot,
+  ProjectContinuity,
+} from '../types/film'
 import { useProjects } from './ProjectContext'
 
 interface FilmContextType {
@@ -18,11 +26,15 @@ interface FilmContextType {
   /** True while any film generation is active or pending. */
   isGenerating: boolean
   findShot: (shotId: string) => { scene: FilmScene; shot: FilmShot } | null
+  /** Project-wide continuity summary (refreshed with the project). */
+  continuity: ProjectContinuity | null
+  continuityLevelFor: (shotId: string) => ContinuityLevel | null
+  setQueue: (queue: FilmQueue) => void
 }
 
 const FilmContext = createContext<FilmContextType | null>(null)
 
-const EMPTY_QUEUE: FilmQueue = { active: null, pending: [] }
+const EMPTY_QUEUE: FilmQueue = { active: null, pending: [], paused: false, progress: null, phase: '' }
 
 export function FilmProvider({ children }: { children: React.ReactNode }) {
   const { currentProjectId, currentTab } = useProjects()
@@ -31,6 +43,7 @@ export function FilmProvider({ children }: { children: React.ReactNode }) {
   const [error, setError] = useState<string | null>(null)
   const [queue, setQueue] = useState<FilmQueue>(EMPTY_QUEUE)
   const [capabilities, setCapabilities] = useState<FilmCapabilities | null>(null)
+  const [continuity, setContinuity] = useState<ProjectContinuity | null>(null)
   const projectIdRef = useRef<string | null>(null)
   projectIdRef.current = currentProjectId
 
@@ -43,6 +56,13 @@ export function FilmProvider({ children }: { children: React.ReactNode }) {
         setFilmState(project)
         setError(null)
       }
+      // Continuity is derived state; a failure here must not hide the project.
+      void filmApi
+        .projectContinuity(projectId)
+        .then(summary => {
+          if (projectIdRef.current === projectId) setContinuity(summary)
+        })
+        .catch(() => {})
       return project
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e)
@@ -112,6 +132,11 @@ export function FilmProvider({ children }: { children: React.ReactNode }) {
     setFilmState(next)
   }, [])
 
+  const continuityLevelFor = useCallback(
+    (shotId: string): ContinuityLevel | null => continuity?.shots.find(s => s.shot_id === shotId)?.level ?? null,
+    [continuity],
+  )
+
   const isGenerating = queue.active !== null || queue.pending.length > 0
 
   const value = useMemo(
@@ -122,12 +147,15 @@ export function FilmProvider({ children }: { children: React.ReactNode }) {
       refresh,
       setFilm,
       queue,
+      setQueue,
       capabilities,
       refreshCapabilities,
       isGenerating,
       findShot,
+      continuity,
+      continuityLevelFor,
     }),
-    [film, isLoading, error, refresh, setFilm, queue, capabilities, refreshCapabilities, isGenerating, findShot],
+    [film, isLoading, error, refresh, setFilm, queue, capabilities, refreshCapabilities, isGenerating, findShot, continuity, continuityLevelFor],
   )
 
   return <FilmContext.Provider value={value}>{children}</FilmContext.Provider>

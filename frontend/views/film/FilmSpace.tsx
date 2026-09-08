@@ -1,11 +1,14 @@
 import { Suspense, lazy, useCallback, useMemo, useState } from 'react'
 import {
+  ArrowUpToLine,
   Clapperboard,
   Clock,
   FileText,
   Layers,
   Loader2,
   MonitorPlay,
+  Pause,
+  Play,
   Plus,
   Sparkles,
   Trash2,
@@ -220,11 +223,12 @@ function SceneRow({
 }
 
 export function FilmSpace() {
-  const { film, isLoading, error, refresh, queue, isGenerating } = useFilm()
+  const { film, isLoading, error, refresh, queue, setQueue, isGenerating } = useFilm()
   const [tab, setTab] = useState<FilmTab>('storyboard')
   const [selectedShotId, setSelectedShotId] = useState<string | null>(null)
   const [composerShotId, setComposerShotId] = useState<string | null>(null)
   const [showBuild, setShowBuild] = useState(false)
+  const [showQueue, setShowQueue] = useState(false)
 
   const scenes = useMemo(
     () => (film ? [...film.scenes].sort((a, b) => a.order - b.order) : []),
@@ -265,6 +269,26 @@ export function FilmSpace() {
     await filmApi.cancelQueue()
     await refresh()
   }, [refresh])
+
+  const toggleQueuePause = useCallback(async () => {
+    const next = queue.paused ? await filmApi.resumeQueue() : await filmApi.pauseQueue()
+    setQueue(next)
+  }, [queue.paused, setQueue])
+
+  const cancelJob = useCallback(
+    async (shotId: string) => {
+      setQueue(await filmApi.cancelJob(shotId))
+      await refresh()
+    },
+    [setQueue, refresh],
+  )
+
+  const prioritizeJob = useCallback(
+    async (shotId: string) => {
+      setQueue(await filmApi.prioritizeJob(shotId))
+    },
+    [setQueue],
+  )
 
   const totalDuration = scenes.reduce(
     (sum, scene) => sum + scene.shots.reduce((s, shot) => s + shot.duration_seconds, 0),
@@ -313,19 +337,56 @@ export function FilmSpace() {
           ))}
         </div>
         <span className="flex-1" />
-        {isGenerating && (
-          <div className="flex items-center gap-2 text-[11px] text-amber-300">
-            <Loader2 className="h-3 w-3 animate-spin" />
+        {(isGenerating || queue.paused) && (
+          <div className="relative flex items-center gap-2 text-[11px] text-amber-300">
+            {queue.active ? <Loader2 className="h-3 w-3 animate-spin" /> : queue.paused ? <Pause className="h-3 w-3" /> : <Loader2 className="h-3 w-3 animate-spin" />}
             {queue.active
-              ? `Generating ${queue.active.shot_title || 'shot'} (${queue.active.kind})`
-              : 'Queued…'}
-            {queue.pending.length > 0 && <span>+{queue.pending.length} queued</span>}
+              ? `Generating ${queue.active.shot_title || 'shot'} (${queue.active.kind})${queue.progress != null ? ` · ${queue.progress}%` : ''}`
+              : queue.paused
+                ? `Queue paused${queue.pending.length > 0 ? '' : ' (empty)'}`
+                : 'Queued…'}
+            {queue.pending.length > 0 && (
+              <button onClick={() => setShowQueue(v => !v)} className="underline underline-offset-2 hover:text-white" aria-expanded={showQueue}>
+                +{queue.pending.length} queued
+              </button>
+            )}
             <button
-              onClick={() => void cancelQueue()}
-              className="flex items-center gap-0.5 text-zinc-500 hover:text-red-400"
+              onClick={() => void toggleQueuePause()}
+              className="flex items-center gap-0.5 text-zinc-500 hover:text-white"
+              title={queue.paused ? 'Resume the production queue' : 'Pause after the current job'}
             >
-              <XCircle className="h-3 w-3" /> Cancel
+              {queue.paused ? <Play className="h-3 w-3" /> : <Pause className="h-3 w-3" />}
+              {queue.paused ? 'Resume' : 'Pause'}
             </button>
+            {isGenerating && (
+              <button
+                onClick={() => void cancelQueue()}
+                className="flex items-center gap-0.5 text-zinc-500 hover:text-red-400"
+              >
+                <XCircle className="h-3 w-3" /> Cancel all
+              </button>
+            )}
+            {showQueue && queue.pending.length > 0 && (
+              <div className="absolute right-0 top-6 z-30 w-72 rounded-lg border border-zinc-700 bg-zinc-900 shadow-xl p-2 space-y-1" role="dialog" aria-label="Pending generation jobs">
+                <div className="text-[10px] uppercase tracking-wide text-zinc-500 px-1">Pending ({queue.pending.length})</div>
+                {queue.pending.map((job, index) => (
+                  <div key={`${job.shot_id}-${job.version_number}`} className="flex items-center gap-2 px-1 py-0.5 text-[11px] text-zinc-300">
+                    <span className="text-zinc-600 w-4">{index + 1}</span>
+                    <span className="flex-1 truncate">
+                      {job.shot_title || job.shot_id} <span className="text-zinc-500">· {job.kind} v{job.version_number}</span>
+                    </span>
+                    {index > 0 && (
+                      <button onClick={() => void prioritizeJob(job.shot_id)} className="text-zinc-500 hover:text-white" title="Move to front" aria-label={`Prioritize ${job.shot_title || job.shot_id}`}>
+                        <ArrowUpToLine className="h-3 w-3" />
+                      </button>
+                    )}
+                    <button onClick={() => void cancelJob(job.shot_id)} className="text-zinc-500 hover:text-red-400" title="Cancel this job" aria-label={`Cancel ${job.shot_title || job.shot_id}`}>
+                      <XCircle className="h-3 w-3" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
         {tab === 'storyboard' && (

@@ -22,6 +22,7 @@ from film.film_api_types import (
     BatchGenerateResponse,
     FilmCapabilitiesResponse,
     FilmModelCapability,
+    FilmQualityProfile,
     FilmQueueResponse,
     GenerateShotRequest,
     QueuedJob,
@@ -71,6 +72,16 @@ _FORCED_API_RESOLUTIONS = ["1080p", "1440p", "2160p"]
 _WANGP_MIN_VRAM_GB = 6.0
 _NATIVE_LOCAL_MIN_VRAM_GB = 32.0
 
+# Quality profiles: id -> (model, resolution, label, description). "custom"
+# means the shot's own model/resolution fields. Recommended profile by VRAM:
+# < 8 GB fast_preview, 8-16 GB balanced (e.g. RTX 4070 12 GB), >= 16 GB quality.
+QUALITY_PROFILES: dict[str, tuple[str, str, str, str]] = {
+    "fast_preview": ("fast", "540p", "Fast Preview", "Fastest turnaround for blocking and timing checks."),
+    "balanced": ("fast", "720p", "Balanced", "Good detail at a sensible render time; the default for 8-16 GB GPUs."),
+    "quality": ("pro", "1080p", "Quality", "Highest quality; slowest and most VRAM-hungry."),
+}
+_INTERRUPTED_ERROR = "Interrupted: the app restarted while this job was queued or generating"
+
 
 @dataclass(slots=True)
 class _QueuedShotJob:
@@ -117,6 +128,39 @@ class FilmGenerationHandler(StateHandlerBase):
         self._queue: deque[_QueuedShotJob] = deque()
         self._active: _QueuedShotJob | None = None
         self._worker_running = False
+        self._paused = False
+
+    # ---- Startup recovery ----------------------------------------------
+
+    def recover_interrupted_jobs(self) -> int:
+        """Fail versions left 'queued'/'generating' by a previous process so no
+        shot is stuck in a generating state after a restart. Returns the count."""
+        recovered = 0
+        with self.lock:
+            for project_id in self._film.store.list_project_ids():
+                try:
+                    project = self._film.store.load(project_id)
+                except Exception as exc:  # noqa: BLE001 - one corrupt project must not block startup
+                    logger.warning("Skipping film project %s during recovery: %s", project_id, exc)
+                    continue
+                changed = False
+                for scene in project.scenes:
+                    for shot in scene.shots:
+                        for version in shot.versions:
+                            if version.status in ("queued", "generating"):
+                                version.status = "failed"
+                                version.error = _INTERRUPTED_ERROR
+                                changed = True
+                                recovered += 1
+                        if shot.status in ("queued", "generating"):
+                            shot.status = "ready" if shot.capture_path else "composed"
+                            shot.updated_at = now_ms()
+                            changed = True
+                if changed:
+                    self._film.store.save(project)
+        if recovered:
+            logger.info("Recovered %d interrupted film generation job(s)", recovered)
+        return recovered
 
     # ---- Queueing --------------------------------------------------------
 
@@ -214,7 +258,17 @@ class FilmGenerationHandler(StateHandlerBase):
         with self.lock:
             active = self._active.to_payload("generating") if self._active is not None else None
             pending = [job.to_payload("queued") for job in self._queue]
-        return FilmQueueResponse(active=active, pending=pending)
+            paused = self._paused
+        progress: int | None = None
+        phase = ""
+        if active is not None:
+            try:
+                snapshot = self._generation.get_generation_progress()
+                progress = snapshot.progress
+                phase = snapshot.phase
+            except Exception:  # noqa: BLE001 - progress is advisory
+                progress = None
+        return FilmQueueResponse(active=active, pending=pending, paused=paused, progress=progress, phase=phase)
 
     def cancel_all(self) -> FilmQueueResponse:
         with self.lock:
@@ -224,6 +278,52 @@ class FilmGenerationHandler(StateHandlerBase):
             self._finish_version(job, status="cancelled", error="Cancelled before start")
         if self._active is not None:
             self._generation.cancel_generation()
+        return self.get_queue()
+
+    def pause(self) -> FilmQueueResponse:
+        """Stop starting new jobs; the active job (if any) finishes normally."""
+        with self.lock:
+            self._paused = True
+        return self.get_queue()
+
+    def resume(self) -> FilmQueueResponse:
+        with self.lock:
+            self._paused = False
+            if self._queue:
+                self._ensure_worker()
+        return self.get_queue()
+
+    def cancel_job(self, shot_id: str) -> FilmQueueResponse:
+        """Cancel one shot: drop it from the pending queue, or cancel the host
+        generation when it is the active job."""
+        removed: _QueuedShotJob | None = None
+        cancel_active = False
+        with self.lock:
+            for job in list(self._queue):
+                if job.shot_id == shot_id:
+                    self._queue.remove(job)
+                    removed = job
+                    break
+            if removed is None and self._active is not None and self._active.shot_id == shot_id:
+                cancel_active = True
+        if removed is not None:
+            self._finish_version(removed, status="cancelled", error="Cancelled before start")
+        elif cancel_active:
+            self._generation.cancel_generation()
+        else:
+            raise HTTPError(404, "That shot is not queued or generating")
+        return self.get_queue()
+
+    def prioritize(self, shot_id: str) -> FilmQueueResponse:
+        """Move a pending shot to the front of the queue."""
+        with self.lock:
+            for job in list(self._queue):
+                if job.shot_id == shot_id:
+                    self._queue.remove(job)
+                    self._queue.appendleft(job)
+                    break
+            else:
+                raise HTTPError(404, "That shot is not in the pending queue")
         return self.get_queue()
 
     # ---- Version construction -------------------------------------------
@@ -246,8 +346,7 @@ class FilmGenerationHandler(StateHandlerBase):
             resolution = settings.preview_resolution or "540p"
             duration = min(shot.duration_seconds, settings.preview_max_seconds or 4.0)
         else:
-            model = generation.model or settings.default_model or "fast"
-            resolution = generation.resolution or settings.default_resolution or "720p"
+            model, resolution = self._resolve_final_profile(project, shot)
             duration = shot.duration_seconds
 
         duration_int = max(1, round(duration))
@@ -279,11 +378,28 @@ class FilmGenerationHandler(StateHandlerBase):
             wardrobe_snapshot=wardrobe_snapshot,
         )
 
+    @staticmethod
+    def _resolve_final_profile(project: FilmProject, shot: FilmShot) -> tuple[str, str]:
+        """Model + resolution for a final render: explicit shot fields win
+        (custom), otherwise the shot's / project's quality profile."""
+        generation = shot.generation
+        settings = project.settings
+        preset = generation.quality_preset
+        if preset == "project":
+            preset = settings.default_quality_preset
+        profile = QUALITY_PROFILES.get(preset)
+        if preset == "custom" or profile is None or generation.model or generation.resolution:
+            fallback_model, fallback_resolution = (profile[0], profile[1]) if profile else ("fast", "720p")
+            model = generation.model or settings.default_model or fallback_model
+            resolution = generation.resolution or settings.default_resolution or fallback_resolution
+            return model, resolution
+        return profile[0], profile[1]
+
     # ---- Worker ----------------------------------------------------------
 
     def _ensure_worker(self) -> None:
         """Start the drain worker if it isn't running. Caller holds the lock."""
-        if self._worker_running:
+        if self._worker_running or self._paused:
             return
         self._worker_running = True
         self._task_runner.run_background(
@@ -300,7 +416,7 @@ class FilmGenerationHandler(StateHandlerBase):
         try:
             while True:
                 with self.lock:
-                    if not self._queue:
+                    if not self._queue or self._paused:
                         self._active = None
                         self._worker_running = False
                         return
@@ -309,7 +425,7 @@ class FilmGenerationHandler(StateHandlerBase):
                 self._run_job(job)
         finally:
             with self.lock:
-                if not self._queue:
+                if not self._queue or self._paused:
                     self._active = None
                     self._worker_running = False
 
@@ -492,6 +608,56 @@ class FilmGenerationHandler(StateHandlerBase):
             "none",
         )
 
+    @staticmethod
+    def _quality_profiles(
+        vram_gb: float | None, execution_mode: str, models: list[FilmModelCapability]
+    ) -> list[FilmQualityProfile]:
+        """Quality presets evaluated against the detected GPU. On the API path
+        everything 'fits'; locally the video model's fit applies to all presets."""
+        if vram_gb is None:
+            recommended = "balanced"
+        elif vram_gb < 8:
+            recommended = "fast_preview"
+        elif vram_gb < 16:
+            recommended = "balanced"
+        else:
+            recommended = "quality"
+        video_fit: bool | None = None
+        if execution_mode == "api":
+            video_fit = True
+        else:
+            for model in models:
+                if "video" in model.modes and model.required and model.download_state != "not_configured":
+                    video_fit = model.fits_gpu
+                    break
+        profiles: list[FilmQualityProfile] = []
+        for profile_id, (model, resolution, label, description) in QUALITY_PROFILES.items():
+            if execution_mode == "api" and resolution not in _FORCED_API_RESOLUTIONS:
+                resolution = "1080p"
+            profiles.append(
+                FilmQualityProfile(
+                    id=profile_id,
+                    label=label,
+                    model=model,
+                    resolution=resolution,
+                    description=description,
+                    recommended=profile_id == recommended,
+                    fits_gpu=video_fit,
+                )
+            )
+        profiles.append(
+            FilmQualityProfile(
+                id="custom",
+                label="Custom",
+                model="",
+                resolution="",
+                description="Use the model and resolution set on each shot.",
+                recommended=False,
+                fits_gpu=None,
+            )
+        )
+        return profiles
+
     def capabilities(self) -> FilmCapabilitiesResponse:
         gpu_name = self._gpu_info.get_device_name()
         vram_gb_int = self._gpu_info.get_vram_total_gb()
@@ -636,6 +802,7 @@ class FilmGenerationHandler(StateHandlerBase):
             models=models,
             total_required_download_gb=total_required_download_gb,
             text_encoder_optional=text_encoder_optional,
+            profiles=self._quality_profiles(vram_gb, execution_mode, models),
             vram_note=(
                 "VRAM figures are from this app's documentation: the WanGP bridge runs on "
                 "as low as 6 GB VRAM; the native local LTX pipeline targets ~32 GB. "

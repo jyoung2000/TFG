@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from film.film_continuity import ContinuityWarning
+from film.film_continuity import ContinuityKind, ContinuityLevel, ContinuityWarning
 from film.film_models import (
     CameraMove,
     CompositionScene,
@@ -162,6 +162,36 @@ class ImportGenerationResponse(BaseModel):
     version_number: int
 
 
+class ExportPackageRequest(BaseModel):
+    destination_path: str
+    include_outputs: bool = True
+
+
+class PackageSummaryResponse(BaseModel):
+    project_id: str
+    project_name: str
+    schema_version: int
+    scenes: int
+    shots: int
+    assets: int
+    media_files: int
+    includes_outputs: bool
+    total_bytes: int
+    warnings: list[str] = Field(default_factory=list[str])
+    path: str = ""
+
+
+class ImportPackageRequest(BaseModel):
+    package_path: str
+    # The project must be empty unless replace is set.
+    replace: bool = False
+
+
+class ImportPackageResponse(BaseModel):
+    summary: PackageSummaryResponse
+    project: FilmProject
+
+
 class ShotCaptureRequest(BaseModel):
     image_base64: str
     composition: CompositionScene
@@ -200,6 +230,10 @@ class QueuedJob(BaseModel):
 class FilmQueueResponse(BaseModel):
     active: QueuedJob | None
     pending: list[QueuedJob]
+    paused: bool = False
+    # Host generation progress for the active job (0-100) and phase label.
+    progress: int | None = None
+    phase: str = ""
 
 
 class QueueShotResponse(BaseModel):
@@ -219,7 +253,48 @@ class PromoteVersionResponse(BaseModel):
 
 
 class ContinuityResponse(BaseModel):
+    level: ContinuityLevel = "good"
     warnings: list[ContinuityWarning]
+
+
+class ShotContinuitySummary(BaseModel):
+    shot_id: str
+    scene_id: str
+    level: ContinuityLevel
+    warning_count: int
+
+
+class ProjectContinuityResponse(BaseModel):
+    level: ContinuityLevel
+    shots: list[ShotContinuitySummary]
+    counts: dict[str, int]  # level -> number of shots
+
+
+class FixContinuityRequest(BaseModel):
+    kind: ContinuityKind
+    subject_id: str = ""
+
+
+class FixContinuityResponse(BaseModel):
+    fixed: bool
+    message: str
+    report: ContinuityResponse
+    shot: FilmShot
+
+
+class FilmQualityProfile(BaseModel):
+    id: str  # fast_preview | balanced | quality | custom
+    label: str
+    model: str
+    resolution: str
+    description: str
+    recommended: bool
+    fits_gpu: bool | None
+
+
+class QueueControlResponse(BaseModel):
+    status: str
+    queue: FilmQueueResponse
 
 
 class FilmModelCapability(BaseModel):
@@ -257,6 +332,8 @@ class FilmCapabilitiesResponse(BaseModel):
     # True when the text encoder can be skipped (cloud text encoding via API key).
     text_encoder_optional: bool
     vram_note: str
+    # Quality profiles (model + resolution presets) evaluated against the GPU.
+    profiles: list[FilmQualityProfile] = Field(default_factory=list["FilmQualityProfile"])
 
 
 class DirectorCommandRequest(BaseModel):

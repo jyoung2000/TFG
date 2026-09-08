@@ -393,7 +393,7 @@ def _build_tool_specs() -> list[ToolSpec]:
                     "model": _s("Model id ('' = project default)"),
                     "resolution": _s("Resolution like 720p ('' = default)"),
                     "seed": _n("Seed (omit for random)"),
-                    "quality_preset": _s("Quality preset", ["fast_preview", "balanced", "quality", "custom"]),
+                    "quality_preset": _s("Quality preset", ["project", "fast_preview", "balanced", "quality", "custom"]),
                     "continue_from_previous": _b("Use previous shot's last frame as start"),
                 },
                 ["shot_id"],

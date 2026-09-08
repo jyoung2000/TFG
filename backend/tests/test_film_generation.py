@@ -55,6 +55,14 @@ def _setup_shot(client, *, capture: bool = False, duration: float = 4.0) -> tupl
     return scene_id, shot_id
 
 
+def _add_location_mismatch(client, scene_id: str, shot_id: str) -> None:
+    """Scene at one location, shot at another → a 'location_mismatch' warning."""
+    cafe = client.post(f"/api/film/projects/{PROJECT}/assets", json={"kind": "location", "name": "Cafe"}).json()["asset"]["id"]
+    street = client.post(f"/api/film/projects/{PROJECT}/assets", json={"kind": "location", "name": "Street"}).json()["asset"]["id"]
+    client.put(f"/api/film/projects/{PROJECT}/scenes/{scene_id}", json={"location_id": cafe})
+    client.put(f"/api/film/projects/{PROJECT}/scenes/{scene_id}/shots/{shot_id}", json={"location_id": street})
+
+
 def _enable_local(test_state, create_fake_model_files) -> None:
     create_fake_model_files()
     test_state.state.app_settings.use_local_text_encoder = True
@@ -169,7 +177,8 @@ class TestQueueShot:
         self, client, test_state, create_fake_model_files
     ):
         _enable_local(test_state, create_fake_model_files)
-        scene_id, shot_id = _setup_shot(client, capture=False)  # missing capture warning
+        scene_id, shot_id = _setup_shot(client, capture=False)
+        _add_location_mismatch(client, scene_id, shot_id)
         client.put(
             f"/api/film/projects/{PROJECT}/settings",
             json={
@@ -196,13 +205,14 @@ class TestQueueShot:
     ):
         _enable_local(test_state, create_fake_model_files)
         scene_id, shot_id = _setup_shot(client, capture=False)
+        _add_location_mismatch(client, scene_id, shot_id)
         response = client.post(
             f"/api/film/projects/{PROJECT}/scenes/{scene_id}/shots/{shot_id}/generate",
             json={"kind": "preview"},
         )
         assert response.status_code == 200
         payload = response.json()
-        assert any(w["kind"] == "missing_capture" for w in payload["warnings"])
+        assert any(w["kind"] == "location_mismatch" for w in payload["warnings"])
         assert _get_shot(client, shot_id)["versions"][0]["status"] == "complete"
 
     def test_double_queue_conflicts(self, client, test_state, create_fake_model_files, fake_services):

@@ -82,6 +82,16 @@ class FilmStore:
     def _project_file(self, project_id: str) -> Path:
         return self.project_dir(project_id) / "project.json"
 
+    def list_project_ids(self) -> list[str]:
+        """Ids of every persisted film project (directories with a project.json)."""
+        if not self._root.exists():
+            return []
+        ids: list[str] = []
+        for entry in sorted(self._root.iterdir()):
+            if entry.is_dir() and (entry / "project.json").is_file():
+                ids.append(entry.name)
+        return ids
+
     def exists(self, project_id: str) -> bool:
         return self._project_file(project_id).exists()
 

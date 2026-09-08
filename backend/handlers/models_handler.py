@@ -2,15 +2,17 @@
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from threading import RLock
 from typing import TYPE_CHECKING
 
+from _routes._errors import HTTPError
 from api_types import ModelFileStatus, ModelInfo, ModelsStatusResponse, TextEncoderStatus
 from handlers.base import StateHandlerBase, with_state_lock
 from runtime_config.model_download_specs import MODEL_FILE_ORDER, resolve_required_model_types
 from services.wangp_bridge import WanGPBridge
-from state.app_state_types import AppState, AvailableFiles
+from state.app_state_types import AppState, AvailableFiles, ModelFileType
 
 if TYPE_CHECKING:
     from runtime_config.runtime_config import RuntimeConfig
@@ -73,6 +75,38 @@ class ModelsHandler(StateHandlerBase):
             size_bytes=size_bytes if exists else expected,
             size_gb=round((size_bytes if exists else expected) / (1024**3), 1),
             expected_size_gb=round(expected / (1024**3), 1),
+        )
+
+    def remove_model(self, model_type: ModelFileType, *, busy: bool) -> ModelFileStatus:
+        """Delete a downloaded model file/folder so it can be re-downloaded
+        (update) or freed. Refused while a download or generation is running."""
+        if self._config.wangp_enabled:
+            raise HTTPError(400, "Models are managed by WanGP in this mode; remove them from the WanGP checkout")
+        if model_type not in MODEL_FILE_ORDER:
+            raise HTTPError(404, f"Unknown model type: {model_type}")
+        if busy:
+            raise HTTPError(409, "Cannot remove a model while a download or generation is running")
+        spec = self._config.spec_for(model_type)
+        path = self._config.model_path(model_type)
+        models_root = self._config.models_dir.resolve()
+        resolved = path.resolve()
+        if models_root != resolved and models_root not in resolved.parents:
+            raise HTTPError(400, "Model path is outside the models directory")
+        if path.exists():
+            if spec.is_folder and path.is_dir():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
+        self.refresh_available_files()
+        return ModelFileStatus(
+            name=spec.name,
+            description=spec.description,
+            downloaded=False,
+            size=spec.expected_size_bytes,
+            expected_size=spec.expected_size_bytes,
+            required=model_type in self._config.required_model_types,
+            is_folder=spec.is_folder,
+            optional_reason=None,
         )
 
     def get_models_list(self) -> list[ModelInfo]:

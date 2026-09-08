@@ -5,13 +5,17 @@ import {
   Cloud,
   Cpu,
   Download,
+  Gauge,
   HardDrive,
   Info,
   Loader2,
+  Settings2,
+  Trash2,
   XCircle,
 } from 'lucide-react'
 import { useFilm } from '../../contexts/FilmContext'
 import { backendFetch } from '../../lib/backend'
+import { filmApi } from '../../lib/film-api'
 import { Button } from '../../components/ui/button'
 import type { FilmModelCapability } from '../../types/film'
 
@@ -67,6 +71,116 @@ function StateChip({ model }: { model: FilmModelCapability }) {
   )
 }
 
+/** Project-wide render defaults: quality profile, preview size, gap, strict continuity. */
+function FilmRenderSettingsCard() {
+  const { film, setFilm, capabilities } = useFilm()
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  if (!film) return null
+  const settings = film.settings
+
+  const update = async (patch: Partial<typeof settings>) => {
+    setSaving(true)
+    setError('')
+    try {
+      setFilm(await filmApi.updateSettings(film.id, { ...settings, ...patch }))
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const selectClass =
+    'bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs text-zinc-200 focus:outline-none focus:border-violet-600 disabled:opacity-50'
+
+  return (
+    <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-3 space-y-2">
+      <div className="flex items-center gap-2">
+        <Settings2 className="h-4 w-4 text-violet-400" />
+        <span className="text-xs font-semibold text-white">Project render defaults</span>
+        {saving && <Loader2 className="h-3 w-3 animate-spin text-zinc-500" />}
+        {error && <span className="text-[10px] text-red-400 truncate">{error}</span>}
+      </div>
+      <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-[11px] text-zinc-400">
+        <label className="flex items-center justify-between gap-2">
+          <span>Default quality profile</span>
+          <select
+            value={settings.default_quality_preset}
+            disabled={saving}
+            onChange={e => void update({ default_quality_preset: e.target.value as typeof settings.default_quality_preset })}
+            className={selectClass}
+            aria-label="Default quality profile"
+          >
+            {(capabilities?.profiles ?? []).map(p => (
+              <option key={p.id} value={p.id}>
+                {p.label}
+                {p.recommended ? ' (recommended)' : ''}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex items-center justify-between gap-2">
+          <span>Preview resolution</span>
+          <select
+            value={settings.preview_resolution}
+            disabled={saving}
+            onChange={e => void update({ preview_resolution: e.target.value })}
+            className={selectClass}
+            aria-label="Preview resolution"
+          >
+            {['540p', '720p', '1080p'].map(r => (
+              <option key={r} value={r}>
+                {r}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="flex items-center justify-between gap-2">
+          <span>Preview max seconds</span>
+          <input
+            type="number"
+            min={1}
+            max={20}
+            step={1}
+            value={settings.preview_max_seconds}
+            disabled={saving}
+            onChange={e => void update({ preview_max_seconds: Math.max(1, Number(e.target.value) || 4) })}
+            className={`${selectClass} w-16 text-center`}
+            aria-label="Preview max seconds"
+          />
+        </label>
+        <label className="flex items-center justify-between gap-2">
+          <span>Gap between shots on the timeline (s)</span>
+          <input
+            type="number"
+            min={0}
+            max={10}
+            step={0.5}
+            value={settings.inter_shot_gap_seconds}
+            disabled={saving}
+            onChange={e => void update({ inter_shot_gap_seconds: Math.max(0, Number(e.target.value) || 0) })}
+            className={`${selectClass} w-16 text-center`}
+            aria-label="Gap between shots"
+          />
+        </label>
+        <label className="flex items-center justify-between gap-2 col-span-2">
+          <span>
+            Strict continuity <span className="text-zinc-600">— refuse to render shots with continuity warnings</span>
+          </span>
+          <input
+            type="checkbox"
+            checked={settings.strict_continuity}
+            disabled={saving}
+            onChange={e => void update({ strict_continuity: e.target.checked })}
+            aria-label="Strict continuity"
+          />
+        </label>
+      </div>
+    </div>
+  )
+}
+
 /**
  * VRAM-aware model manager: detects the GPU, states a compatibility verdict,
  * lists every model path with real on-disk sizes and per-model fit against
@@ -80,6 +194,7 @@ export function ModelsPanel() {
   const [skipTextEncoder, setSkipTextEncoder] = useState(false)
   const [skipDefaultApplied, setSkipDefaultApplied] = useState(false)
   const [note, setNote] = useState('')
+  const [removing, setRemoving] = useState<string | null>(null)
 
   const downloading = progress?.status === 'downloading'
 
@@ -110,6 +225,24 @@ export function ModelsPanel() {
     }, 1500)
     return () => clearInterval(interval)
   }, [refreshCapabilities])
+
+  const removeModel = useCallback(
+    async (model: FilmModelCapability) => {
+      if (!window.confirm(`Remove ${model.label} from disk? You can download it again later.`)) return
+      setRemoving(model.id)
+      setNote('')
+      try {
+        await filmApi.removeModel(model.id)
+        await refreshCapabilities()
+        setNote(`${model.label} removed`)
+      } catch (e) {
+        setNote(`Could not remove: ${e instanceof Error ? e.message : e}`)
+      } finally {
+        setRemoving(null)
+      }
+    },
+    [refreshCapabilities],
+  )
 
   const startDownload = useCallback(async () => {
     setStarting(true)
@@ -221,9 +354,51 @@ export function ModelsPanel() {
               </div>
               <FitBadge model={model} />
               <StateChip model={model} />
+              {model.execution === 'local' && model.downloaded && (
+                <button
+                  onClick={() => void removeModel(model)}
+                  disabled={downloading || removing === model.id}
+                  className="p-1 rounded text-zinc-600 hover:text-red-400 hover:bg-red-950/40 disabled:opacity-40"
+                  title="Remove this model from disk (re-download later to update)"
+                  aria-label={`Remove ${model.label}`}
+                >
+                  {removing === model.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                </button>
+              )}
             </div>
           ))}
         </div>
+
+        {/* Quality profiles for this GPU */}
+        {capabilities.profiles.length > 0 && (
+          <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-3 space-y-2">
+            <div className="flex items-center gap-2">
+              <Gauge className="h-4 w-4 text-violet-400" />
+              <span className="text-xs font-semibold text-white">Quality profiles</span>
+              <span className="text-[10px] text-zinc-600">final renders use the shot's profile, or the project default</span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+              {capabilities.profiles
+                .filter(p => p.id !== 'custom')
+                .map(profile => (
+                  <div
+                    key={profile.id}
+                    className={`rounded border p-2 ${profile.recommended ? 'border-violet-700 bg-violet-950/20' : 'border-zinc-800'}`}
+                  >
+                    <div className="flex items-center gap-1.5 text-xs text-zinc-200">
+                      {profile.label}
+                      <span className="text-[10px] text-zinc-500 font-mono">
+                        {profile.model} @ {profile.resolution}
+                      </span>
+                      {profile.recommended && <span className="ml-auto text-[10px] text-violet-300">recommended</span>}
+                      {profile.fits_gpu === false && <span className="ml-auto text-[10px] text-red-400">may not fit VRAM</span>}
+                    </div>
+                    <div className="text-[10px] text-zinc-500 mt-0.5">{profile.description}</div>
+                  </div>
+                ))}
+            </div>
+          </div>
+        )}
 
         {/* Download control */}
         {capabilities.execution_mode === 'local' && anyNotDownloaded && (
@@ -279,6 +454,12 @@ export function ModelsPanel() {
             {note && <p className="text-[11px] text-zinc-500">{note}</p>}
           </div>
         )}
+
+        {note && !(capabilities.execution_mode === 'local' && anyNotDownloaded) && (
+          <p className="text-[11px] text-zinc-500">{note}</p>
+        )}
+
+        <FilmRenderSettingsCard />
 
         <p className="text-[11px] text-zinc-600 leading-relaxed">{capabilities.vram_note}</p>
       </div>

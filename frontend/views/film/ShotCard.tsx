@@ -1,8 +1,9 @@
 import { useEffect, useState } from 'react'
 import { Aperture, Clapperboard, Clock, Copy, Play, Trash2, Users } from 'lucide-react'
+import { useFilm } from '../../contexts/FilmContext'
 import { filmMediaUrl, filmOutputUrl } from '../../lib/film-api'
 import type { FilmProject, FilmShot } from '../../types/film'
-import { SHOT_STATUS_META, framingLabel } from '../../types/film'
+import { CONTINUITY_LEVEL_META, SHOT_STATUS_META, framingLabel } from '../../types/film'
 
 interface ShotCardProps {
   film: FilmProject
@@ -62,6 +63,9 @@ export function ShotCard({
   onDrop,
 }: ShotCardProps) {
   const thumb = useShotThumb(film, shot)
+  const { continuityLevelFor } = useFilm()
+  const level = continuityLevelFor(shot.id)
+  const levelMeta = level ? CONTINUITY_LEVEL_META[level] : null
   const status = SHOT_STATUS_META[shot.status]
   const characterNames = shot.characters
     .map(c => film.assets.find(a => a.id === c.asset_id)?.name)
@@ -90,8 +94,15 @@ export function ShotCard({
         ) : (
           <Clapperboard className="h-7 w-7 text-zinc-700" />
         )}
-        <span className="absolute top-1.5 left-1.5 px-1.5 py-0.5 rounded text-[10px] font-medium bg-black/70 text-zinc-300">
+        <span className="absolute top-1.5 left-1.5 flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-black/70 text-zinc-300">
           {sceneNumber}.{shotNumber}
+          {levelMeta && level !== 'good' && (
+            <span
+              className={`inline-block h-1.5 w-1.5 rounded-full ${levelMeta.dot}`}
+              title={levelMeta.label}
+              aria-label={levelMeta.label}
+            />
+          )}
         </span>
         <span className={`absolute top-1.5 right-1.5 px-1.5 py-0.5 rounded text-[10px] font-medium ${status.className}`}>
           {status.label}

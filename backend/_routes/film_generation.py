@@ -14,6 +14,7 @@ from film.film_api_types import (
     FilmCapabilitiesResponse,
     FilmQueueResponse,
     GenerateShotRequest,
+    QueueControlResponse,
     QueueShotResponse,
 )
 from state import get_state_service
@@ -55,6 +56,30 @@ def route_film_queue_cancel(
     handler: AppHandler = Depends(get_state_service),
 ) -> FilmQueueResponse:
     return handler.film_generation.cancel_all()
+
+
+@router.post("/queue/pause", response_model=QueueControlResponse)
+def route_film_queue_pause(handler: AppHandler = Depends(get_state_service)) -> QueueControlResponse:
+    return QueueControlResponse(status="paused", queue=handler.film_generation.pause())
+
+
+@router.post("/queue/resume", response_model=QueueControlResponse)
+def route_film_queue_resume(handler: AppHandler = Depends(get_state_service)) -> QueueControlResponse:
+    return QueueControlResponse(status="resumed", queue=handler.film_generation.resume())
+
+
+@router.post("/queue/{shot_id}/cancel", response_model=QueueControlResponse)
+def route_film_queue_cancel_job(
+    shot_id: str, handler: AppHandler = Depends(get_state_service)
+) -> QueueControlResponse:
+    return QueueControlResponse(status="cancelled", queue=handler.film_generation.cancel_job(shot_id))
+
+
+@router.post("/queue/{shot_id}/prioritize", response_model=QueueControlResponse)
+def route_film_queue_prioritize(
+    shot_id: str, handler: AppHandler = Depends(get_state_service)
+) -> QueueControlResponse:
+    return QueueControlResponse(status="prioritized", queue=handler.film_generation.prioritize(shot_id))
 
 
 @router.get("/capabilities", response_model=FilmCapabilitiesResponse)

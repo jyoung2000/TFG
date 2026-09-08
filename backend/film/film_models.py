@@ -257,7 +257,9 @@ class ShotGenerationSettings(BaseModel):
     aspect_ratio: Literal["16:9", "9:16"] = "16:9"
     use_capture_as_reference: bool = True
     continue_from_previous: bool = False
-    quality_preset: Literal["fast_preview", "balanced", "quality", "custom"] = "balanced"
+    # "project" inherits FilmProjectSettings.default_quality_preset; an explicit
+    # model/resolution on the shot always wins (treated as custom).
+    quality_preset: Literal["project", "fast_preview", "balanced", "quality", "custom"] = "project"
 
 
 class ShotVersion(BaseModel):
@@ -364,6 +366,9 @@ class FilmProjectSettings(BaseModel):
     strict_continuity: bool = False
     preview_resolution: str = "540p"
     preview_max_seconds: float = 4.0
+    # Project-wide default for shots whose quality_preset is left on the
+    # default ("balanced"); see FilmGenerationHandler.QUALITY_PROFILES.
+    default_quality_preset: Literal["fast_preview", "balanced", "quality", "custom"] = "balanced"
 
 
 class FilmProject(BaseModel):

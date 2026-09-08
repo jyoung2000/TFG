@@ -34,12 +34,25 @@ For each queued job a `ShotVersion` records everything reproducible:
   A per-shot seed rides through the host's locked-seed mechanism for exactly
   that job, then the user's own seed settings are restored.
 
-## Preview vs final
+## Preview vs final, quality profiles
 
 - **Preview**: fastest model, `settings.preview_resolution` (default 540p),
   duration clamped to `settings.preview_max_seconds` (default 4 s).
-- **Final**: the shot's model/resolution (or project defaults) at full shot
-  duration.
+- **Final**: resolved from the shot's **quality profile** at full shot
+  duration:
+
+| Profile | Model | Resolution | Recommended for |
+|---|---|---|---|
+| `fast_preview` | fast | 540p | < 8 GB VRAM |
+| `balanced` | fast | 720p | 8–16 GB (e.g. RTX 4070 12 GB) — the project default |
+| `quality` | pro | 1080p | ≥ 16 GB |
+| `custom` | the shot's own `generation.model` / `resolution` | | |
+
+  A shot's `generation.quality_preset` defaults to `project`, which inherits
+  `settings.default_quality_preset`. An explicit `model` or `resolution` on
+  the shot always wins (treated as custom). `GET /api/film/capabilities`
+  returns the profiles with `recommended` (by detected VRAM) and `fits_gpu`;
+  the Models tab lists them and the shot drawer offers the picker.
 
 Versions are append-only (`v1, v2, …` with kind/status/prompt/model/seed/
 capture/output/error/wardrobe-snapshot/timestamp). Completed versions can be
@@ -49,11 +62,32 @@ Retry action. Nothing is ever silently overwritten.
 ## Queue semantics
 
 One background worker drains the film queue sequentially (the host has a
-single generation slot); `GET /api/film/queue` reports active + pending, and
-`POST /api/film/queue/cancel` drains pending (marking their versions
-cancelled) and cancels the active job through the host's cancel path. Every
-state transition is persisted to `project.json` first, so a backend restart
-leaves shots in `ready`/`failed` states instead of losing them.
+single generation slot). Every state transition is persisted to
+`project.json` first.
+
+| Route | Effect |
+|---|---|
+| `GET /api/film/queue` | `active`, `pending[]`, `paused`, host `progress` % and `phase` for the active job |
+| `POST /api/film/queue/pause` | stop starting new jobs (the active one finishes) |
+| `POST /api/film/queue/resume` | restart the worker |
+| `POST /api/film/queue/{shotId}/cancel` | drop a pending job (version → `cancelled`) or cancel the active one through the host's cancel path |
+| `POST /api/film/queue/{shotId}/prioritize` | move a pending job to the front |
+| `POST /api/film/queue/cancel` | cancel everything |
+
+**Restart recovery**: on startup `FilmGenerationHandler.recover_interrupted_jobs()`
+scans every film project and turns versions left `queued`/`generating` by a
+dead process into `failed` ("Interrupted: the app restarted …") with the shot
+back in `ready`/`composed` — no shot can stay stuck in *generating*. The
+storyboard header shows the active job with progress, a pending list with
+per-job cancel/prioritize, and Pause/Resume.
+
+## Model management
+
+Besides download (`POST /api/models/download`), `DELETE /api/models/{type}`
+removes a downloaded local model (`checkpoint | upsampler | text_encoder |
+zit`) so it can be re-downloaded (update) or freed; refused while a download
+or generation is running, and in WanGP mode (models live in the WanGP
+checkout). The Models tab offers the remove action per downloaded model.
 
 ## Model capabilities (`GET /api/film/capabilities`)
 

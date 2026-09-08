@@ -3,6 +3,7 @@
 import { backendFetch, getBackendCredentials } from './backend'
 import type {
   CompositionScene,
+  ContinuityReport,
   ContinuityWarning,
   DirectorChatMessage,
   DirectorChatResponse,
@@ -15,6 +16,7 @@ import type {
   FilmBuildPlan,
   OpenRouterModelInfo,
   OpenRouterValidation,
+  ProjectContinuity,
   FilmAssetKind,
   FilmCapabilities,
   FilmPose,
@@ -220,15 +222,37 @@ export const filmApi = {
     }),
 
   continuity: (projectId: string, shotId: string) =>
-    request<{ warnings: ContinuityWarning[] }>(
-      `/api/film/projects/${enc(projectId)}/continuity/${enc(shotId)}`,
-    ).then(r => r.warnings),
+    request<ContinuityReport>(`/api/film/projects/${enc(projectId)}/continuity/${enc(shotId)}`),
+
+  projectContinuity: (projectId: string) =>
+    request<ProjectContinuity>(`/api/film/projects/${enc(projectId)}/continuity`),
+
+  fixContinuity: (projectId: string, shotId: string, kind: string, subjectId = '') =>
+    request<{ fixed: boolean; message: string; report: ContinuityReport; shot: FilmShot }>(
+      `/api/film/projects/${enc(projectId)}/continuity/${enc(shotId)}/fix`,
+      { method: 'POST', body: JSON.stringify({ kind, subject_id: subjectId }) },
+    ),
 
   queue: () => request<FilmQueue>('/api/film/queue'),
 
   cancelQueue: () => request<FilmQueue>('/api/film/queue/cancel', { method: 'POST' }),
 
+  pauseQueue: () =>
+    request<{ status: string; queue: FilmQueue }>('/api/film/queue/pause', { method: 'POST' }).then(r => r.queue),
+
+  resumeQueue: () =>
+    request<{ status: string; queue: FilmQueue }>('/api/film/queue/resume', { method: 'POST' }).then(r => r.queue),
+
+  cancelJob: (shotId: string) =>
+    request<{ status: string; queue: FilmQueue }>(`/api/film/queue/${enc(shotId)}/cancel`, { method: 'POST' }).then(r => r.queue),
+
+  prioritizeJob: (shotId: string) =>
+    request<{ status: string; queue: FilmQueue }>(`/api/film/queue/${enc(shotId)}/prioritize`, { method: 'POST' }).then(r => r.queue),
+
   capabilities: () => request<FilmCapabilities>('/api/film/capabilities'),
+
+  removeModel: (modelType: string) =>
+    request<{ name: string; downloaded: boolean }>(`/api/models/${enc(modelType)}`, { method: 'DELETE' }),
 
   directorCommand: (projectId: string, name: string, params: Record<string, unknown>) =>
     request<{ results: DirectorCommandResult[] }>(

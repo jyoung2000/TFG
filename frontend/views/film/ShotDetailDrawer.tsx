@@ -23,13 +23,15 @@ import { Button } from '../../components/ui/button'
 import type { Asset, TimelineClip } from '../../types/project'
 import { DEFAULT_COLOR_CORRECTION } from '../../types/project'
 import type {
+  ContinuityLevel,
   ContinuityWarning,
   FilmScene,
   FilmShot,
+  QualityPreset,
   ShotVersion,
   VersionKind,
 } from '../../types/film'
-import { CAMERA_MOVES, SHOT_STATUS_META, framingLabel } from '../../types/film'
+import { CAMERA_MOVES, CONTINUITY_LEVEL_META, SHOT_STATUS_META, framingLabel } from '../../types/film'
 
 interface ShotDetailDrawerProps {
   scene: FilmScene
@@ -65,6 +67,8 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
     camera_move: shot.camera_move,
   })
   const [warnings, setWarnings] = useState<ContinuityWarning[]>([])
+  const [continuityLevel, setContinuityLevel] = useState<ContinuityLevel>('good')
+  const [fixNote, setFixNote] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
   const [note, setNote] = useState('')
   const [captureUrl, setCaptureUrl] = useState<string | null>(null)
@@ -90,7 +94,10 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
     void filmApi
       .continuity(projectId, shot.id)
       .then(next => {
-        if (!cancelled) setWarnings(next)
+        if (!cancelled) {
+          setWarnings(next.warnings)
+          setContinuityLevel(next.level)
+        }
       })
       .catch(() => {})
     return () => {
@@ -152,6 +159,44 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
     }
   }, [projectId, scene.id, shot.id, shot.visual_prompt, draft, refresh])
 
+  const fixWarning = useCallback(
+    async (warning: ContinuityWarning) => {
+      if (!projectId) return
+      setBusy('fix')
+      setFixNote('')
+      try {
+        const result = await filmApi.fixContinuity(projectId, shot.id, warning.kind, warning.subject_id)
+        setWarnings(result.report.warnings)
+        setContinuityLevel(result.report.level)
+        setFixNote(result.message)
+        await refresh()
+      } catch (e) {
+        setFixNote(`Fix failed: ${e instanceof Error ? e.message : e}`)
+      } finally {
+        setBusy(null)
+      }
+    },
+    [projectId, shot.id, refresh],
+  )
+
+  const setQualityPreset = useCallback(
+    async (preset: QualityPreset) => {
+      if (!projectId) return
+      setBusy('preset')
+      try {
+        await filmApi.updateShot(projectId, scene.id, shot.id, {
+          generation: { ...shot.generation, quality_preset: preset },
+        })
+        await refresh()
+      } catch (e) {
+        setNote(`Preset failed: ${e instanceof Error ? e.message : e}`)
+      } finally {
+        setBusy(null)
+      }
+    },
+    [projectId, scene.id, shot.id, shot.generation, refresh],
+  )
+
   const refinePrompt = useCallback(async () => {
     if (!projectId) return
     setBusy('refine')
@@ -188,6 +233,12 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
       try {
         const result = await filmApi.generateShot(projectId, scene.id, shot.id, kind)
         setWarnings(result.warnings)
+        setContinuityLevel(
+          result.warnings.reduce<ContinuityLevel>((worst, w) => {
+            const rank: Record<ContinuityLevel, number> = { good: 0, minor: 1, significant: 2, broken: 3 }
+            return rank[w.severity] > rank[worst] ? w.severity : worst
+          }, 'good'),
+        )
         setNote(kind === 'preview' ? 'Preview queued' : 'Final queued')
         await refresh()
       } catch (e) {
@@ -344,17 +395,46 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
 
         <div className="text-[11px] text-zinc-500">{framingLabel(shot.framing)}</div>
 
-        {/* Continuity warnings */}
-        {warnings.length > 0 && (
-          <div className="rounded border border-amber-900/60 bg-amber-950/30 p-2 space-y-1">
-            {warnings.map((warning, index) => (
-              <div key={index} className="flex items-start gap-1.5 text-[11px] text-amber-300">
-                <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0" />
-                {warning.message}
-              </div>
-            ))}
+        {/* Continuity level + warnings with fixes */}
+        <div
+          className={`rounded border p-2 space-y-1.5 ${
+            continuityLevel === 'good'
+              ? 'border-emerald-900/50 bg-emerald-950/20'
+              : continuityLevel === 'minor'
+                ? 'border-amber-900/60 bg-amber-950/30'
+                : continuityLevel === 'significant'
+                  ? 'border-orange-900/60 bg-orange-950/30'
+                  : 'border-red-900/60 bg-red-950/30'
+          }`}
+          role="status"
+        >
+          <div className={`flex items-center gap-1.5 text-[11px] font-medium ${CONTINUITY_LEVEL_META[continuityLevel].text}`}>
+            <span className={`inline-block h-2 w-2 rounded-full ${CONTINUITY_LEVEL_META[continuityLevel].dot}`} />
+            {CONTINUITY_LEVEL_META[continuityLevel].label}
+            <span className="ml-auto text-[10px] uppercase tracking-wide opacity-70">{continuityLevel}</span>
           </div>
-        )}
+          {warnings.map((warning, index) => (
+            <div key={index} className="text-[11px] text-zinc-300">
+              <div className="flex items-start gap-1.5">
+                <AlertTriangle className="h-3 w-3 mt-0.5 shrink-0 text-amber-300" />
+                <span className="flex-1">{warning.message}</span>
+              </div>
+              <div className="flex items-center gap-2 ml-4.5 pl-[18px] mt-0.5">
+                <span className="text-[10px] text-zinc-500 flex-1">{warning.fix}</span>
+                {warning.auto_fixable && (
+                  <button
+                    onClick={() => void fixWarning(warning)}
+                    disabled={busy !== null}
+                    className="px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 text-[10px] text-emerald-300"
+                  >
+                    {busy === 'fix' ? 'Fixing…' : 'Fix'}
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+          {fixNote && <div className="text-[10px] text-zinc-400">{fixNote}</div>}
+        </div>
 
         {/* Fields */}
         <div className="space-y-2">
@@ -455,6 +535,29 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
                 <span className="text-amber-400"> · VRAM may be insufficient (see Models)</span>
               )}
             </div>
+          )}
+          {capabilities && capabilities.profiles.length > 0 && (
+            <Row label="Quality profile (final renders)">
+              <select
+                className={inputClass}
+                value={shot.generation.quality_preset}
+                disabled={busy !== null}
+                onChange={e => void setQualityPreset(e.target.value as QualityPreset)}
+                aria-label="Quality profile"
+              >
+                <option value="project">
+                  Project default ({film?.settings.default_quality_preset ?? 'balanced'})
+                </option>
+                {capabilities.profiles.map(profile => (
+                  <option key={profile.id} value={profile.id}>
+                    {profile.label}
+                    {profile.model ? ` · ${profile.model} @ ${profile.resolution}` : ''}
+                    {profile.recommended ? ' · recommended for this GPU' : ''}
+                    {profile.fits_gpu === false ? ' · may not fit VRAM' : ''}
+                  </option>
+                ))}
+              </select>
+            </Row>
           )}
           <div className="grid grid-cols-2 gap-2">
             <Button

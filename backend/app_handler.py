@@ -261,6 +261,7 @@ class AppHandler:
 
         self.downloads.cleanup_downloading_dir()
         self.models.refresh_available_files()
+        self.film_generation.recover_interrupted_jobs()
 
 
 @dataclass

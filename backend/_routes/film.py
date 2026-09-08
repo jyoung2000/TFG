@@ -14,9 +14,12 @@ from film.film_api_types import (
     CreateSceneRequest,
     CreateShotRequest,
     FilmProjectResponse,
+    FixContinuityRequest,
+    FixContinuityResponse,
     ImportGenerationRequest,
     ImportGenerationResponse,
     PoseResponse,
+    ProjectContinuityResponse,
     PromoteVersionResponse,
     ReorderRequest,
     SavePoseRequest,
@@ -283,7 +286,25 @@ def route_shot_continuity(
     shot_id: str,
     handler: AppHandler = Depends(get_state_service),
 ) -> ContinuityResponse:
-    return ContinuityResponse(warnings=handler.film.continuity(project_id, shot_id))
+    report = handler.film.continuity_report(project_id, shot_id)
+    return ContinuityResponse(level=report.level, warnings=report.warnings)
+
+
+@router.get("/projects/{project_id}/continuity", response_model=ProjectContinuityResponse)
+def route_project_continuity(
+    project_id: str, handler: AppHandler = Depends(get_state_service)
+) -> ProjectContinuityResponse:
+    return handler.film.project_continuity(project_id)
+
+
+@router.post("/projects/{project_id}/continuity/{shot_id}/fix", response_model=FixContinuityResponse)
+def route_fix_continuity(
+    project_id: str,
+    shot_id: str,
+    req: FixContinuityRequest,
+    handler: AppHandler = Depends(get_state_service),
+) -> FixContinuityResponse:
+    return handler.film.fix_continuity(project_id, shot_id, req)
 
 
 @router.get("/projects/{project_id}/media")
