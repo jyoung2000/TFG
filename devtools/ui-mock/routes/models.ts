@@ -8,7 +8,12 @@
  */
 
 import type { FilmCapabilities, FilmModelCapability, FilmQualityProfile } from '../../../frontend/types/film'
-import type { LibraryModel, LibrarySourceStatus, ModelSearchResponse } from '../../../frontend/types/models'
+import type {
+  LibraryModel,
+  LibrarySourceStatus,
+  ModelSearchResponse,
+  ProviderTestResult,
+} from '../../../frontend/types/models'
 import { MockHttpError, type Router } from '../http'
 import { EMPTY_LIBRARY_DOWNLOAD, type MockState, type Store } from '../state'
 
@@ -575,6 +580,46 @@ export function registerModelRoutes(router: Router, store: Store): void {
       return state.libraryDownload
     }),
   )
+
+  // Same three-state answer the real backend gives: it worked, it failed, or
+  // this provider publishes no free way to check a key.
+  router.post('/api/models/library/providers/:provider/test', req => {
+    const provider = req.params.provider
+    const testable = ['openrouter', 'anthropic', 'xai', 'gemini', 'openai_compatible', 'fal', 'wavespeed', 'replicate']
+    if (!testable.includes(provider)) throw new MockHttpError(400, `Unknown provider: ${provider}`)
+
+    const state = store.data
+    const label = SOURCE_LABELS[provider] ?? provider
+    const configured = providerConfigured(state, provider)
+    const result: ProviderTestResult = {
+      provider,
+      label,
+      configured,
+      ok: false,
+      checked: false,
+      message: '',
+      models_found: 0,
+    }
+    if (!configured) {
+      result.message =
+        provider === 'openai_compatible' ? 'No endpoint set yet — add the base URL below.' : 'No API key saved yet.'
+      return result
+    }
+    if (provider === 'fal' || provider === 'wavespeed') {
+      result.message = `Key saved. ${label} publishes no free endpoint to check it against, so it is verified on your first render.`
+      return result
+    }
+    result.checked = true
+    result.ok = true
+    if (provider === 'replicate') {
+      result.message = 'Connected. The key is valid.'
+      return result
+    }
+    const count = (TEXT_HOSTED[provider] ?? ['llama3.1:8b', 'qwen2.5:14b']).length
+    result.models_found = count
+    result.message = `Connected. ${count} model${count === 1 ? '' : 's'} available.`
+    return result
+  })
 
   router.post('/api/models/library/remember', req =>
     store.mutate(state => {

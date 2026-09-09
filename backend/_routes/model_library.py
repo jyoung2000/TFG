@@ -8,6 +8,7 @@ from api_types import (
     LibraryDownloadRequest,
     LibraryDownloadStatus,
     ModelSearchResponse,
+    ProviderTestResult,
     StatusResponse,
 )
 from state import get_state_service
@@ -57,6 +58,15 @@ def route_cancel_library_download(
     handler: AppHandler = Depends(get_state_service),
 ) -> LibraryDownloadStatus:
     return handler.model_library.cancel_download()
+
+
+@router.post("/providers/{provider}/test", response_model=ProviderTestResult)
+def route_test_provider(
+    provider: str,
+    handler: AppHandler = Depends(get_state_service),
+) -> ProviderTestResult:
+    """Check a provider is really reachable with the key that is stored."""
+    return handler.model_library.test_provider(provider)
 
 
 @router.post("/remember", response_model=StatusResponse)

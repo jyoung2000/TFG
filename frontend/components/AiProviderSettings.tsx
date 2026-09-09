@@ -1,12 +1,80 @@
 import { useCallback, useState } from 'react'
-import { Check, ExternalLink, KeyRound, Loader2, RefreshCw, ShieldCheck, Trash2 } from 'lucide-react'
+import { Check, ExternalLink, KeyRound, Loader2, PlugZap, RefreshCw, ShieldCheck, Trash2 } from 'lucide-react'
 import { useAppSettings, type ClearableKeyProvider } from '../contexts/AppSettingsContext'
 import { filmApi } from '../lib/film-api'
+import { modelLibraryApi } from '../lib/model-library-api'
 import type { OpenRouterModelInfo } from '../types/film'
-import { MEDIA_PROVIDER_LABELS, PROVIDER_DOC_URLS, type MediaProviderId } from '../types/models'
+import {
+  MEDIA_PROVIDER_LABELS,
+  PROVIDER_DOC_URLS,
+  type MediaProviderId,
+  type ProviderTestResult,
+} from '../types/models'
 
 const inputClass =
   'w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-1.5 text-xs text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-violet-600'
+
+/**
+ * Asks the backend to actually reach the provider with the stored key.
+ *
+ * The result distinguishes three states rather than a green tick: it worked, it
+ * failed and here is why, or this provider publishes no free way to check a key
+ * so nothing was verified. That last one matters — fal and WaveSpeed can only
+ * be proven by paying for a render.
+ */
+export function TestConnectionButton({ provider, label }: { provider: string; label: string }) {
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState<ProviderTestResult | null>(null)
+
+  const run = useCallback(async () => {
+    setBusy(true)
+    setResult(null)
+    try {
+      setResult(await modelLibraryApi.testProvider(provider))
+    } catch (e) {
+      setResult({
+        provider,
+        label,
+        configured: true,
+        ok: false,
+        checked: true,
+        message: e instanceof Error ? e.message : String(e),
+        models_found: 0,
+      })
+    } finally {
+      setBusy(false)
+    }
+  }, [provider, label])
+
+  const tone = !result
+    ? ''
+    : result.ok
+      ? 'text-emerald-300'
+      : result.checked
+        ? 'text-red-300'
+        : 'text-amber-300'
+
+  return (
+    <div className="flex items-start gap-2">
+      <button
+        onClick={() => void run()}
+        disabled={busy}
+        // Several cards share this label, so name each one for assistive tech.
+        aria-label={`Test the ${label} connection`}
+        className="flex items-center gap-1 px-2 py-1.5 rounded bg-zinc-800 border border-zinc-700 text-[11px] text-zinc-300 hover:bg-zinc-700 disabled:opacity-40 whitespace-nowrap"
+        title={`Check that ${label} answers with the key stored here`}
+      >
+        {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <PlugZap className="h-3 w-3" />}
+        Test connection
+      </button>
+      {result && (
+        <p role="status" className={`text-[11px] leading-tight pt-1 ${tone}`}>
+          {result.message}
+        </p>
+      )}
+    </div>
+  )
+}
 
 /**
  * One hosted provider: a write-only key, the model id it should use, and a
@@ -151,6 +219,7 @@ function TextProviderCard({
           Models
         </button>
       </div>
+      <TestConnectionButton provider={provider} label={title} />
       {note && <div className="text-[11px] text-zinc-400">{note}</div>}
     </div>
   )
@@ -188,6 +257,7 @@ function MediaProviderCard({
   }, [keyInput, keyProvider, saveApiKey])
 
   return (
+    <div className="space-y-1.5">
     <div className="flex items-center gap-2">
       <span className="w-24 text-[11px] text-zinc-400 shrink-0">{MEDIA_PROVIDER_LABELS[provider]}</span>
       <input
@@ -228,6 +298,12 @@ function MediaProviderCard({
         catalog
       </a>
       {note && <span className="text-[10px] text-zinc-500 truncate">{note}</span>}
+    </div>
+    {hasKey && (
+      <div className="pl-[6.5rem]">
+        <TestConnectionButton provider={provider} label={MEDIA_PROVIDER_LABELS[provider]} />
+      </div>
+    )}
     </div>
   )
 }

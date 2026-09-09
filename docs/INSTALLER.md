@@ -19,7 +19,7 @@ success; see *Verification status* and `RELEASE_CHECKLIST.md`.
 | ffmpeg for export | ✔ (`ffmpeg-static`) | ✔ | ✔ |
 
 **NOT bundled** (downloaded at runtime): model weights (large, from Hugging
-Face; the Models tab shows what fits the GPU and downloads only what is
+Face; Settings → AI Models shows what fits the GPU and downloads only what is
 missing).
 
 The embedded Python is **fully isolated** from the target system's Python —

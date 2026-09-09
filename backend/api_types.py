@@ -330,6 +330,22 @@ class ModelSearchResponse(BaseModel):
     offline_note: str = ""
 
 
+class ProviderTestResult(BaseModel):
+    """Whether a provider is actually usable with the key that is stored."""
+
+    provider: str
+    label: str
+    configured: bool
+    # True only when a real request was made and it succeeded.
+    ok: bool = False
+    # False when this provider offers no way to check a key without starting a
+    # paid generation — the UI says so instead of implying it verified anything.
+    checked: bool = False
+    message: str = ""
+    # Models the check saw, when the check was a catalog listing.
+    models_found: int = 0
+
+
 class LibraryDownloadRequest(BaseModel):
     provider: str
     model_id: str

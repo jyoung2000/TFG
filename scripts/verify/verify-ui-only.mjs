@@ -173,24 +173,40 @@ try {
   await page.getByRole('button', { name: 'Close shot details' }).click()
 
   // ---- 7. Storyboard sub-tabs ----
-  for (const [tab, marker] of [['Assets', 'Mara'], ['Script', 'RELAY STATION'], ['Models', 'Model Library']]) {
+  for (const [tab, marker] of [['Assets', 'Mara'], ['Script', 'RELAY STATION']]) {
     await page.getByRole('tab', { name: tab, exact: true }).click()
     await page.waitForTimeout(1500)
     log(`${tab} tab renders`, await page.getByText(marker, { exact: false }).first().isVisible())
     await snap(`05-${tab.toLowerCase()}`)
   }
+  log(
+    'Models are configured in Settings, not in the filmmaking workflow',
+    (await page.getByRole('tab', { name: 'Models', exact: true }).count()) === 0,
+  )
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('open-settings', { detail: { tab: 'aiModels' } })))
+  await page.waitForTimeout(2000)
+  log('Settings → AI Models holds the library and the installed models', await page.getByRole('heading', { name: 'Model Library' }).isVisible())
+  await snap('05-ai-models')
+  await page.keyboard.press('Escape')
+  await page.waitForTimeout(600)
 
   // ---- 8. Model Library ----
   const library = await api('/api/models/library')
   log('Model Library lists local and hosted models', library.json.total >= 10, `${library.json.total} models`)
   log('Offline readiness is reported', typeof library.json.offline_ready === 'boolean' && library.json.offline_note.length > 0)
 
-  // ---- 9. Settings ----
+  // ---- 9. Settings: connect, configure and test a provider ----
   await page.getByRole('tab', { name: 'Storyboard', exact: true }).click()
   await page.waitForTimeout(800)
-  await page.evaluate(() => window.dispatchEvent(new CustomEvent('open-settings', { detail: { tab: 'apiKeys' } })))
-  await page.waitForTimeout(1200)
-  log('Settings open with the provider cards', await page.getByLabel('OpenRouter API key').isVisible())
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('open-settings', { detail: { tab: 'aiModels' } })))
+  await page.waitForTimeout(1500)
+  log('AI Models opens with the provider cards', await page.getByLabel('OpenRouter API key').isVisible())
+  // Every provider can be tested from here, and an unconfigured one says so
+  // rather than pretending it checked something.
+  await page.getByRole('button', { name: 'Test the Claude (Anthropic) connection' }).click()
+  await page.waitForTimeout(1500)
+  const testMessage = await page.locator('[role="status"]').first().innerText().catch(() => '')
+  log('Testing an unconfigured provider reports no key, not a false pass', /no api key/i.test(testMessage), testMessage.slice(0, 60))
   await snap('06-settings')
   await page.keyboard.press('Escape')
 

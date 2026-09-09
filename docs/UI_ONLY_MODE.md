@@ -4,15 +4,20 @@ Work on the interface without installing the app. Two ways in.
 
 ## A file you can double-click
 
+**`ui-preview/ltx-desktop-ui.html` is committed to the repo** — download it and
+open it. Nothing to build.
+
 ```bash
-pnpm build:ui        # writes dist-ui/ltx-desktop-ui.html
+pnpm build:ui        # rebuilds that file from source
 ```
 
 One self-contained HTML file (~1.8 MB). Open it from your file manager, mail
 it, drop it in a Slack thread, put it on a USB stick — it runs from `file://`
 with **nothing** installed and no server anywhere, because the mock backend
-runs in the tab. Use this to show the UI to someone, or to look at it on a
-machine that has none of the toolchain.
+runs in the tab.
+
+Because it is committed, it can fall behind the source. Rebuild it in any
+commit that changes the interface.
 
 Its state lives in that browser's `localStorage`, so your changes survive a
 reload. To start over, clear site data for the page, or open it in a private
@@ -148,7 +153,7 @@ pnpm dev:ui
 node scripts/verify/verify-ui-only.mjs
 
 pnpm build:ui
-UI_ONLY_URL=file://$PWD/dist-ui/ltx-desktop-ui.html node scripts/verify/verify-ui-only.mjs
+UI_ONLY_URL=file://$PWD/ui-preview/ltx-desktop-ui.html node scripts/verify/verify-ui-only.mjs
 ```
 
 ## Adding an endpoint

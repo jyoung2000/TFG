@@ -179,7 +179,7 @@ export function OpenRouterSettings() {
                 className="flex items-center gap-1 text-xs text-zinc-300 hover:text-white px-2 py-1 rounded bg-zinc-800 border border-zinc-700"
               >
                 {busy === 'validate' ? <Loader2 className="h-3 w-3 animate-spin" /> : <ShieldCheck className="h-3 w-3" />}
-                Test key
+                Test connection
               </button>
               {keySource === 'settings' && (
                 <button

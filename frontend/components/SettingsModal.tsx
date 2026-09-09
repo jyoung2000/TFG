@@ -1,12 +1,11 @@
-import { AlertCircle, Check, Download, Film, Folder, Info, KeyRound, Settings, Sliders, Sparkles, X, Zap } from 'lucide-react'
+import { AlertCircle, Boxes, Check, Download, Film, Folder, Info, KeyRound, Settings, Sliders, Sparkles, X, Zap } from 'lucide-react'
 import React, { useEffect, useRef, useState } from 'react'
 import { Button } from './ui/button'
 import { useAppSettings, type AppSettings } from '../contexts/AppSettingsContext'
 import { backendFetch } from '../lib/backend'
 import { logger } from '../lib/logger'
 import { ApiKeyHelperRow, LtxApiKeyInput, LtxApiKeyHelperRow } from './LtxApiKeyInput'
-import { OpenRouterSettings } from './OpenRouterSettings'
-import { AiProviderSettings } from './AiProviderSettings'
+import { AiModelsSettings } from './AiModelsSettings'
 
 interface TextEncoderStatus {
   downloaded: boolean
@@ -20,10 +19,10 @@ interface SettingsModalProps {
   initialTab?: TabId
 }
 
-type TabId = 'general' | 'apiKeys' | 'inference' | 'promptEnhancer' | 'about'
+type TabId = 'general' | 'aiModels' | 'apiKeys' | 'inference' | 'promptEnhancer' | 'about'
 
 export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProps) {
-  const { settings, updateSettings, saveLtxApiKey, saveFalApiKey, saveGeminiApiKey, clearApiKey, forceApiGenerations } = useAppSettings()
+  const { settings, updateSettings, saveLtxApiKey, saveFalApiKey, forceApiGenerations } = useAppSettings()
   const onSettingsChange = (next: AppSettings) => updateSettings(next)
   const [activeTab, setActiveTab] = useState<TabId>('general')
   const [ltxApiKeyInput, setLtxApiKeyInput] = useState('')
@@ -31,8 +30,6 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
   const [focusLtxApiKeyInputOnTabChange, setFocusLtxApiKeyInputOnTabChange] = useState(false)
   const [falApiKeyInput, setFalApiKeyInput] = useState('')
   const falApiKeyInputRef = useRef<HTMLInputElement>(null)
-  const [geminiApiKeyInput, setGeminiApiKeyInput] = useState('')
-  const geminiApiKeyInputRef = useRef<HTMLInputElement>(null)
   const [textEncoderStatus, setTextEncoderStatus] = useState<TextEncoderStatus | null>(null)
   const [isDownloading, setIsDownloading] = useState(false)
   const [downloadError, setDownloadError] = useState<string | null>(null)
@@ -45,6 +42,15 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
   const [showModelLicense, setShowModelLicense] = useState(false)
   const [analyticsEnabled, setAnalyticsEnabled] = useState(false)
   const [projectAssetsPath, setProjectAssetsPath] = useState('')
+
+  useEffect(() => {
+    if (!isOpen) return
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [isOpen, onClose])
 
   // Sync active tab with initialTab prop when modal opens
   useEffect(() => {
@@ -268,6 +274,7 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
 
   const tabs = [
     { id: 'general' as TabId, label: 'General', icon: Settings },
+    { id: 'aiModels' as TabId, label: 'AI Models', icon: Boxes },
     { id: 'apiKeys' as TabId, label: 'API Keys', icon: KeyRound },
     { id: 'inference' as TabId, label: 'Inference', icon: Sliders },
     { id: 'promptEnhancer' as TabId, label: 'Prompt Enhancer', icon: Sparkles },
@@ -294,6 +301,7 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
             variant="ghost"
             size="icon"
             onClick={onClose}
+            aria-label="Close settings"
             className="h-8 w-8 text-zinc-400 hover:text-white hover:bg-zinc-800"
           >
             <X className="h-4 w-4" />
@@ -872,93 +880,21 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
                 </div>
               </div>
 
-              <OpenRouterSettings />
-
-              <AiProviderSettings />
-
-              {/* Gemini API Key Section */}
-              <div className="space-y-4 pt-4 border-t border-zinc-800">
-                <div className="flex items-center gap-2">
-                  <Sparkles className="h-4 w-4 text-purple-400" />
-                  <h3 className="text-sm font-semibold text-white">Gemini API</h3>
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400">Optional</span>
-                </div>
-
-                <p className="text-xs text-zinc-500 leading-relaxed">
-                  Alternative AI Director provider, also used for prompt suggestions when filling timeline gaps.
-                  Stored by the local backend only.
-                </p>
-
-                <div className="bg-zinc-800/50 rounded-lg p-4 space-y-3">
-                  <div className="flex gap-2">
-                    <input
-                      ref={geminiApiKeyInputRef}
-                      type="password"
-                      value={geminiApiKeyInput}
-                      onChange={(e) => setGeminiApiKeyInput(e.target.value)}
-                      placeholder={settings.hasGeminiApiKey ? 'Enter new key to replace...' : 'Enter your Gemini API key...'}
-                      onKeyDown={(e) => e.stopPropagation()}
-                      aria-label="Gemini API key"
-                      autoComplete="off"
-                      className="flex-1 px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-sm text-white placeholder-zinc-500 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                    />
-                    <button
-                      onClick={() => {
-                        const trimmed = geminiApiKeyInput.trim()
-                        if (!trimmed) return
-                        void saveGeminiApiKey(trimmed)
-                        setGeminiApiKeyInput('')
-                      }}
-                      disabled={!geminiApiKeyInput.trim()}
-                      className="px-3 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-500 disabled:bg-zinc-700 disabled:text-zinc-500 disabled:cursor-not-allowed transition-colors whitespace-nowrap"
-                    >
-                      Save Key
-                    </button>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <div className={`text-xs px-2 py-1 rounded inline-flex items-center gap-1.5 ${
-                      settings.hasGeminiApiKey
-                        ? 'bg-green-500/10 text-green-400'
-                        : 'bg-amber-500/10 text-amber-400'
-                    }`}>
-                      {settings.hasGeminiApiKey ? (
-                        <>
-                          <Check className="h-3 w-3" />
-                          Key configured
-                        </>
-                      ) : (
-                        <>
-                          <AlertCircle className="h-3 w-3" />
-                          Optional
-                        </>
-                      )}
-                    </div>
-                    {settings.hasGeminiApiKey && (
-                      <button
-                        onClick={() => {
-                          if (window.confirm('Remove the stored Gemini API key?')) void clearApiKey('gemini')
-                        }}
-                        className="text-xs text-zinc-400 hover:text-red-300"
-                      >
-                        Remove key
-                      </button>
-                    )}
-                  </div>
-                  <div className="flex items-center gap-2 text-xs">
-                    <a
-                      href="https://aistudio.google.com/app/apikey"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-blue-400 hover:text-blue-300 transition-colors underline underline-offset-2"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      Get Gemini API key →
-                    </a>
-                  </div>
-                </div>
+              <div className="rounded-lg border border-zinc-800 bg-zinc-900/60 p-3 text-xs text-zinc-400">
+                Connecting, configuring and testing AI models now lives in{' '}
+                <button
+                  onClick={() => setActiveTab('aiModels')}
+                  className="text-violet-300 hover:text-violet-200 underline underline-offset-2"
+                >
+                  Settings → AI Models
+                </button>
+                .
               </div>
+
             </>
           )}
+
+          {activeTab === 'aiModels' && <AiModelsSettings />}
 
           {activeTab === 'inference' && (
             <>

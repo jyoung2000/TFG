@@ -57,7 +57,7 @@ For each queued job a `ShotVersion` records everything reproducible:
   `settings.default_quality_preset`. An explicit `model` or `resolution` on
   the shot always wins (treated as custom). `GET /api/film/capabilities`
   returns the profiles with `recommended` (by detected VRAM) and `fits_gpu`;
-  the Models tab lists them and the shot drawer offers the picker.
+  Settings → AI Models lists them and the shot drawer offers the picker.
 
 Versions are append-only (`v1, v2, …` with kind/status/prompt/model/seed/
 capture/output/error/wardrobe-snapshot/timestamp). Completed versions can be
@@ -135,7 +135,7 @@ Besides download (`POST /api/models/download`), `DELETE /api/models/{type}`
 removes a downloaded local model (`checkpoint | upsampler | text_encoder |
 zit`) so it can be re-downloaded (update) or freed; refused while a download
 or generation is running, and in WanGP mode (models live in the WanGP
-checkout). The Models tab offers the remove action per downloaded model.
+checkout). Settings → AI Models offers the remove action per downloaded model.
 
 ## Model capabilities (`GET /api/film/capabilities`)
 
@@ -153,7 +153,7 @@ Derived from the actual runtime, never a hardcoded catalog:
 - in local mode, an advisory **WanGP bridge** row so 6–31 GB GPUs see their
   compatible path (with setup pointer) even before configuring it.
 
-The Models sub-tab renders all of this — GPU summary, color-coded verdict,
+Settings → AI Models renders all of this — GPU summary, color-coded verdict,
 per-model fit badges ("Fits this GPU" / "Incompatible with this GPU"),
 required/optional markers — and drives the existing `/api/models/download`
 pipeline (with live progress and a sized download button, plus a

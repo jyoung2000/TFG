@@ -34,10 +34,10 @@ try {
   await page.waitForTimeout(3000)
   const empty = await page.getByText('Storyboard is empty').isVisible().catch(() => false)
   log('storyboard tab works against packaged backend (film facet created)', empty)
-  await page.getByRole('button', { name: 'Models', exact: true }).first().click()
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('open-settings', { detail: { tab: 'aiModels' } })))
   await page.waitForTimeout(2500)
   const verdict = await page.locator('text=/GPU|VRAM/').first().isVisible().catch(() => false)
-  log('models panel loads capabilities from packaged backend', verdict)
+  log('Settings → AI Models loads capabilities from packaged backend', verdict)
   await page.screenshot({ path: `${SHOTS}/32-appimage-models.png` })
   const info = await page.evaluate(async () => {
     const b = await window.electronAPI.getBackend(); const a = await window.electronAPI.getAppInfo()

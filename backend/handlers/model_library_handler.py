@@ -29,6 +29,7 @@ from api_types import (
     LibrarySourceStatus,
     LibraryTask,
     ModelSearchResponse,
+    ProviderTestResult,
 )
 from _routes._errors import HTTPError
 from film.film_models import now_ms
@@ -43,6 +44,7 @@ from film.llm_providers import (
 from film.media_providers import (
     HOSTED_PROVIDERS,
     PROVIDER_CATALOG_URLS,
+    REPLICATE_BASE_URL,
     MediaModel,
     curated_models,
     media_provider,
@@ -530,6 +532,116 @@ class ModelLibraryHandler(StateHandlerBase):
             settings = self.state.app_settings
             remaining = [item for item in settings.recent_model_ids if item != entry]
             settings.recent_model_ids = [entry, *remaining][:40]
+
+    # ---- provider connection tests ---------------------------------------
+
+    # Every provider whose key can be checked for free, and how. fal and
+    # WaveSpeed publish no free authenticated endpoint, so a key there cannot
+    # be verified without paying for a generation — the result says so rather
+    # than implying a check happened.
+    _TESTABLE = (
+        "openrouter",
+        "anthropic",
+        "xai",
+        "gemini",
+        "openai_compatible",
+        "fal",
+        "wavespeed",
+        "replicate",
+    )
+    _UNVERIFIABLE = {
+        "fal": "Key saved. fal publishes no free endpoint to check it against, so it is verified on your first render.",
+        "wavespeed": "Key saved. WaveSpeed publishes no free endpoint to check it against, so it is verified on your first render.",
+    }
+
+    def test_provider(self, provider: str) -> ProviderTestResult:
+        """Try the provider for real and report exactly what happened.
+
+        A pass means a request was made and answered. Where no free check
+        exists the result is explicit about that instead of guessing.
+        """
+        provider = provider.strip()
+        if provider not in self._TESTABLE:
+            raise HTTPError(400, f"Unknown provider: {provider}")
+
+        label = _SOURCE_LABELS.get(provider, provider)
+        with self.lock:
+            settings = self.state.app_settings.model_copy(deep=True)
+
+        configured = self._is_configured(settings, provider)
+        result = ProviderTestResult(provider=provider, label=label, configured=configured)
+        if not configured:
+            result.message = (
+                "No endpoint set yet — add the base URL below."
+                if provider == "openai_compatible"
+                else "No API key saved yet."
+            )
+            return result
+
+        if provider in self._UNVERIFIABLE:
+            result.message = self._UNVERIFIABLE[provider]
+            return result
+
+        result.checked = True
+        try:
+            count, note = self._probe(provider, settings)
+        except HTTPError as exc:
+            result.message = str(exc.detail)
+            return result
+        except (HttpTimeoutError, OSError) as exc:
+            result.message = f"Could not reach {label}: {exc}"
+            return result
+
+        result.ok = True
+        result.models_found = count
+        result.message = note or (
+            f"Connected. {count} model{'' if count == 1 else 's'} available."
+            if count
+            else "Connected, but the provider listed no models."
+        )
+        return result
+
+    def _probe(self, provider: str, settings: AppSettings) -> tuple[int, str]:
+        """One cheap authenticated request. Returns (models seen, note)."""
+        if provider == "replicate":
+            # The only one of the three media providers with a free
+            # authenticated endpoint.
+            response = self._http.get(
+                f"{REPLICATE_BASE_URL}/account",
+                headers={"Authorization": f"Bearer {settings.replicate_api_key.strip()}"},
+                timeout=20,
+            )
+            if response.status_code in (401, 403):
+                raise HTTPError(401, "Replicate rejected the API key.")
+            if response.status_code >= 400:
+                raise HTTPError(502, f"Replicate returned HTTP {response.status_code}.")
+            return 0, "Connected. The key is valid."
+
+        if provider == "openai_compatible":
+            source, models, error = self._local_text_models(settings, refresh=True)
+            if error:
+                raise HTTPError(502, error)
+            where = "Ollama" if source == "ollama" else "the endpoint"
+            return len(models), f"Connected to {where}. {len(models)} model{'' if len(models) == 1 else 's'} served."
+
+        models, error = self._hosted_text(provider, settings, refresh=True)
+        if error:
+            raise HTTPError(502, error)
+        return len(models), ""
+
+    @staticmethod
+    def _is_configured(settings: AppSettings, provider: str) -> bool:
+        if provider == "openai_compatible":
+            return bool(settings.openai_compatible_base_url.strip())
+        if provider in ("fal", "wavespeed", "replicate"):
+            return bool(settings.media_api_key(provider))
+        keys = {
+            "openrouter": settings.resolved_openrouter_api_key(),
+            "anthropic": settings.anthropic_api_key,
+            "xai": settings.xai_api_key,
+            "gemini": settings.gemini_api_key,
+        }
+        return bool(keys[provider].strip())
 
     # ---- downloads -------------------------------------------------------
 

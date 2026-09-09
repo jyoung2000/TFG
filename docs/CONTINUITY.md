@@ -71,7 +71,7 @@ fix and a one-click **Fix** where possible.
 
 ## Strict mode
 
-`settings.strict_continuity` (off by default; toggle in Storyboard → Models →
+`settings.strict_continuity` (off by default; toggle in the storyboard's
 *Project render defaults*) turns warnings into a 409 that blocks queueing
 until resolved. Deleting an asset scrubs its references from all
 scenes/shots so nothing dangles.

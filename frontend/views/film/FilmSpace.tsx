@@ -6,7 +6,6 @@ import {
   FileText,
   Layers,
   Loader2,
-  MonitorPlay,
   Pause,
   Play,
   Plus,
@@ -25,7 +24,7 @@ import type { FilmScene, FilmShot, VersionKind } from '../../types/film'
 import { AssetsPanel } from './AssetsPanel'
 import { BuildFilmDialog } from './BuildFilmDialog'
 import { DirectorBar } from './DirectorBar'
-import { ModelsPanel } from './ModelsPanel'
+import { FilmRenderSettingsCard } from './ModelsPanel'
 import { PackageMenu } from './PackageMenu'
 import { ScriptPanel } from './ScriptPanel'
 import { ShotCard } from './ShotCard'
@@ -34,13 +33,14 @@ import { ShotDetailDrawer } from './ShotDetailDrawer'
 // The composer pulls in three.js — keep it out of the main chunk.
 const ShotComposer = lazy(() => import('./composer/ShotComposer'))
 
-type FilmTab = 'storyboard' | 'script' | 'assets' | 'models'
+// Connecting and downloading models is app setup, not part of making a film:
+// it lives in Settings → AI Models.
+type FilmTab = 'storyboard' | 'script' | 'assets'
 
 const TABS: { id: FilmTab; label: string; icon: React.ReactNode }[] = [
   { id: 'storyboard', label: 'Storyboard', icon: <Clapperboard className="h-3.5 w-3.5" /> },
   { id: 'script', label: 'Script', icon: <FileText className="h-3.5 w-3.5" /> },
   { id: 'assets', label: 'Assets', icon: <Layers className="h-3.5 w-3.5" /> },
-  { id: 'models', label: 'Models', icon: <MonitorPlay className="h-3.5 w-3.5" /> },
 ]
 
 function SceneRow({
@@ -276,7 +276,7 @@ export function FilmSpace() {
   const [uiMode, setUiMode] = useUiMode()
   const visibleTabs = uiMode === 'simple' ? TABS.filter(t => t.id === 'storyboard' || t.id === 'assets') : TABS
   useEffect(() => {
-    if (uiMode === 'simple' && (tab === 'script' || tab === 'models')) setTab('storyboard')
+    if (uiMode === 'simple' && tab === 'script') setTab('storyboard')
   }, [uiMode, tab])
 
   // A shot focus request from the editor / Gen Space ("Edit / Regenerate Shot").
@@ -532,7 +532,8 @@ export function FilmSpace() {
         <div className="flex-1 min-w-0 overflow-y-auto">
           {tab === 'storyboard' &&
             (scenes.length > 0 ? (
-              scenes.map((scene, index) => (
+              <>
+              {scenes.map((scene, index) => (
                 <SceneRow
                   key={scene.id}
                   scene={scene}
@@ -541,7 +542,15 @@ export function FilmSpace() {
                   onSelectShot={shot => setSelectedShotId(shot?.id ?? null)}
                   onComposeShot={shot => setComposerShotId(shot.id)}
                 />
-              ))
+              ))}
+              {/* Render defaults belong to this film, so they stay with it —
+                  unlike connecting models, which is app setup. */}
+              {uiMode === 'advanced' && (
+                <div className="p-4 max-w-2xl">
+                  <FilmRenderSettingsCard />
+                </div>
+              )}
+              </>
             ) : (
               <div className="h-full flex items-center justify-center">
                 <div className="text-center max-w-md">
@@ -568,7 +577,7 @@ export function FilmSpace() {
             ))}
           {tab === 'script' && <ScriptPanel onStoryboardCreated={() => setTab('storyboard')} />}
           {tab === 'assets' && <AssetsPanel />}
-          {tab === 'models' && <ModelsPanel />}
+
         </div>
 
         {tab === 'storyboard' && selected && (

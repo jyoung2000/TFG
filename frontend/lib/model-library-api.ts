@@ -1,7 +1,7 @@
 // Typed client for /api/models/library — search, download, remember.
 
 import { backendFetch } from './backend'
-import type { LibraryDownloadStatus, ModelSearchResponse } from '../types/models'
+import type { LibraryDownloadStatus, ModelSearchResponse, ProviderTestResult } from '../types/models'
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await backendFetch(path, { headers: { 'Content-Type': 'application/json' }, ...init })
@@ -55,5 +55,11 @@ export const modelLibraryApi = {
     request<{ status: string }>('/api/models/library/remember', {
       method: 'POST',
       body: JSON.stringify({ provider, model_id: modelId }),
+    }),
+
+  /** Ask a provider whether the stored key actually works. */
+  testProvider: (provider: string) =>
+    request<ProviderTestResult>(`/api/models/library/providers/${encodeURIComponent(provider)}/test`, {
+      method: 'POST',
     }),
 }

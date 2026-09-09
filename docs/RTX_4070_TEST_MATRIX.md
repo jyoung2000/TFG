@@ -14,7 +14,7 @@ no GPU, so every row starts as **BLOCKED — ENVIRONMENT (no GPU available)**.
 | GPU / driver | RTX 4070 12 GB, NVIDIA driver version |
 | OS | Windows 11 build … / Ubuntu … |
 | Install method | `LTX Desktop-<version>-Setup.exe` (SHA-256 …) or AppImage |
-| Execution mode | Storyboard → Models shows *WanGP bridge* (`execution_mode = wangp`) |
+| Execution mode | Settings → AI Models shows *WanGP bridge* (`execution_mode = wangp`) |
 | Active model | `WANGP_VIDEO_MODEL_TYPE` (default `ltx2_22B_distilled`), quantisation shown in the Models tab |
 | System RAM | Models tab header (`system_ram_gb`) |
 

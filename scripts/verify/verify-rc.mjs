@@ -222,22 +222,21 @@ try {
   await snap('05-drawer')
   await page.getByRole('button', { name: 'Close shot details' }).click()
 
-  // ---- G. Models tab: states + model location ----
-  await page.getByRole('tab', { name: 'Models' }).click()
-  await page.waitForTimeout(500)
-  // The Models tab opens on the Model Library; installed weights live in the second view.
-  await page.getByRole('tab', { name: 'Installed & GPU', exact: true }).click()
-  await page.waitForTimeout(2000)
+  // ---- G. Settings → AI Models: states + model location ----
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('open-settings', { detail: { tab: 'aiModels' } })))
+  await page.waitForTimeout(2500)
   const chips = await page.locator('span').filter({ hasText: /^(Active|Installed|Available|Downloading|Update available|Incompatible|Cloud)$/ }).count()
-  log('Models tab shows product state chips', chips >= 1, `${chips} chips`)
-  log('Models tab offers "Open model location"', await page.getByRole('button', { name: 'Open model location' }).isVisible())
+  log('AI Models shows product state chips', chips >= 1, `${chips} chips`)
+  log('AI Models offers "Open model location"', await page.getByRole('button', { name: 'Open model location' }).isVisible())
   const caps = (await api('/api/film/capabilities')).json
   log('Capabilities carry models_path, RAM and per-model state/family', typeof caps.models_path === 'string' && 'system_ram_gb' in caps && caps.models.every(m => 'state' in m && 'family' in m))
   await snap('06-models')
+  await page.keyboard.press('Escape')
+  await page.waitForTimeout(500)
 
   // ---- H. Settings: OpenAI-compatible endpoint + provider option ----
   await page.getByRole('tab', { name: 'Storyboard' }).click()
-  await page.evaluate(() => window.dispatchEvent(new CustomEvent('open-settings', { detail: { tab: 'apiKeys' } })))
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('open-settings', { detail: { tab: 'aiModels' } })))
   await page.waitForTimeout(1000)
   const baseUrl = page.getByLabel('OpenAI-compatible base URL')
   log('Settings show the Local / OpenAI-compatible endpoint section', await baseUrl.isVisible())

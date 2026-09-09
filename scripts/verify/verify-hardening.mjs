@@ -203,15 +203,16 @@ try {
   await page.waitForTimeout(500)
   log('Advanced mode restores tabs', await page.getByRole('tab', { name: 'Script' }).isVisible())
 
-  // ---- 10. Models tab: profiles + render defaults ----
-  await page.getByRole('tab', { name: 'Models' }).click()
-  await page.waitForTimeout(500)
-  // The Models tab opens on the Model Library; profiles live in the second view.
-  await page.getByRole('tab', { name: 'Installed & GPU', exact: true }).click()
+  // ---- 10. Models moved to Settings; render defaults stayed with the film ----
+  log('Storyboard no longer carries a Models tab', (await page.getByRole('tab', { name: 'Models', exact: true }).count()) === 0)
+  log('Project render defaults stay in the storyboard', await page.getByText('Project render defaults').isVisible())
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('open-settings', { detail: { tab: 'aiModels' } })))
+  await page.waitForTimeout(1500)
   await page.getByText('Quality profiles').waitFor({ state: 'visible' })
-  log('Models tab lists quality profiles', true)
-  log('Project render defaults card present', await page.getByText('Project render defaults').isVisible())
+  log('Settings → AI Models lists quality profiles', true)
   await snap('12-models')
+  await page.keyboard.press('Escape')
+  await page.waitForTimeout(500)
 
   // ---- 11. Settings → API Keys → OpenRouter (placeholder key, never real) ----
   await page.getByRole('tab', { name: 'Storyboard' }).click()

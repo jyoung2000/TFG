@@ -258,7 +258,7 @@ export function Home() {
                   <li className="rounded-lg bg-zinc-950/50 p-3">
                     <span className="text-zinc-200 font-medium">1. Check your GPU and models</span>
                     <p className="mt-1 leading-relaxed">
-                      Storyboard → Models detects your GPU, says which models fit its VRAM, and downloads only what is
+                      Settings → AI Models detects your GPU, says which models fit its VRAM, and downloads only what is
                       missing. Quality profiles are recommended per GPU.
                     </p>
                   </li>

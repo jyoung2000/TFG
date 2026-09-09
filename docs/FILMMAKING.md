@@ -67,7 +67,7 @@ switchable without leaving the chat.
 
 **Fully offline** is a first-class path, not a fallback: local weights for
 video/image plus a local text server covers the whole workflow with no
-network at all. *Storyboard → Models → Model Library* is one searchable
+network at all. *Settings → AI Models* is one searchable
 catalog of every model — local and hosted — with downloads for the ones that
 run on this machine, and it states plainly whether the offline set is
 complete. See `AI_PROVIDERS.md`.

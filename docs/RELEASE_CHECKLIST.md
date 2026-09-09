@@ -31,7 +31,7 @@ release notes as unverified — never assume.
 - [ ] `pnpm build:linux` (or `bash scripts/local-build.sh --platform linux`) from a fresh clone
 - [ ] `release/LTX Desktop-<version>-x86_64.AppImage` runs (`--appimage-extract-and-run` on sandboxes without FUSE); `.deb` installs with `dpkg -i` and registers the desktop entry
 - [ ] Packaged backend starts from `resources/python` (no system Python needed); `Wan2GP` present under `resources/`
-- [ ] Storyboard → Models lists capabilities for the machine
+- [ ] Settings → AI Models lists capabilities for the machine
 
 ### macOS
 

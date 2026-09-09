@@ -67,14 +67,18 @@ API or the local LTX pipeline), or **fal**, **WaveSpeed** and **Replicate**
 with a key — hosted jobs run through the same queue, versions and export as
 local ones.
 
-The **Models** sub-tab opens on the **Model Library**: one searchable catalog
-of every text, image and video model this app can use — local weights, an
-Ollama or OpenAI-compatible server's models, and each configured hosted
-provider — with downloads for the ones that run on this machine and an honest
-statement of whether the fully offline set is complete. *Installed & GPU*
-keeps the detected GPU and VRAM, which models fit it, their real on-disk
-sizes, quality profiles, and remove/download for the host's own weights. A
-**Simple / Advanced** toggle hides the power-user surfaces for a first film.
+**Settings → AI Models** is the one place to connect, configure and test every
+model — each provider card makes a real test request and reports what came
+back. It holds the **Model Library**: one searchable catalog of every text,
+image and video model this app can use — local weights, an Ollama or
+OpenAI-compatible server's models, and each configured hosted provider — with
+downloads for the ones that run on this machine and an honest statement of
+whether the fully offline set is complete. Below it sits what is installed on
+this computer: the detected GPU and VRAM, which models fit, their real on-disk
+sizes, quality profiles, and remove/download for the host's own weights.
+Setting models up is not part of making a video, so it is not in the
+filmmaking workflow. A **Simple / Advanced** toggle hides the power-user
+surfaces for a first film.
 
 **Fully offline** is a supported path: local video/image weights plus a local
 text server covers the whole workflow with no network at all
@@ -413,12 +417,10 @@ pnpm install
 pnpm dev:ui          # http://localhost:5173, with hot reload
 ```
 
-Or build a single HTML file you can just open — no server, nothing installed,
-runs straight off disk:
-
-```bash
-pnpm build:ui        # dist-ui/ltx-desktop-ui.html — double-click it
-```
+Or skip even that: **[`ui-preview/ltx-desktop-ui.html`](ui-preview/ltx-desktop-ui.html)**
+is committed to this repo. Download it (GitHub's *Download raw file* button)
+and double-click — one file, no install, no server. `pnpm build:ui` rebuilds
+it from source.
 
 Both run the **same renderer** the packaged app ships, against a mock of the
 backend contract, opening on a seeded demo film with scenes, shots, assets, a

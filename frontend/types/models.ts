@@ -83,6 +83,19 @@ export const TEXT_PROVIDER_LABELS: Record<TextProviderId, string> = {
   openai_compatible: 'Local / OpenAI-compatible',
 }
 
+/** Result of asking a provider whether it is really reachable. */
+export interface ProviderTestResult {
+  provider: string
+  label: string
+  configured: boolean
+  /** True only when a request was made and it succeeded. */
+  ok: boolean
+  /** False when the provider offers no free way to verify a key. */
+  checked: boolean
+  message: string
+  models_found: number
+}
+
 /** Where each provider publishes the model ids it accepts. */
 export const PROVIDER_DOC_URLS: Record<string, string> = {
   fal: 'https://fal.ai/models',

@@ -445,3 +445,61 @@ class TestModelLibrary:
         source = next(s for s in payload["sources"] if s["id"] == "openrouter")
         assert source["error"] and source["count"] == 0
         assert payload["total"] >= 1  # local rows are still there
+
+
+class TestProviderConnectionTest:
+    """`POST /api/models/library/providers/{id}/test` must never guess."""
+
+    def test_unconfigured_provider_reports_no_key_without_calling_out(self, client, test_state):
+        result = client.post("/api/models/library/providers/anthropic/test").json()
+        assert result["configured"] is False
+        assert result["ok"] is False
+        # Nothing was attempted, so nothing may claim to have been checked.
+        assert result["checked"] is False
+        assert "no api key" in result["message"].lower()
+        assert test_state.http.calls == []
+
+    def test_configured_text_provider_reports_the_models_it_saw(self, client, test_state):
+        client.post("/api/settings", json={"anthropicApiKey": FAKE_KEY})
+        test_state.http.queue(
+            "get",
+            FakeResponse(
+                status_code=200,
+                json_payload={"data": [{"id": "claude-sonnet-5"}, {"id": "claude-opus-5"}]},
+            ),
+        )
+        result = client.post("/api/models/library/providers/anthropic/test").json()
+        assert result["ok"] is True
+        assert result["checked"] is True
+        assert result["models_found"] == 2
+        assert "2 models" in result["message"]
+
+    def test_a_rejected_key_fails_without_echoing_the_key(self, client, test_state):
+        client.post("/api/settings", json={"xaiApiKey": FAKE_KEY})
+        test_state.http.queue("get", FakeResponse(status_code=401, text="unauthorized"))
+        result = client.post("/api/models/library/providers/xai/test").json()
+        assert result["ok"] is False
+        assert result["checked"] is True
+        assert FAKE_KEY not in json.dumps(result)
+
+    def test_replicate_uses_its_free_account_endpoint(self, client, test_state):
+        client.post("/api/settings", json={"replicateApiKey": FAKE_KEY})
+        test_state.http.queue("get", FakeResponse(status_code=200, json_payload={"username": "someone"}))
+        result = client.post("/api/models/library/providers/replicate/test").json()
+        assert result["ok"] is True
+        assert result["checked"] is True
+        assert test_state.http.calls[-1].url.endswith("/account")
+
+    def test_fal_and_wavespeed_say_they_cannot_be_checked_for_free(self, client, test_state):
+        client.post("/api/settings", json={"falApiKey": FAKE_KEY, "wavespeedApiKey": FAKE_KEY})
+        for provider in ("fal", "wavespeed"):
+            result = client.post(f"/api/models/library/providers/{provider}/test").json()
+            assert result["configured"] is True
+            # Claiming a pass here would be a lie: no request was made.
+            assert result["ok"] is False
+            assert result["checked"] is False
+            assert "first render" in result["message"]
+        assert test_state.http.calls == []
+
+    def test_unknown_provider_is_rejected(self, client):
+        assert client.post("/api/models/library/providers/nope/test").status_code == 400

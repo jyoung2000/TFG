@@ -72,8 +72,10 @@ export default defineConfig({
   publicDir: standalone ? false : undefined,
   build: standalone
     ? {
-        outDir: 'dist-ui',
-        emptyOutDir: true,
+        // Written into the repo so the file can be downloaded and opened
+        // without building anything; emptyOutDir would wipe the README.
+        outDir: 'ui-preview',
+        emptyOutDir: false,
         // A `file://` page cannot load ES modules, so the whole app has to be
         // one classic script: no code splitting, no module preloads.
         modulePreload: false,

@@ -55,15 +55,21 @@ try {
   const back = page.getByRole('button', { name: /back to home/i }).first()
   if (await back.isVisible().catch(() => false)) { await back.click(); await page.waitForTimeout(800) }
 
-  // ---- A. Open a film and reach the Model Library ----
+  // Models live in Settings now, not in the filmmaking workflow.
+  const openAiModels = async () => {
+    await page.evaluate(() => window.dispatchEvent(new CustomEvent('open-settings', { detail: { tab: 'aiModels' } })))
+    await page.waitForTimeout(1200)
+  }
+
+  // ---- A. Open a film, then reach the Model Library from Settings ----
   await page.getByRole('button', { name: /Filmmaker Studio/i }).first().click()
   await page.waitForTimeout(800)
   const nameInput = page.locator('input').first()
   if (await nameInput.isVisible().catch(() => false)) { await nameInput.fill(`Models ${RUN}`); await page.keyboard.press('Enter') }
   await page.waitForTimeout(2500)
-  await page.getByRole('tab', { name: 'Models', exact: true }).click()
-  await page.waitForTimeout(2500)
-  log('Models tab opens on the Model Library', await page.getByRole('tab', { name: 'Model Library', exact: true }).getAttribute('aria-selected') === 'true')
+  await openAiModels()
+  await page.waitForTimeout(1500)
+  log('Settings has an AI Models tab holding the library', await page.getByRole('heading', { name: 'Model Library' }).isVisible())
   const rows = page.locator('input[aria-label="Search models"]')
   log('Library has a search box and filters', (await rows.isVisible()) && (await page.getByRole('tab', { name: 'Video', exact: true }).isVisible()))
   log('Offline readiness is stated honestly', /offline|local/i.test((await page.locator('[role="status"]').first().innerText().catch(() => '')) || ''))
@@ -177,8 +183,7 @@ try {
   log('Reference generation surfaces the missing key rather than crashing', reference.status === 400 && /FAL_KEY_MISSING/.test(reference.text))
 
   // ---- I. Back to fully local ----
-  await page.getByRole('tab', { name: 'Models', exact: true }).click()
-  await page.waitForTimeout(1500)
+  await openAiModels()
   await page.getByRole('tab', { name: 'Video' }).click()
   await page.waitForTimeout(1500)
   const localUse = page.locator('div', { hasText: /HardDrive|/ })

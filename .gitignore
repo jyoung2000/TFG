@@ -85,5 +85,6 @@ backend/requirements-dist.txt
 # UI verification screenshots (scripts/verify)
 verify-shots/
 
-# Standalone UI build (pnpm build:ui)
+# The standalone UI build is committed on purpose (ui-preview/), so it is not
+# ignored here. The older output directory is.
 dist-ui/
