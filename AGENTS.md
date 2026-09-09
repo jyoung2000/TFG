@@ -15,6 +15,7 @@ LTX Desktop is an Electron app for AI video generation using LTX models. Three-l
 | Command | Purpose |
 |---|---|
 | `pnpm dev` | Start dev server (Vite + Electron + Python backend) |
+| `pnpm dev:ui` | Browser-only UI dev against a mock backend — no Python, Electron, GPU or models (`docs/UI_ONLY_MODE.md`) |
 | `pnpm dev:debug` | Dev with Electron inspector + Python debugpy |
 | `pnpm typecheck` | Run TypeScript (`tsc --noEmit`) and Python (`pyright`) type checks |
 | `pnpm typecheck:ts` | TypeScript only |
@@ -38,7 +39,11 @@ PRs must pass: `pnpm typecheck` + `pnpm backend:test` + frontend Vite build.
 - **IPC bridge**: All Electron communication through `window.electronAPI` (defined in `electron/preload.ts`)
 - **Backend calls**: Frontend calls `http://localhost:8000` directly
 - **Styling**: Tailwind with custom semantic color tokens via CSS variables; utilities from `class-variance-authority` + `clsx` + `tailwind-merge`
-- **No frontend tests** currently exist
+- **Frontend tests**: vitest, colocated as `*.test.ts` (`pnpm test:frontend`)
+- **UI-only dev**: `pnpm dev:ui` runs the same renderer in a browser against
+  the mock backend in `devtools/ui-mock/`, which is type-checked against
+  `frontend/types/*` so it cannot drift from the real contract. See
+  `docs/UI_ONLY_MODE.md`.
 
 ## Backend Architecture
 

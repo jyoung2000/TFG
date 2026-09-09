@@ -1,0 +1,21 @@
+{
+  // Type-checks the mock backend against the renderer's own API mirrors, so a
+  // contract change in the app breaks this build instead of silently producing
+  // a UI-only mode that no longer matches the real thing. Only pure type
+  // modules are imported, so no DOM or React types are needed here.
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": ["node"],
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "include": ["**/*.ts"]
+}

@@ -2,6 +2,7 @@ import { useCallback } from 'react'
 import { useDropzone } from 'react-dropzone'
 import { Upload, Image as ImageIcon, RefreshCw, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { toFileUrl } from '@/lib/file-url'
 
 interface ImageUploaderProps {
   onImageSelect: (path: string | null) => void
@@ -16,9 +17,7 @@ export function ImageUploader({ onImageSelect, selectedImage }: ImageUploaderPro
       const filePath = (file as any).path as string | undefined
       if (filePath) {
         await window.electronAPI?.approveLocalPath?.(filePath)
-        const normalized = filePath.replace(/\\/g, '/')
-        const fileUrl = normalized.startsWith('/') ? `file://${normalized}` : `file:///${normalized}`
-        onImageSelect(fileUrl)
+        onImageSelect(toFileUrl(filePath))
       } else {
         const url = URL.createObjectURL(file)
         onImageSelect(url)

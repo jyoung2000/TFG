@@ -3,11 +3,18 @@ import react from '@vitejs/plugin-react'
 import electron from 'vite-plugin-electron'
 import renderer from 'vite-plugin-electron-renderer'
 import path from 'path'
+import { isUiMockEnabled, uiMockPlugin } from './devtools/ui-mock/plugin'
+
+// UI-only mode (`pnpm dev:ui`): the renderer runs in a plain browser against a
+// mock backend, so no Python, Electron, GPU or model weights are needed to work
+// on the interface. Everything Electron-specific is skipped.
+const uiOnly = isUiMockEnabled()
 
 export default defineConfig({
   plugins: [
     react(),
-    electron([
+    ...(uiOnly ? [uiMockPlugin(path.resolve(__dirname, 'node_modules/.cache/ui-mock/state.json'))] : []),
+    ...(uiOnly ? [] : electron([
       {
         entry: 'electron/main.ts',
         onstart(options) {
@@ -45,8 +52,8 @@ export default defineConfig({
           }
         }
       }
-    ]),
-    renderer()
+    ])),
+    ...(uiOnly ? [] : [renderer()])
   ],
   resolve: {
     alias: {

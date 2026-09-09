@@ -1,5 +1,10 @@
 /// <reference types="vite/client" />
 
+interface ImportMetaEnv {
+  /** "1" while running `pnpm dev:ui` (browser-only UI development). */
+  readonly VITE_UI_MOCK?: string
+}
+
 interface LogsResponse {
   logPath: string
   lines: string[]

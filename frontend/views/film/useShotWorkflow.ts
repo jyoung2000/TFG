@@ -11,6 +11,7 @@ import { useCallback, useMemo, useState } from 'react'
 import { useProjects } from '../../contexts/ProjectContext'
 import { useFilm } from '../../contexts/FilmContext'
 import { copyToAssetFolder } from '../../lib/asset-copy'
+import { toFileUrl } from '../../lib/file-url'
 import { filmApi } from '../../lib/film-api'
 import { logger } from '../../lib/logger'
 import type { Asset, TimelineClip } from '../../types/project'
@@ -134,8 +135,7 @@ export function useShotWorkflow(scene: FilmScene, shot: FilmShot) {
       try {
         const copied = await copyToAssetFolder(version.output_path, currentProjectId)
         const path = copied?.path ?? version.output_path
-        const url =
-          copied?.url ?? (path.startsWith('/') ? `file://${path}` : `file:///${path.replace(/\\/g, '/')}`)
+        const url = copied?.url ?? toFileUrl(path)
         const asset: Asset = addAsset(currentProjectId, {
           type: 'video',
           path,

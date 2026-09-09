@@ -5,6 +5,8 @@
 // composition presets (MIT; see docs/INTEGRATED_UPSTREAMS.md), extended with
 // xwide/xcu sizes, POV/dutch angles and bird/worm elevations.
 
+import type { TextProviderId } from './models'
+
 export type ShotSize = 'xwide' | 'wide' | 'full' | 'medium' | 'mcu' | 'closeup' | 'xcu'
 export type CameraAngle =
   | 'front'
@@ -538,17 +540,32 @@ export const DIRECTOR_ROLES: { id: DirectorRole; label: string; hint: string }[]
   { id: 'continuity', label: 'Continuity', hint: 'Continuity explanations and fixes' },
 ]
 
-export type DirectorProviderSetting = 'auto' | 'gemini' | 'openrouter' | 'openai_compatible'
+export type DirectorProviderSetting = 'auto' | TextProviderId
+
+/** One text provider the AI Director can run on. */
+export interface DirectorProviderStatus {
+  id: TextProviderId
+  label: string
+  configured: boolean
+  /** The model this provider would use right now ('' = the provider's default). */
+  model: string
+  /** False when the provider needs no key (a local OpenAI-compatible server). */
+  needs_key: boolean
+  note: string
+}
 
 export interface DirectorStatus {
   provider_setting: DirectorProviderSetting
-  active_provider: 'openrouter' | 'gemini' | 'openai_compatible' | 'none'
+  active_provider: TextProviderId | 'none'
   gemini_configured: boolean
   openrouter_configured: boolean
   openai_compatible_configured: boolean
+  anthropic_configured: boolean
+  xai_configured: boolean
   openrouter_key_source: 'settings' | 'env' | 'none'
   roles: { role: DirectorRole; provider: string; model: string }[]
   tools: { name: string; description: string }[]
+  providers: DirectorProviderStatus[]
   message: string
 }
 

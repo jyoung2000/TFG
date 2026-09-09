@@ -272,8 +272,9 @@ export function Home() {
                   <li className="rounded-lg bg-zinc-950/50 p-3">
                     <span className="text-zinc-200 font-medium">3. Optional: connect an AI Director</span>
                     <p className="mt-1 leading-relaxed">
-                      An OpenRouter (or Gemini) key in Settings → API Keys unlocks Build Film with AI, the director bar and
-                      prompt refinement. Everything else runs offline.
+                      An OpenRouter, Claude, Grok or Gemini key in Settings → API Keys unlocks Build Film with AI, the
+                      director bar and prompt refinement — or point it at a local server to keep that offline too.
+                      Everything else runs offline already.
                     </p>
                   </li>
                 </ol>

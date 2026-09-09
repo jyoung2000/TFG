@@ -85,6 +85,7 @@ Docs: [Filmmaking overview](docs/FILMMAKING.md) ·
 [Shot Composer](docs/SHOT_COMPOSER.md) ·
 [AI Director](docs/AI_DIRECTOR.md) ·
 [AI providers & Model Library](docs/AI_PROVIDERS.md) ·
+[UI-only dev mode](docs/UI_ONLY_MODE.md) ·
 [OpenRouter](docs/OPENROUTER.md) ·
 [Generation Pipeline](docs/GENERATION_PIPELINE.md) ·
 [Continuity](docs/CONTINUITY.md) ·
@@ -401,6 +402,24 @@ graph TD
 ```
 
 ## Development (quickstart)
+
+### Working on the UI only
+
+If you are changing the interface and not the engine, you do not need any of
+the setup below — no Python, no `uv`, no GPU, no model weights, no Electron:
+
+```bash
+pnpm install
+pnpm dev:ui          # http://localhost:5173
+```
+
+That runs the **same renderer** the packaged app ships, in a plain browser,
+against a mock of the backend contract, opening on a seeded demo film with
+scenes, shots, assets, a script, continuity warnings and a model library. Full
+details and what is (and is not) simulated:
+[`docs/UI_ONLY_MODE.md`](docs/UI_ONLY_MODE.md).
+
+### The full app
 
 Prereqs:
 

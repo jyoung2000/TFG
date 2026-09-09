@@ -12,6 +12,7 @@ ELECTRON_DEBUG=1 pnpm dev
 node scripts/verify/verify-rc.mjs             # release-candidate walkthrough: composer gizmo/lock/manual camera/keyframes, undo/redo, gaps, director set_ots, models states, local endpoint settings, path policy (39 checks)
 node scripts/verify/verify-hardening.mjs      # home, quick mode, build film, continuity, queue, OpenRouter settings, packages (33 checks)
 node scripts/verify/verify-models.mjs         # Model Library search/filters/download refusal/custom ids, Claude+Grok+media provider settings, chat model chips, hosted generation without a key, asset reference (21 checks)
+node scripts/verify/verify-ui-only.mjs        # browser-only UI mode against the mock backend: boot, every screen, media, queue, edits (21 checks) — needs `pnpm dev:ui`, not the Electron app
 node scripts/verify/verify-ui.mjs             # original storyboard/composer/generation walkthrough
 # packaged AppImage instead of dev:
 ./release/LTX\ Desktop-*.AppImage --appimage-extract-and-run --no-sandbox --remote-debugging-port=9223 &

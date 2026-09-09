@@ -1,0 +1,161 @@
+/**
+ * Quick-mode generation, image generation and the small helper endpoints the
+ * Video Editor uses.
+ *
+ * `POST /api/generate` blocks until the render "finishes", exactly like the
+ * real endpoint, while `GET /api/generation/progress` reports the phases in
+ * the meantime so the progress UI has something to show.
+ */
+
+import { MockHttpError, type Router } from '../http'
+import { DEMO_OUTPUT } from '../seed'
+import type { MockState, Store } from '../state'
+
+const GENERATE_MS = 7000
+const PHASES: [number, string][] = [
+  [0, 'loading_model'],
+  [10, 'encoding_prompt'],
+  [22, 'inference'],
+  [88, 'decoding'],
+  [97, 'saving'],
+]
+
+function phaseAt(progress: number): string {
+  let phase = PHASES[0][1]
+  for (const [threshold, name] of PHASES) if (progress >= threshold) phase = name
+  return phase
+}
+
+function progressOf(state: MockState): number {
+  const generation = state.generation
+  if (!generation) return 0
+  if (generation.status !== 'running') return 100
+  return Math.min(99, Math.round(((Date.now() - generation.started_at) / generation.duration_ms) * 100))
+}
+
+/** Finish a running generation whose time is up. Called before each request. */
+export function tickGeneration(state: MockState): void {
+  const generation = state.generation
+  if (generation?.status === 'running' && Date.now() - generation.started_at >= generation.duration_ms) {
+    generation.status = 'complete'
+    generation.progress = 100
+    generation.phase = 'saving'
+  }
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise(resolve => {
+    const timer = setTimeout(resolve, ms)
+    timer.unref?.()
+  })
+}
+
+export function registerGenerationRoutes(router: Router, store: Store): void {
+  const start = (prompt: string, outputPath: string) =>
+    store.mutate(state => {
+      state.generation = {
+        id: `gen-${Date.now().toString(36)}`,
+        status: 'running',
+        progress: 0,
+        phase: 'loading_model',
+        prompt,
+        output_path: outputPath,
+        started_at: Date.now(),
+        duration_ms: GENERATE_MS,
+      }
+      return state.generation
+    })
+
+  router.post('/api/generate', async req => {
+    const prompt = String(req.body.prompt ?? '')
+    const generation = start(prompt, DEMO_OUTPUT)
+    await wait(GENERATE_MS)
+    if (store.data.generation?.id !== generation.id || store.data.generation.status === 'cancelled') {
+      throw new MockHttpError(499, 'Generation cancelled')
+    }
+    return store.mutate(state => {
+      if (state.generation) {
+        state.generation.status = 'complete'
+        state.generation.progress = 100
+      }
+      return {
+        status: 'complete',
+        video_path: DEMO_OUTPUT,
+        seed: Number(req.body.seed) || 424242,
+        duration: Number(req.body.duration) || 5,
+      }
+    })
+  })
+
+  router.post('/api/generate-image', async req => {
+    const prompt = String(req.body.prompt ?? '')
+    const count = Math.max(1, Math.min(4, Number(req.body.num_images ?? 1) || 1))
+    start(prompt, 'ui-mock/images/image-1.png')
+    await wait(3000)
+    return store.mutate(state => {
+      if (state.generation) {
+        state.generation.status = 'complete'
+        state.generation.progress = 100
+      }
+      return {
+        status: 'complete',
+        image_paths: Array.from({ length: count }, (_, i) => `ui-mock/images/${Date.now().toString(36)}-${i + 1}.png`),
+        seed: Number(req.body.seed) || 424242,
+      }
+    })
+  })
+
+  router.get('/api/generation/progress', () => {
+    const state = store.data
+    const progress = progressOf(state)
+    const running = state.generation?.status === 'running'
+    return {
+      status: state.generation?.status ?? 'idle',
+      phase: running ? phaseAt(progress) : (state.generation?.phase ?? ''),
+      progress,
+      currentStep: running ? Math.max(1, Math.round((progress / 100) * 20)) : null,
+      totalSteps: running ? 20 : null,
+    }
+  })
+
+  router.post('/api/generate/cancel', () =>
+    store.mutate(state => {
+      if (state.generation?.status === 'running') state.generation.status = 'cancelled'
+      return { status: 'cancelled' }
+    }),
+  )
+
+  router.post('/api/retake', async req => {
+    start(String(req.body.prompt ?? ''), DEMO_OUTPUT)
+    await wait(GENERATE_MS)
+    return store.mutate(state => {
+      if (state.generation) state.generation.status = 'complete'
+      return { status: 'complete', video_path: DEMO_OUTPUT, seed: Number(req.body.seed) || 424242 }
+    })
+  })
+
+  router.post('/api/suggest-gap-prompt', req => {
+    const before = String(req.body.beforePrompt ?? '').trim()
+    const after = String(req.body.afterPrompt ?? '').trim()
+    const bridge = [before, after].filter(Boolean).join(' → ') || 'the two shots'
+    return {
+      prompt: `A continuous transition between ${bridge}, matched lighting and lens, no cut`,
+      negative_prompt: 'text, watermark, hard cut, flicker',
+      used_llm: false,
+      message: 'UI-only mode: this suggestion is generated by the mock backend, not by a model.',
+    }
+  })
+
+  // IC-LoRA is not simulated; the endpoints answer honestly so the UI shows
+  // its "unavailable" states rather than hanging on a request that never lands.
+  router.get('/api/ic-lora/list-models', () => ({ models: [] }))
+  router.post('/api/ic-lora/download-model', () => {
+    throw new MockHttpError(501, 'IC-LoRA is not simulated in UI-only mode. Run the full app to use it.')
+  })
+  router.post('/api/ic-lora/extract-conditioning', () => {
+    throw new MockHttpError(501, 'IC-LoRA is not simulated in UI-only mode. Run the full app to use it.')
+  })
+  router.post('/api/ic-lora/generate', () => {
+    throw new MockHttpError(501, 'IC-LoRA is not simulated in UI-only mode. Run the full app to use it.')
+  })
+}

@@ -2,6 +2,7 @@ import { useCallback } from 'react'
 import { useDropzone } from 'react-dropzone'
 import { Upload, Music, RefreshCw, Trash2 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { toFileUrl } from '@/lib/file-url'
 
 interface AudioUploaderProps {
   onAudioSelect: (path: string | null) => void
@@ -15,9 +16,7 @@ export function AudioUploader({ onAudioSelect, selectedAudio }: AudioUploaderPro
       const filePath = (file as any).path as string | undefined
       if (filePath) {
         await window.electronAPI?.approveLocalPath?.(filePath)
-        const normalized = filePath.replace(/\\/g, '/')
-        const fileUrl = normalized.startsWith('/') ? `file://${normalized}` : `file:///${normalized}`
-        onAudioSelect(fileUrl)
+        onAudioSelect(toFileUrl(filePath))
       }
     }
   }, [onAudioSelect])
