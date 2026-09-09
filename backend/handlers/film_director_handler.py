@@ -33,6 +33,7 @@ from film.film_api_types import (
     DirectorCommandResponse,
     DirectorCommandResult,
     DirectorContextDetails,
+    DirectorProviderStatus,
     DirectorInstructRequest,
     DirectorInstructResponse,
     DirectorRoleModel,
@@ -83,6 +84,11 @@ from film.film_models import (
 from film.film_continuity import previous_in_same_scene
 from film.film_prompt import framing_summary, synthesize_prompt
 from film.llm_providers import (
+    ANTHROPIC_DEFAULT_MODEL,
+    XAI_DEFAULT_MODEL,
+    AnthropicProvider,
+    XAIProvider,
+    gemini_list_models,
     GEMINI_DEFAULT_MODEL,
     GeminiProvider,
     LLMMessage,
@@ -102,6 +108,7 @@ from handlers.base import StateHandlerBase
 from handlers.film_generation_handler import FilmGenerationHandler
 from handlers.film_handler import FilmHandler
 from services.interfaces import HTTPClient, VideoProcessor
+from state.app_settings import AppSettings
 from state.app_state_types import AppState
 
 logger = logging.getLogger(__name__)
@@ -109,8 +116,9 @@ logger = logging.getLogger(__name__)
 _MAX_TOOL_STEPS = 12
 _OPENROUTER_MODELS_TTL_MS = 10 * 60 * 1000
 _KEY_MISSING = (
-    "AI_DIRECTOR_KEY_MISSING: add an OpenRouter or Gemini API key in Settings → API Keys "
-    "(or set the OPENROUTER_API_KEY environment variable)"
+    "AI_DIRECTOR_KEY_MISSING: connect a text model in Settings → API Keys — an OpenRouter, "
+    "Claude, Grok or Gemini key, or a local OpenAI-compatible server for a fully offline "
+    "director (or set the OPENROUTER_API_KEY environment variable)"
 )
 
 _ROLES = ("script", "storyboard", "director", "continuity", "prompt_refinement")
@@ -636,38 +644,113 @@ class FilmDirectorHandler(StateHandlerBase):
         result = self._execute(project_id, req.name, req.params)
         return DirectorCommandResponse(results=[result])
 
+    _PROVIDER_LABELS: dict[str, str] = {
+        "openrouter": "OpenRouter",
+        "anthropic": "Claude (Anthropic)",
+        "xai": "Grok (xAI)",
+        "gemini": "Gemini (Google)",
+        "openai_compatible": "Local / OpenAI-compatible",
+    }
+
+    @staticmethod
+    def _provider_configuration(settings: AppSettings) -> dict[str, bool]:
+        """Which text providers are usable right now."""
+        return {
+            "openrouter": bool(settings.resolved_openrouter_api_key()),
+            "anthropic": bool(settings.anthropic_api_key.strip()),
+            "xai": bool(settings.xai_api_key.strip()),
+            "gemini": bool(settings.gemini_api_key.strip()),
+            "openai_compatible": bool(
+                settings.openai_compatible_base_url.strip() and settings.openai_compatible_model.strip()
+            ),
+        }
+
     def status(self) -> DirectorStatusResponse:
         with self.lock:
             settings = self.state.app_settings.model_copy(deep=True)
-        openrouter_key = settings.resolved_openrouter_api_key()
-        gemini_key = settings.gemini_api_key.strip()
-        has_openai = bool(settings.openai_compatible_base_url.strip() and settings.openai_compatible_model.strip())
-        active = self._active_provider_name(settings.director_provider, bool(openrouter_key), bool(gemini_key), has_openai)
+        configured = self._provider_configuration(settings)
+        active = self._active_provider_name(settings.director_provider, configured)
         roles: list[DirectorRoleModel] = []
         for role in _ROLES:
-            if active == "openrouter":
-                roles.append(DirectorRoleModel(role=role, provider="openrouter", model=settings.openrouter_models.for_role(role)))
-            elif active == "gemini":
-                roles.append(DirectorRoleModel(role=role, provider="gemini", model=GEMINI_DEFAULT_MODEL))
-            elif active == "openai_compatible":
-                roles.append(DirectorRoleModel(role=role, provider="openai_compatible", model=settings.openai_compatible_model.strip()))
-            else:
+            if active == "none":
                 roles.append(DirectorRoleModel(role=role, provider="none", model=""))
+            else:
+                roles.append(
+                    DirectorRoleModel(
+                        role=role,
+                        provider=active,
+                        model=settings.director_model_for(active, role) or self._default_model_for(active),
+                    )
+                )
+        providers = [
+            DirectorProviderStatus(
+                id=provider_id,
+                label=self._PROVIDER_LABELS[provider_id],
+                configured=configured[provider_id],
+                model=settings.director_model_for(provider_id) or self._default_model_for(provider_id),
+                needs_key=provider_id != "openai_compatible",
+                note=(
+                    "Runs fully offline against your own server"
+                    if provider_id == "openai_compatible"
+                    else ""
+                ),
+            )
+            for provider_id in self._PROVIDER_LABELS
+        ]
         message = ""
-        if active == "none":
+        if settings.director_provider != "auto" and not configured.get(settings.director_provider, False):
+            label = self._PROVIDER_LABELS.get(settings.director_provider, settings.director_provider)
+            message = (
+                f"{label} is selected but not configured — add its key in Settings → API Keys, "
+                "or switch the provider."
+            )
+        elif active == "none":
             message = _KEY_MISSING
-        elif settings.director_provider == "openrouter" and not openrouter_key:
-            message = "OpenRouter selected but no key configured"
         return DirectorStatusResponse(
             provider_setting=settings.director_provider,
             active_provider=active,
-            gemini_configured=bool(gemini_key),
-            openrouter_configured=bool(openrouter_key),
-            openai_compatible_configured=has_openai,
+            gemini_configured=configured["gemini"],
+            openrouter_configured=configured["openrouter"],
+            openai_compatible_configured=configured["openai_compatible"],
+            anthropic_configured=configured["anthropic"],
+            xai_configured=configured["xai"],
             openrouter_key_source=settings.openrouter_key_source(),
             roles=roles,
             tools=[DirectorToolInfo(name=spec.name, description=spec.description) for spec in _TOOL_SPECS],
+            providers=providers,
             message=message,
+        )
+
+    @staticmethod
+    def _default_model_for(provider: str) -> str:
+        return {
+            "anthropic": ANTHROPIC_DEFAULT_MODEL,
+            "xai": XAI_DEFAULT_MODEL,
+            "gemini": GEMINI_DEFAULT_MODEL,
+        }.get(provider, "")
+
+    def chat_models(self, provider: str, *, refresh: bool = False) -> OpenRouterModelsResponse:
+        """The model list a text provider offers for this key/endpoint.
+
+        Always the provider's own catalog — the app never ships a fixed list of
+        model ids that would go stale.
+        """
+        if provider == "openrouter":
+            return self.openrouter_models(refresh=refresh)
+        if provider == "openai_compatible":
+            return self.openai_compatible_models()
+        with self.lock:
+            settings = self.state.app_settings.model_copy(deep=True)
+        if provider == "anthropic":
+            models = AnthropicProvider(self._http, settings.anthropic_api_key.strip()).list_models()
+        elif provider == "xai":
+            models = XAIProvider(self._http, settings.xai_api_key.strip()).list_models()
+        elif provider == "gemini":
+            models = gemini_list_models(self._http, settings.gemini_api_key.strip())
+        else:
+            raise HTTPError(400, f"Unknown text provider: {provider}")
+        return OpenRouterModelsResponse(
+            models=[OpenRouterModelInfo(**m.model_dump()) for m in models], fetched_at_ms=now_ms(), cached=False
         )
 
     def openrouter_models(self, *, refresh: bool = False) -> OpenRouterModelsResponse:
@@ -719,44 +802,49 @@ class FilmDirectorHandler(StateHandlerBase):
 
     # ---- Provider resolution --------------------------------------------
 
-    @staticmethod
-    def _active_provider_name(setting: str, has_openrouter: bool, has_gemini: bool, has_openai: bool = False) -> str:
-        if setting == "openrouter":
-            return "openrouter" if has_openrouter else "none"
-        if setting == "gemini":
-            return "gemini" if has_gemini else "none"
-        if setting == "openai_compatible":
-            return "openai_compatible" if has_openai else "none"
-        if has_openrouter:
-            return "openrouter"
-        if has_gemini:
-            return "gemini"
-        if has_openai:
-            return "openai_compatible"
+    # "auto" tries hosted providers in this order, then the local endpoint.
+    _AUTO_ORDER = ("openrouter", "anthropic", "xai", "gemini", "openai_compatible")
+
+    @classmethod
+    def _active_provider_name(cls, setting: str, configured: dict[str, bool]) -> str:
+        if setting != "auto":
+            return setting if configured.get(setting, False) else "none"
+        for candidate in cls._AUTO_ORDER:
+            if configured.get(candidate, False):
+                return candidate
         return "none"
 
     def _provider(self, role: str) -> LLMProvider:
         with self.lock:
             settings = self.state.app_settings.model_copy(deep=True)
-        openrouter_key = settings.resolved_openrouter_api_key()
-        gemini_key = settings.gemini_api_key.strip()
-        openai_base = settings.openai_compatible_base_url.strip()
-        openai_model = settings.openai_compatible_model.strip()
-        has_openai = bool(openai_base and openai_model)
-        active = self._active_provider_name(settings.director_provider, bool(openrouter_key), bool(gemini_key), has_openai)
+        configured = self._provider_configuration(settings)
+        active = self._active_provider_name(settings.director_provider, configured)
+        model = settings.director_model_for(active, role)
         if active == "openrouter":
-            return OpenRouterProvider(self._http, openrouter_key, settings.openrouter_models.for_role(role))
+            return OpenRouterProvider(self._http, settings.resolved_openrouter_api_key(), model)
+        if active == "anthropic":
+            return AnthropicProvider(self._http, settings.anthropic_api_key.strip(), model)
+        if active == "xai":
+            return XAIProvider(self._http, settings.xai_api_key.strip(), model)
         if active == "gemini":
-            return GeminiProvider(self._http, gemini_key)
+            return GeminiProvider(self._http, settings.gemini_api_key.strip(), model or GEMINI_DEFAULT_MODEL)
         if active == "openai_compatible":
             return OpenAICompatibleProvider(
-                self._http, settings.openai_compatible_api_key.strip(), openai_model, base_url=openai_base
+                self._http,
+                settings.openai_compatible_api_key.strip(),
+                model,
+                base_url=settings.openai_compatible_base_url.strip(),
             )
-        if settings.director_provider == "openrouter":
+        selected = settings.director_provider
+        if selected == "openrouter":
             raise HTTPError(400, "OPENROUTER_KEY_MISSING: OpenRouter is selected but no key is configured")
-        if settings.director_provider == "gemini":
+        if selected == "gemini":
             raise HTTPError(400, "GEMINI_API_KEY_MISSING: Gemini is selected but no key is configured")
-        if settings.director_provider == "openai_compatible":
+        if selected == "anthropic":
+            raise HTTPError(400, "ANTHROPIC_KEY_MISSING: Claude is selected but no key is configured")
+        if selected == "xai":
+            raise HTTPError(400, "XAI_KEY_MISSING: Grok is selected but no key is configured")
+        if selected == "openai_compatible":
             raise HTTPError(400, "OPENAI_COMPATIBLE_NOT_CONFIGURED: set the endpoint base URL and model in Settings → API Keys")
         raise HTTPError(400, _KEY_MISSING)
 

@@ -7,12 +7,18 @@ onto an operation the app already performs, and no command invents a
 capability the UI lacks. The LLM never mutates anything directly: it can only
 call the registry below, and every call is validated like a UI request.
 
-Providers: **OpenRouter** (first-class, see `docs/OPENROUTER.md`), Gemini,
-or any **OpenAI-compatible endpoint** (LM Studio, vLLM, Ollama's OpenAI API —
-fully offline). All are driven through one `LLMProvider` contract
+Providers: **OpenRouter** (first-class, see `docs/OPENROUTER.md`),
+**Claude** (Anthropic), **Grok** (xAI), **Gemini**, or any
+**OpenAI-compatible endpoint** (LM Studio, vLLM, Ollama's OpenAI API — fully
+offline). All are driven through one `LLMProvider` contract
 (`backend/film/llm_providers.py`) over the fakeable `HTTPClient` service, so
-all tests run without network or keys. Without any provider, the offline
-builder, the script parser, continuity and the composer keep working.
+all tests run without network or keys. On *Auto* the app takes the first
+configured provider in the order openrouter → anthropic → xai → gemini →
+openai_compatible; the **Director** chip in the bar switches provider and
+model without leaving the chat, next to the **Video** and **Image** chips
+that pick the generation models (`docs/AI_PROVIDERS.md`). Without any
+provider, the offline builder, the script parser, continuity and the composer
+keep working.
 
 ### Safety boundaries
 

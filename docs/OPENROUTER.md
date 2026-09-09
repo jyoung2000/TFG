@@ -2,8 +2,16 @@
 
 OpenRouter is the first-class LLM provider for every AI feature in the
 filmmaking layer: the AI Director bar (tool calling), *Build Film with AI*,
-*AI Storyboard*, shot prompt refinement, and the Quick Mode idea chat. Gemini
-remains available as an alternative provider through the same abstraction.
+*AI Storyboard*, shot prompt refinement, and the Quick Mode idea chat.
+
+It is one of five interchangeable text providers — Claude (Anthropic), Grok
+(xAI), Gemini and any local OpenAI-compatible server are the others, and all
+of them plug into the same abstraction with the same secret handling.
+**`AI_PROVIDERS.md` is the complete reference** for every provider, the
+hosted media providers (fal / WaveSpeed / Replicate), the Model Library and
+the fully offline setup. This page stays focused on OpenRouter itself: its
+per-role model overrides, its key validation and its threat model, which the
+other providers follow.
 
 ## Setup
 

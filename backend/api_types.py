@@ -271,6 +271,84 @@ class ModelDownloadRequest(BaseModel):
     skipTextEncoder: bool = False
 
 
+# ---------------------------------------------------------------------------
+# Model library: one searchable catalog over local weights and hosted models
+# ---------------------------------------------------------------------------
+
+LibraryTask = Literal["video", "image", "text"]
+LibrarySource = Literal["local", "hosted"]
+
+
+class LibraryModel(BaseModel):
+    """One model the user can pick, download, or connect to."""
+
+    id: str  # provider-scoped id, exactly what the provider expects
+    name: str
+    provider: str  # wangp | native | ollama | openai_compatible | openrouter | anthropic | xai | gemini | fal | wavespeed | replicate
+    source: LibrarySource
+    task: LibraryTask
+    description: str = ""
+    # installed | available | downloading | active | incompatible | needs_key | example
+    state: str = "available"
+    installed: bool = False
+    downloadable: bool = False
+    size_gb: float | None = None
+    estimated_min_vram_gb: float | None = None
+    fits_gpu: bool | None = None
+    supports_image_input: bool = False
+    context_length: int | None = None
+    family: str = ""
+    quantization: str = ""
+    # True for the example ids this app ships for providers without a public
+    # catalog API — check them against the provider's own model list.
+    curated: bool = False
+    url: str = ""
+
+
+class LibrarySourceStatus(BaseModel):
+    id: str
+    label: str
+    kind: LibrarySource
+    configured: bool
+    count: int = 0
+    # Populated when this source could not be listed; the rest of the library
+    # still works, so one unreachable provider never empties the page.
+    error: str = ""
+    catalog_url: str = ""
+
+
+class ModelSearchResponse(BaseModel):
+    models: list[LibraryModel]
+    total: int
+    sources: list[LibrarySourceStatus]
+    gpu_name: str | None = None
+    gpu_vram_gb: float | None = None
+    models_path: str = ""
+    # True when at least one local video/image model and one local text model
+    # are installed — everything needed for a fully offline film.
+    offline_ready: bool = False
+    offline_note: str = ""
+
+
+class LibraryDownloadRequest(BaseModel):
+    provider: str
+    model_id: str
+
+
+class LibraryDownloadStatus(BaseModel):
+    active: bool = False
+    provider: str = ""
+    model_id: str = ""
+    status: str = "idle"  # idle | running | complete | failed | cancelled
+    files_total: int = 0
+    files_done: int = 0
+    downloaded_bytes: int = 0
+    total_bytes: int = 0
+    progress: float = 0.0
+    error: str = ""
+    message: str = ""
+
+
 class SuggestGapPromptRequest(BaseModel):
     beforePrompt: str = ""
     afterPrompt: str = ""

@@ -7,6 +7,8 @@ import { DIRECTOR_ROLES, type OpenRouterModelInfo, type OpenRouterValidation } f
 const PROVIDER_OPTIONS: { id: DirectorProviderSetting; label: string; hint: string }[] = [
   { id: 'auto', label: 'Auto', hint: 'OpenRouter when a key exists, then Gemini, then a local endpoint' },
   { id: 'openrouter', label: 'OpenRouter', hint: 'Any model on openrouter.ai' },
+  { id: 'anthropic', label: 'Claude', hint: 'Anthropic API key' },
+  { id: 'xai', label: 'Grok', hint: 'xAI API key' },
   { id: 'gemini', label: 'Gemini', hint: 'Google AI Studio key' },
   { id: 'openai_compatible', label: 'Local / OpenAI-compatible', hint: 'LM Studio, vLLM, Ollama (OpenAI API), any /v1 endpoint' },
 ]

@@ -11,6 +11,11 @@ reused untouched:
 | forced API / no CUDA GPU | LTX cloud API |
 | CUDA + downloaded models | local LTX pipelines |
 
+When a **hosted media provider** is selected (fal, WaveSpeed or Replicate)
+the same queue instead submits the same adapted request to that provider and
+downloads the result — see *Hosted providers* below. Local remains the
+default and the offline path.
+
 ## Request adaptation
 
 For each queued job a `ShotVersion` records everything reproducible:
@@ -59,6 +64,40 @@ capture/output/error/wardrobe-snapshot/timestamp). Completed versions can be
 promoted to *current* at any time; failed versions keep their error and a
 Retry action. Nothing is ever silently overwritten.
 
+## Hosted providers (fal / WaveSpeed / Replicate)
+
+`media_provider` is `local` by default. Set it to `fal`, `wavespeed` or
+`replicate` — app-wide in *Settings → API Keys*, or per project from the
+*Video* / *Image* chips in the AI Director bar — and the queue routes the job
+through `MediaRunner` instead of the host engine. Resolution order per job:
+the project's `media_provider` / `video_model`, then the app defaults, then
+`local`.
+
+What is identical to a local render:
+
+- the same `_prepare_request` output — synthesized prompt, reference image,
+  duration, fps, resolution, aspect and seed;
+- one queue, one job at a time, with pause/resume, per-job cancel,
+  prioritize and live progress (`MediaRunner` reports ramped progress while
+  polling and honours the same cancel flag);
+- a `ShotVersion` per attempt, the downloaded file stored beside local
+  renders, and the same timeline / editor / `.ltxfilm` behaviour;
+- the same telemetry event, with `execution_mode` set to the provider name
+  rather than `wangp` / `api` / `local`.
+
+What differs:
+
+- conditioning images are sent inline as `data:` URLs (nothing is uploaded to
+  a third-party file host);
+- a missing key fails the job immediately with a typed, key-free message
+  naming the provider and the setting to fill in — it never starts a render
+  it cannot finish;
+- provider timeouts fail that job instead of stalling the queue.
+
+Asset reference images follow the same rule: *Assets → Generate with AI* runs
+locally when the project generates locally, otherwise on the selected hosted
+provider with the chosen image model.
+
 ## Queue semantics
 
 One background worker drains the film queue sequentially (the host has a
@@ -82,6 +121,15 @@ storyboard header shows the active job with progress, a pending list with
 per-job cancel/prioritize, and Pause/Resume.
 
 ## Model management
+
+The **Model Library** (`GET /api/models/library`) is the searchable catalog
+over every model this app can use — local WanGP weights, the native LTX
+files, an Ollama or OpenAI-compatible server's models, and each configured
+hosted provider's list — with downloads for the ones that run on this
+machine (`POST /api/models/library/download`, Hugging Face weights and Ollama
+pulls). It also reports `offline_ready`: whether a local video/image model
+and a local text model are both installed. Full reference in
+`AI_PROVIDERS.md`.
 
 Besides download (`POST /api/models/download`), `DELETE /api/models/{type}`
 removes a downloaded local model (`checkpoint | upsampler | text_encoder |

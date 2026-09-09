@@ -56,6 +56,16 @@ try {
     const close = page.getByRole('button', { name: /close|done|continue/i }).first()
     if (await close.isVisible().catch(() => false)) await close.click().catch(() => {})
   }
+
+  // Providers are app-wide and persist between runs; start from a clean slate
+  // so "no provider configured" assertions mean what they say.
+  for (const provider of ['anthropic', 'xai', 'openrouter', 'gemini', 'openai-compatible', 'fal', 'wavespeed', 'replicate']) {
+    await api(`/api/settings/api-keys/${provider}`, { method: 'DELETE' }).catch(() => {})
+  }
+  await api('/api/settings', {
+    method: 'POST',
+    body: JSON.stringify({ directorProvider: 'auto', mediaProvider: 'local', defaultVideoModel: '', defaultImageModel: '' }),
+  }).catch(() => {})
   await page.waitForTimeout(1000)
   const back = page.getByRole('button', { name: /back to home/i }).first()
   if (await back.isVisible().catch(() => false)) { await back.click(); await page.waitForTimeout(800) }
@@ -214,6 +224,9 @@ try {
 
   // ---- G. Models tab: states + model location ----
   await page.getByRole('tab', { name: 'Models' }).click()
+  await page.waitForTimeout(500)
+  // The Models tab opens on the Model Library; installed weights live in the second view.
+  await page.getByRole('tab', { name: 'Installed & GPU', exact: true }).click()
   await page.waitForTimeout(2000)
   const chips = await page.locator('span').filter({ hasText: /^(Active|Installed|Available|Downloading|Update available|Incompatible|Cloud)$/ }).count()
   log('Models tab shows product state chips', chips >= 1, `${chips} chips`)

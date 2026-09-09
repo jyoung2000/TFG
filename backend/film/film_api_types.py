@@ -82,6 +82,21 @@ class AssetResponse(BaseModel):
     asset: FilmAsset
 
 
+class GenerateAssetReferenceRequest(BaseModel):
+    """Render a reference image for a character/location/prop with the
+    project's image model. An empty prompt is synthesized from the asset."""
+
+    prompt: str = ""
+
+
+class GenerateAssetReferenceResponse(BaseModel):
+    asset: FilmAsset
+    prompt: str
+    provider: str
+    model: str
+    reference_path: str
+
+
 class AddAssetReferenceRequest(BaseModel):
     image_base64: str
     name_hint: str = "reference"
@@ -456,15 +471,31 @@ class DirectorToolInfo(BaseModel):
     description: str
 
 
+class DirectorProviderStatus(BaseModel):
+    """One text provider the AI Director can run on."""
+
+    id: str  # openrouter | anthropic | xai | gemini | openai_compatible
+    label: str
+    configured: bool
+    # The model this provider would use right now ('' = the provider's default).
+    model: str = ""
+    # False when the provider needs no key (a local OpenAI-compatible server).
+    needs_key: bool = True
+    note: str = ""
+
+
 class DirectorStatusResponse(BaseModel):
     provider_setting: str
-    active_provider: str  # "openrouter" | "gemini" | "none"
+    active_provider: str  # one of the provider ids, or "none"
     gemini_configured: bool
     openrouter_configured: bool
     openai_compatible_configured: bool = False
+    anthropic_configured: bool = False
+    xai_configured: bool = False
     openrouter_key_source: str
     roles: list[DirectorRoleModel]
     tools: list[DirectorToolInfo]
+    providers: list[DirectorProviderStatus] = Field(default_factory=list[DirectorProviderStatus])
     message: str = ""
 
 

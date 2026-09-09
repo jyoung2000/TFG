@@ -11,14 +11,20 @@ ELECTRON_DEBUG=1 pnpm dev
 # 2. from a directory with playwright installed (npm i playwright)
 node scripts/verify/verify-rc.mjs             # release-candidate walkthrough: composer gizmo/lock/manual camera/keyframes, undo/redo, gaps, director set_ots, models states, local endpoint settings, path policy (39 checks)
 node scripts/verify/verify-hardening.mjs      # home, quick mode, build film, continuity, queue, OpenRouter settings, packages (33 checks)
+node scripts/verify/verify-models.mjs         # Model Library search/filters/download refusal/custom ids, Claude+Grok+media provider settings, chat model chips, hosted generation without a key, asset reference (21 checks)
 node scripts/verify/verify-ui.mjs             # original storyboard/composer/generation walkthrough
 # packaged AppImage instead of dev:
 ./release/LTX\ Desktop-*.AppImage --appimage-extract-and-run --no-sandbox --remote-debugging-port=9223 &
 node scripts/verify/check-appimage.mjs
 ```
 
-Screenshots and `results.json` land in `./verify-shots/<script>/`. The
-scripts never use real API keys (`test-placeholder-not-a-real-key`), accept
+Screenshots and `results.json` land in `./verify-shots/<script>/`. Provider
+keys and model choices are app-wide and persist between runs, so
+`verify-hardening.mjs` and `verify-rc.mjs` clear every provider key and reset
+the director/media provider before they start — otherwise a previous
+`verify-models.mjs` run makes their "no provider configured" assertions
+meaningless. The scripts never use real API keys
+(`test-placeholder-not-a-real-key`), accept
 the LTX API-key gateway with a dummy value when it appears, and connect to
 `127.0.0.1` (Node ≥ 17 resolves `localhost` to IPv6 first, which Electron's
 CDP server does not bind).

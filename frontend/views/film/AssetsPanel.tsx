@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { ImagePlus, MapPin, Package, Palette, Plus, Trash2, User } from 'lucide-react'
+import { ImagePlus, Loader2, MapPin, Package, Palette, Plus, Sparkles, Trash2, User } from 'lucide-react'
 import { useFilm } from '../../contexts/FilmContext'
 import { filmApi, filmMediaUrl } from '../../lib/film-api'
 import type { FilmAsset, FilmAssetKind } from '../../types/film'
@@ -70,6 +70,7 @@ export function AssetsPanel() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [draft, setDraft] = useState<Partial<FilmAsset>>({})
   const [note, setNote] = useState('')
+  const [generating, setGenerating] = useState(false)
 
   const selected = film?.assets.find(a => a.id === selectedId) ?? null
 
@@ -135,6 +136,21 @@ export function AssetsPanel() {
       reader.readAsDataURL(file)
     }
     input.click()
+  }, [film, selected, refresh])
+
+  const generateReference = useCallback(async () => {
+    if (!film || !selected) return
+    setGenerating(true)
+    setNote('')
+    try {
+      const result = await filmApi.generateAssetReference(film.id, selected.id)
+      await refresh()
+      setNote(`Reference generated with ${result.model || result.provider}`)
+    } catch (e) {
+      setNote(`Could not generate a reference: ${e instanceof Error ? e.message : e}`)
+    } finally {
+      setGenerating(false)
+    }
   }, [film, selected, refresh])
 
   if (!film) return null
@@ -224,6 +240,15 @@ export function AssetsPanel() {
                   className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-[10px] text-zinc-300"
                 >
                   <ImagePlus className="h-3 w-3" /> Add image
+                </button>
+                <button
+                  onClick={() => void generateReference()}
+                  disabled={generating}
+                  title="Render a reference image with the project's image model (Model Library → Image)"
+                  className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-violet-800/70 hover:bg-violet-700 disabled:opacity-40 text-[10px] text-violet-100"
+                >
+                  {generating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />}
+                  Generate with AI
                 </button>
               </div>
               <ReferenceStrip asset={selected} />

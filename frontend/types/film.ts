@@ -314,6 +314,11 @@ export interface FilmProjectSettings {
   default_quality_preset: 'fast_preview' | 'balanced' | 'quality' | 'custom'
   preview_resolution: string
   preview_max_seconds: number
+  /** '' follows the app default; 'local' keeps this film's frames on this machine. */
+  media_provider: '' | 'local' | 'fal' | 'wavespeed' | 'replicate'
+  /** Provider-scoped model ids used when media_provider is a hosted one. */
+  video_model: string
+  image_model: string
 }
 
 export interface FilmProject {

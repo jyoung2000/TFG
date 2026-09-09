@@ -14,6 +14,7 @@ from handlers import (
     GenerationHandler,
     HealthHandler,
     IcLoraHandler,
+    ModelLibraryHandler,
     ImageGenerationHandler,
     ModelsHandler,
     PipelinesHandler,
@@ -24,6 +25,7 @@ from handlers import (
     TextHandler,
     VideoGenerationHandler,
 )
+from film.media_runner import MediaRunner
 from runtime_config.runtime_config import RuntimeConfig
 from services.wangp_bridge import WanGPBridge
 from services.interfaces import (
@@ -202,6 +204,17 @@ class AppHandler:
             wangp_bridge=self.wangp_bridge,
         )
 
+        self.model_library = ModelLibraryHandler(
+            state=self.state,
+            lock=self._lock,
+            config=config,
+            wangp_bridge=self.wangp_bridge,
+            http=http,
+            gpu_info=gpu_info,
+            task_runner=task_runner,
+            model_downloader=model_downloader,
+        )
+
         self.runtime_policy = RuntimePolicyHandler(config=config)
 
         self.suggest_gap_prompt = SuggestGapPromptHandler(
@@ -250,6 +263,8 @@ class AppHandler:
             task_runner=task_runner,
             config=config,
             wangp_bridge=self.wangp_bridge,
+            media_runner=MediaRunner(http),
+            image_generation_handler=self.image_generation,
         )
 
         self.film_director = FilmDirectorHandler(

@@ -10,8 +10,10 @@ same engine, projects and settings:
 
 Nothing in the film layer has its own inference engine: every render goes
 through the host's `VideoGenerationHandler` (WanGP bridge, LTX API or the
-local LTX pipeline — whichever the machine is configured for). See
-`GENERATION_PIPELINE.md`.
+local LTX pipeline — whichever the machine is configured for), or, when a
+hosted media provider is selected, through the same single film queue against
+fal / WaveSpeed / Replicate. See `GENERATION_PIPELINE.md` and
+`AI_PROVIDERS.md`.
 
 ## The workflow
 
@@ -49,25 +51,37 @@ local LTX pipeline — whichever the machine is configured for). See
 
 ## AI, optional by design
 
-Every AI feature is powered by the AI Director provider layer — **OpenRouter**
-first-class (`OPENROUTER.md`), Gemini as an alternative. Without a key the
-app is fully usable: offline planner, screenplay parser, composer,
-continuity, generation, queue, export/import. With a key you get Build Film
-with AI, AI Storyboard, the director bar (tool calling against the same
-project state the UI edits), prompt refinement, and the Quick-video
-assistant — each reply discloses exactly what context was sent
-("context details").
+Every AI feature is powered by the AI Director provider layer: **OpenRouter**,
+**Claude**, **Grok**, **Gemini**, or any **local OpenAI-compatible server**
+(LM Studio, Ollama, vLLM). Without a key the app is fully usable: offline
+planner, screenplay parser, composer, continuity, generation, queue,
+export/import. With a provider you get Build Film with AI, AI Storyboard, the
+director bar (tool calling against the same project state the UI edits),
+prompt refinement, and the Quick-video assistant — each reply discloses
+exactly what context was sent ("context details").
+
+Rendering is equally pluggable: **Local** (the host engine) by default, or
+**fal**, **WaveSpeed**, **Replicate** with a key. The AI Director bar carries
+*Director* / *Video* / *Image* chips so the models in use are visible and
+switchable without leaving the chat.
+
+**Fully offline** is a first-class path, not a fallback: local weights for
+video/image plus a local text server covers the whole workflow with no
+network at all. *Storyboard → Models → Model Library* is one searchable
+catalog of every model — local and hosted — with downloads for the ones that
+run on this machine, and it states plainly whether the offline set is
+complete. See `AI_PROVIDERS.md`.
 
 ## Where things live
 
 - Film data: `<app data>/outputs/film_projects/<project-id>/` (`PROJECT_FORMAT.md`)
 - Renders: `<app data>/outputs/`
-- Settings and API keys: the backend settings file (`OPENROUTER.md` for the secret-handling rules)
+- Settings and API keys: the backend settings file (`AI_PROVIDERS.md` / `OPENROUTER.md` for the secret-handling rules)
 - Simple vs advanced UI: toggle in the storyboard header (hides script/models tabs, export/import, quality profiles, context details)
 
 ## Documentation map
 
-`STORYBOARD.md` · `SHOT_COMPOSER.md` · `AI_DIRECTOR.md` · `OPENROUTER.md` ·
-`GENERATION_PIPELINE.md` · `CONTINUITY.md` · `PROJECT_FORMAT.md` ·
+`STORYBOARD.md` · `SHOT_COMPOSER.md` · `AI_DIRECTOR.md` · `AI_PROVIDERS.md` ·
+`OPENROUTER.md` · `GENERATION_PIPELINE.md` · `CONTINUITY.md` · `PROJECT_FORMAT.md` ·
 `INSTALLER.md` · `RELEASE_CHECKLIST.md` · `FILMMAKING_INTEGRATION_ARCHITECTURE.md` ·
 `INTEGRATED_UPSTREAMS.md` · `FINAL_HARDENING_AUDIT.md`

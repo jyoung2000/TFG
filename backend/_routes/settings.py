@@ -44,6 +44,10 @@ _KEY_FIELDS = {
     "gemini": "gemini_api_key",
     "openrouter": "openrouter_api_key",
     "openai-compatible": "openai_compatible_api_key",
+    "anthropic": "anthropic_api_key",
+    "xai": "xai_api_key",
+    "wavespeed": "wavespeed_api_key",
+    "replicate": "replicate_api_key",
 }
 
 

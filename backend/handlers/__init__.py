@@ -5,6 +5,7 @@ from handlers.generation_handler import GenerationHandler
 from handlers.health_handler import HealthHandler
 from handlers.ic_lora_handler import IcLoraHandler
 from handlers.image_generation_handler import ImageGenerationHandler
+from handlers.model_library_handler import ModelLibraryHandler
 from handlers.models_handler import ModelsHandler
 from handlers.pipelines_handler import PipelinesHandler
 from handlers.suggest_gap_prompt_handler import SuggestGapPromptHandler
@@ -20,6 +21,7 @@ from handlers.video_generation_handler import VideoGenerationHandler
 __all__ = [
     "SettingsHandler",
     "ModelsHandler",
+    "ModelLibraryHandler",
     "DownloadHandler",
     "TextHandler",
     "PipelinesHandler",

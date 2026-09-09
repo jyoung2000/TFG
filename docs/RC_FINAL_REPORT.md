@@ -1,18 +1,19 @@
 # TFG release-candidate final report
 
-Date: 2026-09-08 · Branch: `claude/ltx-filmmaking-integration-75pnwq`
+Date: 2026-09-08, updated 2026-09-09 · Branch: `claude/ltx-filmmaking-integration-75pnwq`
 
 ## 1. Executive status
 
 **READY WITH KNOWN LIMITATIONS.**
 
 Everything that can be verified without a GPU, a Windows machine or a
-reachable AI provider is verified: 432 backend tests, 29 frontend unit
-tests, strict type checks, a production build, and 72 live end-to-end checks
+reachable AI provider is verified: 461 backend tests, 29 frontend unit
+tests, strict type checks, a production build, and 93 live end-to-end checks
 against the real Electron app all pass. What cannot be verified here is
 stated as **BLOCKED — ENVIRONMENT**, never as PASS: a real WanGP render on an
-RTX 4070, a clean-machine Windows install, and real provider calls. Those
-three are the release blockers listed in §8 and in `RELEASE_CHECKLIST.md`.
+RTX 4070, a clean-machine Windows install, real provider calls, and a real
+multi-GB weight download. Those are the release blockers listed in §8 and in
+`RELEASE_CHECKLIST.md`.
 
 ## 2. Changes by subsystem (this pass)
 
@@ -65,6 +66,49 @@ three are the release blockers listed in §8 and in `RELEASE_CHECKLIST.md`.
   Project format, OpenRouter + local endpoints, Installer CI, Release
   checklist, RTX 4070 matrix, this report, the audit.
 
+## 2b. Multi-provider and Model Library pass (2026-09-09)
+
+**Backend**
+- Text providers: `AnthropicProvider` (native messages API — system prompt at
+  the top level, `tool_use`/`tool_result` content blocks, consecutive tool
+  results merged into one user message, typed 401/404/429/529) and
+  `XAIProvider` (OpenAI-compatible transport), alongside the existing
+  OpenRouter / Gemini / OpenAI-compatible providers. Per-provider key + model
+  settings, live model lists, and an Auto order
+  (openrouter → anthropic → xai → gemini → openai_compatible) that still
+  names the missing key when a provider is selected explicitly.
+- Media providers: `film/media_providers.py` (fal queue API, WaveSpeed v3,
+  Replicate predictions + collection discovery) and `film/media_runner.py` —
+  one submit → poll → download loop with timeout, ramped progress and the
+  queue's cancel flag. Conditioning images ride inline as `data:` URLs.
+- `FilmGenerationHandler` routes a job to the hosted path when the project or
+  app settings select one, keeping the single queue, versions, outputs,
+  export behaviour and telemetry (`execution_mode` = provider). Missing keys
+  fail the job with a typed, key-free message. `generate_asset_reference`
+  produces asset reference images locally or hosted.
+- `ModelLibraryHandler` + `/api/models/library`: unified search over WanGP
+  `defaults/*.json`, native LTX files, Ollama `/api/tags`, an
+  OpenAI-compatible `/models`, and each configured hosted catalog; downloads
+  for Hugging Face-hosted WanGP weights and Ollama pulls with progress and
+  cancel; per-source error isolation; `offline_ready`.
+
+**Frontend**
+- `views/film/ModelLibrary.tsx` — search, task/source tabs, only-compatible
+  toggle, offline banner, download progress + cancel, per-row
+  Download / Pull / Use / Add key, a custom-id row with a provider select,
+  and one error line per unreachable source. The Models tab now opens on it,
+  with the previous GPU/weights view as *Installed & GPU*.
+- `components/AiProviderSettings.tsx` — a card per text provider (key, model,
+  live refresh) and per media provider, plus the media-provider chooser.
+- `views/film/ModelPickers.tsx` — Director / Video / Image chips in the AI
+  Director bar, writing to the open project or the app defaults.
+- *Generate with AI* on asset reference images.
+
+**Tooling / docs**
+- `scripts/verify/verify-models.mjs` (21 live checks).
+- `docs/AI_PROVIDERS.md` (new) plus updates to the Director, filmmaking,
+  pipeline, OpenRouter and verify docs.
+
 ## 3. Upstream repositories inspected
 
 | Repository | Commit | Files / concepts compared |
@@ -80,10 +124,11 @@ three are the release blockers listed in §8 and in `RELEASE_CHECKLIST.md`.
 |---|---|
 | `pnpm typecheck` (tsc + pyright strict) | PASS — 0 errors |
 | `pnpm test:frontend` (vitest) | PASS — 29 tests |
-| `pnpm backend:test` (pytest, mock-free) | PASS — 432 tests |
+| `pnpm backend:test` (pytest, mock-free) | PASS — 461 tests |
 | `pnpm build:frontend` | PASS |
 | `scripts/verify/verify-hardening.mjs` (live Electron) | PASS — 33/33 |
 | `scripts/verify/verify-rc.mjs` (live Electron) | PASS — 39/39 |
+| `scripts/verify/verify-models.mjs` (live Electron) | PASS — 21/21 |
 | Required-list coverage: invariants, director composition tools, screen direction, queue move/recovery, versions/telemetry, package host round-trip, path policy, redaction, provider failure modes, settings clear, OpenAI-compatible, replace-project, visual review | PASS (see `docs/FINAL_HARDENING_AUDIT.md` § 3) |
 | Real GPU render, real provider calls, Windows/macOS installers, gizmo pointer drags | BLOCKED — ENVIRONMENT |
 
@@ -110,17 +155,38 @@ three are the release blockers listed in §8 and in `RELEASE_CHECKLIST.md`.
 | T2V / I2V (capture) / reference / continuation / cancel / progress / failure persistence through the host pipeline | VERIFIED with the fake pipeline; **no real render observed** |
 | RTX 4070 12 GB profiles (Fast Preview 540p, Balanced 720p recommended, Quality 1080p flagged) | Recommendation logic VERIFIED; measurements BLOCKED (`docs/RTX_4070_TEST_MATRIX.md`) |
 
-## 7. OpenRouter (and provider) behaviour tested
+## 7. Provider behaviour tested
 
-All with fake HTTP and a placeholder key, never a real key or a real call:
-key stored only in the backend settings file / env; never in responses,
-logs, project JSON, exports or prompts; `401 → OPENROUTER_KEY_INVALID` without
-echo; `429 → OPENROUTER_RATE_LIMITED`; timeout → 504; malformed tool
-arguments tolerated; nameless tool calls dropped; no-choices / error-object
-bodies → typed 502; unknown tool → reported to the model; 12-turn cap;
-model discovery cached 10 min; role models; validate endpoint; remove clears
-cleanly. Live: the OpenAI-compatible endpoint path returns a typed, key-free
-502 when the local server is unreachable.
+All with fake HTTP and a placeholder key, never a real key or a real call.
+
+**Text providers** — key stored only in the backend settings file / env;
+never in responses, logs, project JSON, exports or prompts;
+`401 → OPENROUTER_KEY_INVALID` without echo; `429 → OPENROUTER_RATE_LIMITED`;
+timeout → 504; malformed tool arguments tolerated; nameless tool calls
+dropped; no-choices / error-object bodies → typed 502; unknown tool →
+reported to the model; 12-turn cap; model discovery cached 10 min; role
+models; validate endpoint; remove clears cleanly. Claude and Grok add their
+own status / chat / tool round-trip / error-mapping coverage, and the Auto
+order plus the explicitly-selected-but-unconfigured case are pinned. Live:
+the OpenAI-compatible endpoint path returns a typed, key-free 502 when the
+local server is unreachable, and the director status names the active
+provider and its model.
+
+**Media providers** — fal, WaveSpeed and Replicate submit/poll/download,
+result-URL extraction across every envelope shape those APIs use, timeouts,
+cancel mid-poll, and the queue integration (a hosted render produces a normal
+version and output). Live: a hosted render with no key fails with
+`FAL_KEY_MISSING: add the fal API key in Settings → API Keys, or switch this
+project back to local generation` and the failed version records `fal` as its
+execution mode; the project can be switched back to local generation from the
+chat chips.
+
+**Model Library** — search, filters, GPU-fit, per-source error isolation,
+download start/status/cancel, hosted rows refusing download with an
+explanation, and remembered custom ids. Live: 23 rows for a "flux" query,
+hosted text sources listing nothing until a key exists, hosted video rows
+marked *Needs API key*, the install path reported as
+`<WanGP>/ckpts`, and a pasted id joining the library.
 
 ## 8. Remaining issues
 
@@ -128,7 +194,9 @@ cleanly. Live: the OpenAI-compatible endpoint path returns a typed, key-free
 |---|---|---|
 | P0 | Clean-machine Windows install never performed | run `RELEASE_CHECKLIST.md` § 2 on Windows (or take the CI artifact) |
 | P0 | No real GPU render from this repository | run `docs/RTX_4070_TEST_MATRIX.md` on an RTX 4070 |
-| P1 | No real provider call (OpenRouter / Gemini / local endpoint) | one manual smoke per provider with a real key; verify tool support of the chosen director model |
+| P1 | No real provider call (OpenRouter / Claude / Grok / Gemini / local endpoint / fal / WaveSpeed / Replicate) | one manual smoke per provider with a real key; verify tool support of the chosen director model and one hosted render end to end |
+| P1 | No real weight downloaded through the Model Library (no bandwidth/disk here, no Ollama server) | pull one WanGP model and one Ollama model on a real machine and confirm `offline_ready` flips |
+| P2 | fal / WaveSpeed rows are shipped examples (those vendors publish no catalog API) | check ids against the linked catalogs; any pasted id already works |
 | P1 | Gizmo drags and Video Editor menu actions verified by code/types only | manual smoke (5 min) |
 | P2 | "Update available" model state not detectable; per-version delete and shot library absent | product decision |
 | P3 | Accessibility screen-reader pass; main bundle ~1 MB | later |

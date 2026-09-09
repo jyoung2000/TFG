@@ -10,10 +10,32 @@ export interface FastModelSettings {
   useUpscaler: boolean
 }
 
-export type DirectorProviderSetting = 'auto' | 'gemini' | 'openrouter' | 'openai_compatible'
+export type DirectorProviderSetting = 'auto' | 'gemini' | 'openrouter' | 'openai_compatible' | 'anthropic' | 'xai'
 
 /** Backend key identifiers accepted by DELETE /api/settings/api-keys/{provider}. */
-export type ClearableKeyProvider = 'ltx' | 'fal' | 'gemini' | 'openrouter' | 'openai-compatible'
+export type ClearableKeyProvider =
+  | 'ltx'
+  | 'fal'
+  | 'gemini'
+  | 'openrouter'
+  | 'openai-compatible'
+  | 'anthropic'
+  | 'xai'
+  | 'wavespeed'
+  | 'replicate'
+
+/** Settings field each provider's key is stored under (write-only from here). */
+export const API_KEY_FIELDS = {
+  ltx: 'ltxApiKey',
+  fal: 'falApiKey',
+  gemini: 'geminiApiKey',
+  openrouter: 'openrouterApiKey',
+  'openai-compatible': 'openaiCompatibleApiKey',
+  anthropic: 'anthropicApiKey',
+  xai: 'xaiApiKey',
+  wavespeed: 'wavespeedApiKey',
+  replicate: 'replicateApiKey',
+} as const satisfies Record<ClearableKeyProvider, string>
 
 /** Preferred OpenRouter model per AI Director role ('' = defaultModel). */
 export interface OpenRouterRoleModels {
@@ -40,6 +62,18 @@ export interface AppSettings {
   openaiCompatibleBaseUrl: string
   openaiCompatibleModel: string
   hasOpenaiCompatibleApiKey: boolean
+  hasAnthropicApiKey: boolean
+  anthropicModel: string
+  hasXaiApiKey: boolean
+  xaiModel: string
+  geminiModel: string
+  /** Where image/video generation runs; "local" keeps everything offline. */
+  mediaProvider: 'local' | 'fal' | 'wavespeed' | 'replicate'
+  hasWavespeedApiKey: boolean
+  hasReplicateApiKey: boolean
+  defaultVideoModel: string
+  defaultImageModel: string
+  recentModelIds: string[]
   useLocalTextEncoder: boolean
   fastModel: FastModelSettings
   proModel: InferenceSettings
@@ -73,6 +107,17 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   openaiCompatibleBaseUrl: '',
   openaiCompatibleModel: '',
   hasOpenaiCompatibleApiKey: false,
+  hasAnthropicApiKey: false,
+  anthropicModel: '',
+  hasXaiApiKey: false,
+  xaiModel: '',
+  geminiModel: '',
+  mediaProvider: 'local',
+  hasWavespeedApiKey: false,
+  hasReplicateApiKey: false,
+  defaultVideoModel: '',
+  defaultImageModel: '',
+  recentModelIds: [],
   useLocalTextEncoder: false,
   fastModel: { useUpscaler: true },
   proModel: { steps: 20, useUpscaler: true },
@@ -96,6 +141,8 @@ interface AppSettingsContextValue {
   saveGeminiApiKey: (value: string) => Promise<void>
   saveOpenrouterApiKey: (value: string) => Promise<void>
   saveOpenaiCompatibleApiKey: (value: string) => Promise<void>
+  /** Store any provider's key; the backend keeps it and returns only a has* flag. */
+  saveApiKey: (provider: ClearableKeyProvider, value: string) => Promise<void>
   /** Remove a stored secret (e.g. after the provider rejected it). */
   clearApiKey: (provider: ClearableKeyProvider) => Promise<void>
   /** True when the selected AI Director provider is usable (key present, or endpoint + model set). */
@@ -133,6 +180,17 @@ function normalizeAppSettings(data: Partial<AppSettings>): AppSettings {
     openaiCompatibleBaseUrl: data.openaiCompatibleBaseUrl ?? DEFAULT_APP_SETTINGS.openaiCompatibleBaseUrl,
     openaiCompatibleModel: data.openaiCompatibleModel ?? DEFAULT_APP_SETTINGS.openaiCompatibleModel,
     hasOpenaiCompatibleApiKey: data.hasOpenaiCompatibleApiKey ?? DEFAULT_APP_SETTINGS.hasOpenaiCompatibleApiKey,
+    hasAnthropicApiKey: data.hasAnthropicApiKey ?? DEFAULT_APP_SETTINGS.hasAnthropicApiKey,
+    anthropicModel: data.anthropicModel ?? DEFAULT_APP_SETTINGS.anthropicModel,
+    hasXaiApiKey: data.hasXaiApiKey ?? DEFAULT_APP_SETTINGS.hasXaiApiKey,
+    xaiModel: data.xaiModel ?? DEFAULT_APP_SETTINGS.xaiModel,
+    geminiModel: data.geminiModel ?? DEFAULT_APP_SETTINGS.geminiModel,
+    mediaProvider: data.mediaProvider ?? DEFAULT_APP_SETTINGS.mediaProvider,
+    hasWavespeedApiKey: data.hasWavespeedApiKey ?? DEFAULT_APP_SETTINGS.hasWavespeedApiKey,
+    hasReplicateApiKey: data.hasReplicateApiKey ?? DEFAULT_APP_SETTINGS.hasReplicateApiKey,
+    defaultVideoModel: data.defaultVideoModel ?? DEFAULT_APP_SETTINGS.defaultVideoModel,
+    defaultImageModel: data.defaultImageModel ?? DEFAULT_APP_SETTINGS.defaultImageModel,
+    recentModelIds: data.recentModelIds ?? DEFAULT_APP_SETTINGS.recentModelIds,
     useLocalTextEncoder: data.useLocalTextEncoder ?? DEFAULT_APP_SETTINGS.useLocalTextEncoder,
     fastModel: data.fastModel ?? DEFAULT_APP_SETTINGS.fastModel,
     proModel: data.proModel ?? DEFAULT_APP_SETTINGS.proModel,
@@ -270,6 +328,11 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
           hasOpenrouterApiKey: _d,
           openrouterKeySource: _e,
           hasOpenaiCompatibleApiKey: _f,
+          hasAnthropicApiKey: _g,
+          hasXaiApiKey: _h,
+          hasWavespeedApiKey: _i,
+          hasReplicateApiKey: _j,
+          recentModelIds: _k,
           ...syncPayload
         } = settings
         await backendFetch('/api/settings', {
@@ -357,6 +420,22 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
     await refreshSettings()
   }, [refreshSettings])
 
+  const saveApiKey = useCallback(
+    async (provider: ClearableKeyProvider, value: string) => {
+      const response = await backendFetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [API_KEY_FIELDS[provider]]: value }),
+      })
+      if (!response.ok) {
+        const detail = await response.text()
+        throw new Error(detail || `Failed to save the ${provider} API key.`)
+      }
+      await refreshSettings()
+    },
+    [refreshSettings],
+  )
+
   const clearApiKey = useCallback(async (provider: ClearableKeyProvider) => {
     const response = await backendFetch(`/api/settings/api-keys/${provider}`, { method: 'DELETE' })
     if (!response.ok) {
@@ -371,14 +450,17 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
 
   const hasOpenaiCompatible =
     settings.openaiCompatibleBaseUrl.trim() !== '' && settings.openaiCompatibleModel.trim() !== ''
+  const providerConfigured: Record<string, boolean> = {
+    openrouter: settings.hasOpenrouterApiKey,
+    anthropic: settings.hasAnthropicApiKey,
+    xai: settings.hasXaiApiKey,
+    gemini: settings.hasGeminiApiKey,
+    openai_compatible: hasOpenaiCompatible,
+  }
   const hasDirectorProvider =
-    settings.directorProvider === 'openrouter'
-      ? settings.hasOpenrouterApiKey
-      : settings.directorProvider === 'gemini'
-        ? settings.hasGeminiApiKey
-        : settings.directorProvider === 'openai_compatible'
-          ? hasOpenaiCompatible
-          : settings.hasOpenrouterApiKey || settings.hasGeminiApiKey || hasOpenaiCompatible
+    settings.directorProvider === 'auto'
+      ? Object.values(providerConfigured).some(Boolean)
+      : (providerConfigured[settings.directorProvider] ?? false)
 
   const contextValue = useMemo<AppSettingsContextValue>(
     () => ({
@@ -392,6 +474,7 @@ export function AppSettingsProvider({ children }: { children: ReactNode }) {
       saveGeminiApiKey,
       saveOpenrouterApiKey,
       saveOpenaiCompatibleApiKey,
+      saveApiKey,
       clearApiKey,
       hasDirectorProvider,
       forceApiGenerations,

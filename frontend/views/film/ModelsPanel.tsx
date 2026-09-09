@@ -19,6 +19,7 @@ import { backendFetch } from '../../lib/backend'
 import { filmApi } from '../../lib/film-api'
 import { Button } from '../../components/ui/button'
 import type { FilmModelCapability } from '../../types/film'
+import { ModelLibrary } from './ModelLibrary'
 
 interface DownloadProgress {
   status: string
@@ -213,6 +214,7 @@ function FilmRenderSettingsCard() {
  */
 export function ModelsPanel() {
   const { capabilities, refreshCapabilities } = useFilm()
+  const [view, setView] = useState<'library' | 'installed'>('library')
   const [progress, setProgress] = useState<DownloadProgress | null>(null)
   const [starting, setStarting] = useState(false)
   const [skipTextEncoder, setSkipTextEncoder] = useState(false)
@@ -316,6 +318,29 @@ export function ModelsPanel() {
   return (
     <div className="h-full overflow-y-auto p-4">
       <div className="max-w-2xl mx-auto space-y-4">
+        <div className="flex items-center rounded-lg border border-zinc-800 overflow-hidden w-fit" role="tablist" aria-label="Models view">
+          {(
+            [
+              ['library', 'Model Library'],
+              ['installed', 'Installed & GPU'],
+            ] as const
+          ).map(([id, label]) => (
+            <button
+              key={id}
+              role="tab"
+              aria-selected={view === id}
+              onClick={() => setView(id)}
+              className={`px-3 py-1.5 text-xs font-medium ${view === id ? 'bg-zinc-800 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {view === 'library' && <ModelLibrary />}
+
+        {view === 'installed' && (
+        <>
         {/* GPU summary */}
         <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-3 flex items-center gap-3">
           <Cpu className="h-5 w-5 text-violet-400" />
@@ -518,9 +543,11 @@ export function ModelsPanel() {
           <p className="text-[11px] text-zinc-500">{note}</p>
         )}
 
-        <FilmRenderSettingsCard />
-
         <p className="text-[11px] text-zinc-600 leading-relaxed">{capabilities.vram_note}</p>
+        </>
+        )}
+
+        <FilmRenderSettingsCard />
       </div>
     </div>
   )

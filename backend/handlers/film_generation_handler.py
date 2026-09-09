@@ -10,31 +10,40 @@ every transition, so a backend restart leaves shots resumable instead of lost.
 
 from __future__ import annotations
 
+import base64
 import logging
+import mimetypes
 import os
 import time
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from threading import RLock
 from typing import cast
 
 from _routes._errors import HTTPError
-from api_types import GenerateVideoRequest, VideoCameraMotion
+from api_types import GenerateImageRequest, GenerateVideoRequest, VideoCameraMotion
 from film.film_api_types import (
+    AddAssetReferenceRequest,
     BatchGenerateRequest,
     BatchGenerateResponse,
     FilmCapabilitiesResponse,
     FilmModelCapability,
     FilmQualityProfile,
     FilmQueueResponse,
+    GenerateAssetReferenceRequest,
+    GenerateAssetReferenceResponse,
     GenerateShotRequest,
     QueuedJob,
     QueueShotResponse,
     ReplaceProjectRequest,
 )
 from film.film_continuity import check_shot_continuity
+from film.media_providers import MediaSpec
+from film.media_runner import MediaRunner, suffix_for
 from film.film_models import (
+    FilmAsset,
     FilmProject,
     FilmShot,
     ShotVersion,
@@ -45,6 +54,7 @@ from film.film_prompt import synthesize_negative_prompt, synthesize_prompt
 from handlers.base import StateHandlerBase
 from handlers.film_handler import FilmHandler
 from handlers.generation_handler import GenerationHandler
+from handlers.image_generation_handler import ImageGenerationHandler
 from handlers.video_generation_handler import VideoGenerationHandler, get_allowed_durations
 from runtime_config.model_download_specs import MODEL_FILE_ORDER, resolve_required_model_types
 from runtime_config.runtime_config import RuntimeConfig
@@ -129,6 +139,20 @@ def _wangp_task(architecture: str) -> str:
     return "video"
 
 
+def _image_data_url(path: str | None) -> str:
+    """A local conditioning image as a data: URL, which every hosted provider
+    accepts in place of a public URL — nothing of the user's is uploaded to a
+    file host first."""
+    if not path:
+        return ""
+    try:
+        raw = Path(path).read_bytes()
+    except OSError:
+        return ""
+    mime = mimetypes.guess_type(path)[0] or "image/png"
+    return f"data:{mime};base64,{base64.b64encode(raw).decode('ascii')}"
+
+
 def _system_ram_gb() -> float | None:
     try:
         if hasattr(os, "sysconf"):
@@ -198,6 +222,8 @@ class FilmGenerationHandler(StateHandlerBase):
         task_runner: TaskRunner,
         config: RuntimeConfig,
         wangp_bridge: WanGPBridge | None = None,
+        media_runner: MediaRunner | None = None,
+        image_generation_handler: ImageGenerationHandler | None = None,
     ) -> None:
         super().__init__(state, lock)
         self._film = film_handler
@@ -208,6 +234,11 @@ class FilmGenerationHandler(StateHandlerBase):
         self._task_runner = task_runner
         self._config = config
         self._wangp_bridge = wangp_bridge
+        self._media_runner = media_runner
+        self._image_generation = image_generation_handler
+        # Set while a hosted job runs, so the queue can report and cancel it.
+        self._hosted_cancel = False
+        self._hosted_progress: tuple[int, str] | None = None
         self._queue: deque[_QueuedShotJob] = deque()
         self._active: _QueuedShotJob | None = None
         self._worker_running = False
@@ -353,7 +384,11 @@ class FilmGenerationHandler(StateHandlerBase):
             paused = self._paused
         progress: int | None = None
         phase = ""
-        if active is not None:
+        with self.lock:
+            hosted = self._hosted_progress
+        if active is not None and hosted is not None:
+            progress, phase = hosted
+        elif active is not None:
             try:
                 snapshot = self._generation.get_generation_progress()
                 progress = snapshot.progress
@@ -401,7 +436,12 @@ class FilmGenerationHandler(StateHandlerBase):
         if removed is not None:
             self._finish_version(removed, status="cancelled", error="Cancelled before start")
         elif cancel_active:
-            self._generation.cancel_generation()
+            with self.lock:
+                hosted = self._hosted_progress is not None
+                if hosted:
+                    self._hosted_cancel = True
+            if not hosted:
+                self._generation.cancel_generation()
         else:
             raise HTTPError(404, "That shot is not queued or generating")
         return self.get_queue()
@@ -497,10 +537,15 @@ class FilmGenerationHandler(StateHandlerBase):
             capture_path=capture_path,
             wardrobe_snapshot=wardrobe_snapshot,
             shot_snapshot=snapshot,
-            execution_mode=self._execution_mode(),
+            execution_mode=self._execution_mode(project.settings.media_provider),
         )
 
-    def _execution_mode(self) -> str:
+    def _execution_mode(self, project_provider: str = "") -> str:
+        with self.lock:
+            app_provider = self.state.app_settings.media_provider
+        provider = (project_provider or app_provider or "local").strip()
+        if provider != "local":
+            return provider
         if self._config.wangp_enabled:
             return "wangp"
         if self._config.force_api_generations:
@@ -559,6 +604,10 @@ class FilmGenerationHandler(StateHandlerBase):
                     self._worker_running = False
 
     def _run_job(self, job: _QueuedShotJob) -> None:
+        provider, model = self._media_selection(job.project_id)
+        if provider != "local":
+            self._run_hosted_job(job, provider, model)
+            return
         prepared = self._prepare_request(job)
         if prepared is None:
             return
@@ -597,10 +646,207 @@ class FilmGenerationHandler(StateHandlerBase):
         else:
             self._finish_version(job, status="failed", error=f"Generation ended with status {response.status}", telemetry=telemetry)
 
-    def _telemetry(self, started: float) -> dict[str, object]:
+    # ---- Reference images --------------------------------------------------
+
+    _REFERENCE_SIZES: dict[str, tuple[int, int]] = {
+        "character": (768, 1024),
+        "location": (1344, 768),
+        "prop": (1024, 1024),
+    }
+
+    @staticmethod
+    def _reference_prompt(asset: FilmAsset, style_prompt: str) -> str:
+        """Describe the asset the way the continuity fields already describe it,
+        so a generated reference matches what the shot prompts will say."""
+        parts: list[str] = []
+        if asset.kind == "character":
+            parts.append(f"Character reference sheet of {asset.name}")
+            for value in (asset.appearance, asset.wardrobe, asset.accessories):
+                if value.strip():
+                    parts.append(value.strip())
+            parts.append("neutral studio background, full body, even lighting, photoreal")
+        elif asset.kind == "location":
+            parts.append(f"Establishing view of {asset.name}")
+            for value in (asset.environment, asset.lighting, asset.atmosphere, asset.time_of_day):
+                if value.strip():
+                    parts.append(value.strip())
+            parts.append("wide angle, no people, photoreal")
+        else:
+            parts.append(f"Product-style reference of the prop {asset.name}")
+            for value in (asset.prop_details, asset.description):
+                if value.strip():
+                    parts.append(value.strip())
+            parts.append("neutral background, even lighting")
+        if asset.description.strip() and asset.kind == "character":
+            parts.insert(1, asset.description.strip())
+        if style_prompt.strip():
+            parts.append(style_prompt.strip())
+        return ", ".join(part for part in parts if part)
+
+    def generate_asset_reference(
+        self, project_id: str, asset_id: str, req: GenerateAssetReferenceRequest
+    ) -> GenerateAssetReferenceResponse:
+        """Generate a reference image for an asset with the selected image
+        model — locally when the project generates locally, otherwise on the
+        chosen hosted provider."""
+        project = self._film.get_project(project_id)
+        asset = project.asset(asset_id)
+        if asset is None:
+            raise HTTPError(404, f"Asset not found: {asset_id}")
+        with self.lock:
+            settings = self.state.app_settings.model_copy(deep=True)
+        provider = (project.settings.media_provider or settings.media_provider or "local").strip()
+        model = (project.settings.image_model or settings.default_image_model).strip()
+        prompt = req.prompt.strip() or self._reference_prompt(asset, project.settings.style_prompt)
+        width, height = self._REFERENCE_SIZES.get(asset.kind, (1024, 1024))
+
+        if provider == "local":
+            image_bytes = self._local_reference_image(prompt, width, height)
+        else:
+            api_key = settings.media_api_key(provider)
+            if not api_key:
+                raise HTTPError(400, f"{provider.upper()}_KEY_MISSING: add the {provider} API key in Settings → API Keys")
+            runner = self._media_runner
+            if runner is None:  # pragma: no cover - wired in AppHandler
+                raise HTTPError(500, "Hosted generation is not available in this build")
+            result = runner.run(
+                provider=provider,
+                api_key=api_key,
+                spec=MediaSpec(model=model, prompt=prompt, task="image", width=width, height=height),
+            )
+            if result.status != "complete":
+                raise HTTPError(502, result.error or f"{provider} did not return an image")
+            image_bytes = result.content
+
+        encoded = base64.b64encode(image_bytes).decode("ascii")
+        updated = self._film.add_asset_reference(
+            project_id, asset_id, AddAssetReferenceRequest(image_base64=encoded, name_hint=f"{asset.name}-ai")
+        )
+        return GenerateAssetReferenceResponse(
+            asset=updated,
+            prompt=prompt,
+            provider=provider,
+            model=model or ("local image pipeline" if provider == "local" else ""),
+            reference_path=updated.reference_images[-1] if updated.reference_images else "",
+        )
+
+    def _local_reference_image(self, prompt: str, width: int, height: int) -> bytes:
+        handler = self._image_generation
+        if handler is None:  # pragma: no cover - wired in AppHandler
+            raise HTTPError(500, "Local image generation is not available in this build")
+        response = handler.generate(GenerateImageRequest(prompt=prompt, width=width, height=height, numImages=1))
+        paths = response.image_paths or []
+        if response.status != "complete" or not paths:
+            raise HTTPError(502, "The local image model did not return an image")
+        try:
+            return Path(paths[0]).read_bytes()
+        except OSError as exc:
+            raise HTTPError(502, f"Could not read the generated image: {exc}") from exc
+
+    # ---- Hosted providers -------------------------------------------------
+
+    def _media_selection(self, project_id: str) -> tuple[str, str]:
+        """(provider, model id) for this project: its own choice, else the app default."""
+        with self.lock:
+            settings = self.state.app_settings.model_copy(deep=True)
+        try:
+            project = self._film.store.load(project_id)
+            project_provider = project.settings.media_provider
+            project_model = project.settings.video_model
+        except Exception:  # noqa: BLE001 - a missing project is handled downstream
+            project_provider, project_model = "", ""
+        provider = (project_provider or settings.media_provider or "local").strip()
+        model = (project_model or settings.default_video_model).strip()
+        return provider, model
+
+    def _run_hosted_job(self, job: _QueuedShotJob, provider: str, model: str) -> None:
+        """Render one shot on a hosted provider, then store the file exactly
+        like a local render so versions, timeline and export behave the same."""
+        prepared = self._prepare_request(job)
+        if prepared is None:
+            return
+        request, seed = prepared
+        with self.lock:
+            settings = self.state.app_settings.model_copy(deep=True)
+            self._hosted_cancel = False
+            self._hosted_progress = (0, f"Preparing {provider} job")
+        api_key = settings.media_api_key(provider)
+        started = time.perf_counter()
+        if not api_key:
+            self._clear_hosted()
+            self._finish_version(
+                job,
+                status="failed",
+                error=f"{provider.upper()}_KEY_MISSING: add the {provider} API key in Settings → API Keys, or switch this project back to local generation.",
+                telemetry=self._telemetry(started, execution_mode=provider),
+            )
+            return
+
+        spec = MediaSpec(
+            model=model,
+            prompt=request.prompt,
+            task="video",
+            negative_prompt=request.negativePrompt,
+            duration_seconds=float(request.duration),
+            fps=int(float(request.fps)),
+            aspect_ratio=request.aspectRatio,
+            resolution=request.resolution,
+            seed=seed,
+            image_data_url=_image_data_url(request.imagePath),
+        )
+        runner = self._media_runner
+        if runner is None:  # pragma: no cover - wired in AppHandler
+            self._clear_hosted()
+            self._finish_version(job, status="failed", error="Hosted generation is not available in this build", telemetry=self._telemetry(started, execution_mode=provider))
+            return
+        result = runner.run(
+            provider=provider,
+            api_key=api_key,
+            spec=spec,
+            is_cancelled=self._hosted_cancelled,
+            on_progress=self._report_hosted_progress,
+        )
+        telemetry = self._telemetry(started, execution_mode=provider)
+        if result.status == "cancelled":
+            self._clear_hosted()
+            self._finish_version(job, status="cancelled", error="Cancelled", telemetry=telemetry)
+            return
+        if result.status == "failed":
+            self._clear_hosted()
+            self._finish_version(job, status="failed", error=result.error, telemetry=telemetry)
+            return
+        try:
+            outputs = self._config.outputs_dir
+            outputs.mkdir(parents=True, exist_ok=True)
+            suffix = suffix_for(result.media_url, "video")
+            target = outputs / f"film-{provider}-{job.shot_id}-v{job.version_number}-{now_ms()}{suffix}"
+            target.write_bytes(result.content)
+        except OSError as exc:
+            self._clear_hosted()
+            self._finish_version(job, status="failed", error=f"Could not save the {provider} result: {exc}", telemetry=telemetry)
+            return
+        self._clear_hosted()
+        self._finish_version(job, status="complete", output_path=str(target), telemetry=telemetry, seed_used=seed)
+
+    def _hosted_cancelled(self) -> bool:
+        with self.lock:
+            return self._hosted_cancel
+
+    def _report_hosted_progress(self, percent: int, phase: str) -> None:
+        with self.lock:
+            self._hosted_progress = (percent, phase)
+
+    def _clear_hosted(self) -> None:
+        with self.lock:
+            self._hosted_progress = None
+            self._hosted_cancel = False
+
+    def _telemetry(self, started: float, execution_mode: str = "") -> dict[str, object]:
         """Wall-clock time plus whatever the GPU service can observe. Peak VRAM
         is the post-job used figure — an estimate, labelled as such."""
         payload: dict[str, object] = {"generation_seconds": round(time.perf_counter() - started, 2)}
+        if execution_mode:
+            payload["execution_mode"] = execution_mode
         try:
             info = self._gpu_info.get_gpu_info()
             payload["gpu_name"] = str(info.get("name", "") or "")
@@ -715,6 +961,9 @@ class FilmGenerationHandler(StateHandlerBase):
                 peak = telemetry.get("peak_vram_gb")
                 if isinstance(peak, (int, float)):
                     version.peak_vram_gb = float(peak)
+                mode = telemetry.get("execution_mode")
+                if isinstance(mode, str) and mode:
+                    version.execution_mode = mode
             if status == "complete":
                 shot.current_version = version.number
                 shot.status = "review"

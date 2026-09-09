@@ -169,7 +169,7 @@ export function BuildFilmDialog({ onClose, onApplied }: { onClose: () => void; o
                 onClick={() => void build(true)}
                 disabled={busy !== null || !idea.trim() || !hasDirectorProvider}
                 className="gap-1.5"
-                title={hasDirectorProvider ? 'Plan with the configured AI Director model' : 'Add an OpenRouter or Gemini key in Settings → API Keys'}
+                title={hasDirectorProvider ? 'Plan with the configured AI Director model' : 'Connect an AI Director provider in Settings → API Keys'}
               >
                 {busy === 'plan' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
                 Plan with AI

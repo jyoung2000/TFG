@@ -56,8 +56,19 @@ try {
     const close = page.getByRole('button', { name: /close|done|continue/i }).first()
     if (await close.isVisible().catch(() => false)) await close.click().catch(() => {})
   }
+
+  // Providers are app-wide and persist between runs; start from a clean slate
+  // so "no provider configured" assertions mean what they say.
+  for (const provider of ['anthropic', 'xai', 'openrouter', 'gemini', 'openai-compatible', 'fal', 'wavespeed', 'replicate']) {
+    await api(`/api/settings/api-keys/${provider}`, { method: 'DELETE' }).catch(() => {})
+  }
+  await api('/api/settings', {
+    method: 'POST',
+    body: JSON.stringify({ directorProvider: 'auto', mediaProvider: 'local', defaultVideoModel: '', defaultImageModel: '' }),
+  }).catch(() => {})
   // Make sure we are on Home (dev server keeps view state in memory only).
-  await page.waitForTimeout(1000)
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await page.waitForTimeout(4000)
   await snap('00-start')
 
   // ---- 1. Home: what do you want to make + getting started ----
@@ -74,7 +85,7 @@ try {
   const hasModel = await page.getByLabel('Model').isVisible()
   const hasDuration = await page.getByLabel('Duration').isVisible()
   log('Quick video view renders prompt + settings', hasModel && hasDuration)
-  const assistantHint = await page.getByText(/connect OpenRouter or Gemini to enable/i).first().isVisible().catch(() => false)
+  const assistantHint = await page.getByText(/connect an AI provider .* to enable/i).first().isVisible().catch(() => false)
   log('Quick video explains how to enable the assistant when no key is set', assistantHint)
   await snap('02-quick')
   await page.getByRole('button', { name: 'Back to home' }).click()
@@ -194,6 +205,9 @@ try {
 
   // ---- 10. Models tab: profiles + render defaults ----
   await page.getByRole('tab', { name: 'Models' }).click()
+  await page.waitForTimeout(500)
+  // The Models tab opens on the Model Library; profiles live in the second view.
+  await page.getByRole('tab', { name: 'Installed & GPU', exact: true }).click()
   await page.getByText('Quality profiles').waitFor({ state: 'visible' })
   log('Models tab lists quality profiles', true)
   log('Project render defaults card present', await page.getByText('Project render defaults').isVisible())
@@ -229,7 +243,7 @@ try {
   await page.waitForTimeout(500)
 
   // ---- 12. Director bar explains missing provider with a settings link ----
-  const directorLink = page.getByRole('button', { name: /Connect OpenRouter or Gemini/ })
+  const directorLink = page.getByRole('button', { name: /to enable the AI Director/ })
   log('Director bar links to settings when no provider', await directorLink.isVisible().catch(() => false))
 
   // ---- 13. Quick → Film conversion via backend (real clip file) ----

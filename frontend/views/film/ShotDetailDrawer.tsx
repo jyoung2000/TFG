@@ -507,7 +507,7 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
               onClick={() => void refinePrompt()}
               disabled={busy !== null || !hasDirectorProvider}
               className="flex items-center gap-1 px-2 py-1 rounded bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 text-[10px] text-violet-300"
-              title={hasDirectorProvider ? 'Rewrite the prompt with the AI Director (keeps cast, wardrobe, framing)' : 'Needs an OpenRouter or Gemini key'}
+              title={hasDirectorProvider ? 'Rewrite the prompt with the AI Director (keeps cast, wardrobe, framing)' : 'Needs an AI Director provider — OpenRouter, Claude, Grok, Gemini or a local server'}
             >
               {busy === 'refine' ? <Loader2 className="h-3 w-3 animate-spin" /> : <Wand2 className="h-3 w-3" />}
               Refine with AI

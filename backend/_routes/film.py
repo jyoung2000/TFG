@@ -16,6 +16,8 @@ from film.film_api_types import (
     ExportPackageRequest,
     FilmProjectResponse,
     FixContinuityRequest,
+    GenerateAssetReferenceRequest,
+    GenerateAssetReferenceResponse,
     FixContinuityResponse,
     ImportGenerationRequest,
     ImportGenerationResponse,
@@ -130,6 +132,20 @@ def route_create_asset(
     handler: AppHandler = Depends(get_state_service),
 ) -> AssetResponse:
     return AssetResponse(asset=handler.film.create_asset(project_id, req))
+
+
+@router.post(
+    "/projects/{project_id}/assets/{asset_id}/generate-reference",
+    response_model=GenerateAssetReferenceResponse,
+)
+def route_generate_asset_reference(
+    project_id: str,
+    asset_id: str,
+    req: GenerateAssetReferenceRequest,
+    handler: AppHandler = Depends(get_state_service),
+) -> GenerateAssetReferenceResponse:
+    """Render a reference image for this asset with the project's image model."""
+    return handler.film_generation.generate_asset_reference(project_id, asset_id, req)
 
 
 @router.put("/projects/{project_id}/assets/{asset_id}", response_model=AssetResponse)

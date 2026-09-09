@@ -53,6 +53,16 @@ def route_visual_review(
     return handler.film_director.visual_review(project_id, shot_id)
 
 
+@router.get("/director/models/{provider}", response_model=OpenRouterModelsResponse)
+def route_director_provider_models(
+    provider: str,
+    refresh: bool = False,
+    handler: AppHandler = Depends(get_state_service),
+) -> OpenRouterModelsResponse:
+    """The chat models a text provider offers for the configured key/endpoint."""
+    return handler.film_director.chat_models(provider, refresh=refresh)
+
+
 @router.get("/director/openai-compatible/models", response_model=OpenRouterModelsResponse)
 def route_openai_compatible_models(handler: AppHandler = Depends(get_state_service)) -> OpenRouterModelsResponse:
     return handler.film_director.openai_compatible_models()

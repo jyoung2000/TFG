@@ -56,19 +56,35 @@ film goes from script to timeline without leaving the app:
 7. Or type instructions to the **AI Director** bar ("six second medium OTS
    shot, Sarah foreground, slow push-in") — it runs tool calls against the
    same storyboard state the UI edits, and every reply can show exactly what
-   context was sent. Powered by **OpenRouter** (any model; key in
-   Settings → API Keys or `OPENROUTER_API_KEY`) or Gemini. Everything else
-   works without any AI key.
+   context was sent. Powered by **OpenRouter**, **Claude**, **Grok**,
+   **Gemini**, or a **local OpenAI-compatible server** (LM Studio, Ollama,
+   vLLM) — pick provider and model from the chips in the chat itself, next to
+   the Video and Image model pickers. Everything else works without any AI
+   key.
 
-The **Models** sub-tab shows the detected GPU and VRAM, which models fit it,
-their real on-disk sizes, quality profiles, downloads anything missing and
-removes models you no longer need. A **Simple / Advanced** toggle hides the
-power-user surfaces for a first film.
+Rendering is just as pluggable: **local** by default (WanGP bridge, the LTX
+API or the local LTX pipeline), or **fal**, **WaveSpeed** and **Replicate**
+with a key — hosted jobs run through the same queue, versions and export as
+local ones.
+
+The **Models** sub-tab opens on the **Model Library**: one searchable catalog
+of every text, image and video model this app can use — local weights, an
+Ollama or OpenAI-compatible server's models, and each configured hosted
+provider — with downloads for the ones that run on this machine and an honest
+statement of whether the fully offline set is complete. *Installed & GPU*
+keeps the detected GPU and VRAM, which models fit it, their real on-disk
+sizes, quality profiles, and remove/download for the host's own weights. A
+**Simple / Advanced** toggle hides the power-user surfaces for a first film.
+
+**Fully offline** is a supported path: local video/image weights plus a local
+text server covers the whole workflow with no network at all
+([`docs/AI_PROVIDERS.md`](docs/AI_PROVIDERS.md)).
 
 Docs: [Filmmaking overview](docs/FILMMAKING.md) ·
 [Storyboard](docs/STORYBOARD.md) ·
 [Shot Composer](docs/SHOT_COMPOSER.md) ·
 [AI Director](docs/AI_DIRECTOR.md) ·
+[AI providers & Model Library](docs/AI_PROVIDERS.md) ·
 [OpenRouter](docs/OPENROUTER.md) ·
 [Generation Pipeline](docs/GENERATION_PIPELINE.md) ·
 [Continuity](docs/CONTINUITY.md) ·
@@ -313,9 +329,19 @@ When you use API-backed features, prompts and media inputs are sent to the API s
 
 ### fal API key (optional)
 
-Used for Z Image Turbo text-to-image generation in API mode. When enabled, image generation requests are sent to fal.ai.
+Used for Z Image Turbo text-to-image generation in API mode, and as a hosted
+image/video provider for film shots. When enabled, generation requests are
+sent to fal.ai.
 
 Create an API key in the [fal dashboard](https://fal.ai/dashboard/keys).
+
+### WaveSpeed / Replicate API keys (optional — hosted generation)
+
+Alternative hosted image/video providers for film shots, selectable per
+project or app-wide in **Settings → API Keys**. Prompts and any conditioning
+image are sent to the provider you select; nothing is sent while the media
+provider is **Local**. See
+[`docs/AI_PROVIDERS.md`](docs/AI_PROVIDERS.md).
 
 ### OpenRouter API key (optional — AI Director)
 
@@ -334,6 +360,20 @@ tool results are sent to the selected model. Details and limits:
 Alternative AI Director provider; also used for AI prompt suggestions when
 filling timeline gaps. When enabled, prompt context and frames may be sent
 to Google Gemini.
+
+### Claude / Grok API keys (optional — AI Director)
+
+Anthropic and xAI are interchangeable AI Director providers with the same
+handling as OpenRouter: the key lives only in the local backend's settings
+file, never reaches the UI or a project file, and travels only to that
+vendor's own API. Set them in **Settings → API Keys**.
+
+### No key at all
+
+The AI Director also runs against a **local OpenAI-compatible server**
+(LM Studio, Ollama, vLLM): set the base URL and model in
+**Settings → API Keys → Local / OpenAI-compatible**. Combined with local
+weights, nothing leaves the machine.
 
 ## Architecture
 

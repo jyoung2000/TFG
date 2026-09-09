@@ -393,7 +393,7 @@ export function QuickMode() {
                 <span className="text-[10px] text-zinc-600">the assistant drafts a prompt you can use</span>
               ) : (
                 <button onClick={() => requestSettings('apiKeys')} className="text-[10px] text-zinc-500 hover:text-white underline underline-offset-2">
-                  optional — connect OpenRouter or Gemini to enable
+                  optional — connect an AI provider (or a local server) to enable
                 </button>
               )}
             </div>

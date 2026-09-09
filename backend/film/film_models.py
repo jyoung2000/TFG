@@ -388,6 +388,13 @@ class FilmProjectSettings(BaseModel):
     # Project-wide default for shots whose quality_preset is left on the
     # default ("balanced"); see FilmGenerationHandler.QUALITY_PROFILES.
     default_quality_preset: Literal["fast_preview", "balanced", "quality", "custom"] = "balanced"
+    # Where this film generates. "" follows the app-wide default; "local" keeps
+    # every frame on this machine, the others are hosted providers that need a
+    # key and a model id from their catalog.
+    media_provider: Literal["", "local", "fal", "wavespeed", "replicate"] = ""
+    # Provider-scoped model ids used when media_provider is a hosted one.
+    video_model: str = ""
+    image_model: str = ""
 
 
 class FilmProject(BaseModel):

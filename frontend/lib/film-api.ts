@@ -319,6 +319,19 @@ export const filmApi = {
       `/api/film/director/openrouter/models${refresh ? '?refresh=true' : ''}`,
     ),
 
+  /** Chat models a text provider offers for the configured key/endpoint. */
+  directorModels: (provider: string, refresh = false) =>
+    request<{ models: OpenRouterModelInfo[]; fetched_at_ms: number; cached: boolean }>(
+      `/api/film/director/models/${enc(provider)}${refresh ? '?refresh=true' : ''}`,
+    ),
+
+  /** Render a reference image for an asset with the project's image model. */
+  generateAssetReference: (projectId: string, assetId: string, prompt = '') =>
+    request<{ asset: FilmAsset; prompt: string; provider: string; model: string; reference_path: string }>(
+      `/api/film/projects/${enc(projectId)}/assets/${enc(assetId)}/generate-reference`,
+      { method: 'POST', body: JSON.stringify({ prompt }) },
+    ),
+
   /** Model list from the configured OpenAI-compatible endpoint (LM Studio, vLLM, …). */
   openaiCompatibleModels: () =>
     request<{ models: OpenRouterModelInfo[]; fetched_at_ms: number; cached: boolean }>(

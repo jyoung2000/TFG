@@ -6,6 +6,7 @@ import { backendFetch } from '../lib/backend'
 import { logger } from '../lib/logger'
 import { ApiKeyHelperRow, LtxApiKeyInput, LtxApiKeyHelperRow } from './LtxApiKeyInput'
 import { OpenRouterSettings } from './OpenRouterSettings'
+import { AiProviderSettings } from './AiProviderSettings'
 
 interface TextEncoderStatus {
   downloaded: boolean
@@ -872,6 +873,8 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
               </div>
 
               <OpenRouterSettings />
+
+              <AiProviderSettings />
 
               {/* Gemini API Key Section */}
               <div className="space-y-4 pt-4 border-t border-zinc-800">

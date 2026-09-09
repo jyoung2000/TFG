@@ -16,7 +16,8 @@ const RULES: { match: RegExp; title: string; detail: string; action: ErrorAction
   {
     match: /AI_DIRECTOR_KEY_MISSING|OPENROUTER_KEY_MISSING|GEMINI_API_KEY_MISSING/,
     title: 'No AI provider configured',
-    detail: 'Add an OpenRouter or Gemini API key in Settings → API Keys (or set OPENROUTER_API_KEY). Offline features keep working without one.',
+    detail:
+      'Connect a text model in Settings → API Keys: an OpenRouter, Claude, Grok or Gemini key, or a local OpenAI-compatible server (LM Studio, Ollama) for a fully offline director. Offline features keep working without one.',
     action: 'open-api-keys',
     actionLabel: 'Open API Keys',
   },

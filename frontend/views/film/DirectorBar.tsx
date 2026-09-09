@@ -4,6 +4,7 @@ import { ErrorNotice } from '../../components/ErrorNotice'
 import { useAppSettings } from '../../contexts/AppSettingsContext'
 import { useFilm } from '../../contexts/FilmContext'
 import { filmApi } from '../../lib/film-api'
+import { ChatModelPickers } from './ModelPickers'
 import { requestSettings } from '../../lib/error-messages'
 import { useUiMode } from '../../lib/ui-mode'
 import type { DirectorChatMessage, DirectorContextDetails, DirectorStatus } from '../../types/film'
@@ -48,7 +49,17 @@ export function DirectorBar({
     return () => {
       cancelled = true
     }
-  }, [settings.hasOpenrouterApiKey, settings.hasGeminiApiKey, settings.directorProvider, settings.openrouterModels])
+  }, [
+    settings.hasOpenrouterApiKey,
+    settings.hasGeminiApiKey,
+    settings.hasAnthropicApiKey,
+    settings.hasXaiApiKey,
+    settings.directorProvider,
+    settings.anthropicModel,
+    settings.xaiModel,
+    settings.geminiModel,
+    settings.openrouterModels,
+  ])
 
   const run = useCallback(async () => {
     if (!film || !instruction.trim() || busy) return
@@ -151,7 +162,7 @@ export function DirectorBar({
           placeholder={
             enabled
               ? 'Direct the film: "Create a six second medium OTS shot — Sarah foreground left, looking toward John, slow push-in"'
-              : 'AI Director needs an OpenRouter or Gemini API key (Settings → API Keys)'
+              : 'Pick an AI Director model below, or connect a provider in Settings → API Keys'
           }
           disabled={!enabled || busy}
           className="flex-1 bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-1.5 text-xs text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-violet-600 disabled:opacity-50"
@@ -188,13 +199,14 @@ export function DirectorBar({
         )}
       </div>
       <div className="max-w-4xl mx-auto px-3 pb-1.5 flex items-center gap-2 text-[10px] text-zinc-600">
+        <ChatModelPickers />
         {providerLabel && <span className="font-mono">{providerLabel}</span>}
         {!expanded && lastTurn && lastTurn.role === 'assistant' && (
           <span className={`truncate ${lastTurn.error ? 'text-red-400' : 'text-zinc-400'}`}>{lastTurn.content}</span>
         )}
         {!enabled && (
           <button onClick={() => requestSettings('apiKeys')} className="text-amber-400/90 hover:text-amber-200 underline underline-offset-2">
-            Connect OpenRouter or Gemini to enable the AI Director
+            Connect OpenRouter, Claude, Grok, Gemini — or a local server — to enable the AI Director
           </button>
         )}
       </div>

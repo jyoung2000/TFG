@@ -28,6 +28,16 @@ OPENROUTER_CHAT_URL = f"{OPENROUTER_BASE_URL}/chat/completions"
 OPENROUTER_AUTH_KEY_URL = f"{OPENROUTER_BASE_URL}/auth/key"
 GEMINI_DEFAULT_MODEL = "gemini-2.0-flash"
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
+GEMINI_MODELS_URL = "https://generativelanguage.googleapis.com/v1beta/models"
+
+# Anthropic (Claude) messages API.
+ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1"
+ANTHROPIC_VERSION = "2023-06-01"
+ANTHROPIC_DEFAULT_MODEL = "claude-sonnet-5"
+
+# xAI (Grok) is OpenAI-compatible.
+XAI_BASE_URL = "https://api.x.ai/v1"
+XAI_DEFAULT_MODEL = "grok-4"
 
 # Attribution headers OpenRouter asks apps to send (public, not secrets).
 _OPENROUTER_APP_HEADERS = {
@@ -600,6 +610,259 @@ class GeminiProvider(LLMProvider):
             else None
         )
         return LLMReply(text=text, tool_calls=calls, model=self.model, usage=usage)
+
+
+# ---------------------------------------------------------------------------
+# Anthropic (Claude) — messages API
+# ---------------------------------------------------------------------------
+
+
+class _AnthropicContentBlock(BaseModel):
+    type: str = "text"
+    text: str = ""
+    id: str = ""
+    name: str = ""
+    input: dict[str, object] = Field(default_factory=dict[str, object])
+
+
+class _AnthropicUsage(BaseModel):
+    input_tokens: int = 0
+    output_tokens: int = 0
+
+
+class _AnthropicResponse(BaseModel):
+    model: str = ""
+    content: list[_AnthropicContentBlock] = Field(default_factory=list[_AnthropicContentBlock])
+    stop_reason: str | None = None
+    usage: _AnthropicUsage | None = None
+
+
+class AnthropicProvider(LLMProvider):
+    """Claude through the Anthropic messages API.
+
+    The wire format differs from OpenAI's in three ways this adapter handles:
+    the system prompt is a top-level field, tool calls/results are content
+    blocks rather than separate fields, and every tool result must ride in a
+    ``user`` message — so consecutive tool replies are merged into one.
+    """
+
+    name = "anthropic"
+
+    def __init__(self, http: HTTPClient, api_key: str, model: str = "") -> None:
+        self._http = http
+        self._api_key = api_key
+        self.model = model.strip() or ANTHROPIC_DEFAULT_MODEL
+
+    def _headers(self) -> dict[str, str]:
+        return {
+            "Content-Type": "application/json",
+            "x-api-key": self._api_key,
+            "anthropic-version": ANTHROPIC_VERSION,
+        }
+
+    @staticmethod
+    def _raise_for_status(status_code: int, text: str) -> None:
+        if status_code == 200:
+            return
+        detail = text.strip()[:400]
+        if status_code in (401, 403):
+            raise HTTPError(401, "ANTHROPIC_KEY_INVALID: Anthropic rejected the API key")
+        if status_code == 404:
+            raise HTTPError(404, f"ANTHROPIC_MODEL_NOT_FOUND: {detail or 'model not available'}")
+        if status_code == 429:
+            raise HTTPError(429, "ANTHROPIC_RATE_LIMITED: rate limit hit, retry shortly")
+        if status_code == 529:
+            raise HTTPError(503, "ANTHROPIC_OVERLOADED: the API is overloaded, retry shortly")
+        raise HTTPError(502 if status_code >= 500 else status_code, f"Anthropic API error ({status_code}): {detail}")
+
+    @staticmethod
+    def _encode(messages: Sequence[LLMMessage]) -> tuple[str, list[JSONValue]]:
+        system_text = "\n\n".join(m.content for m in messages if m.role == "system")
+        encoded: list[JSONValue] = []
+        pending_tool_results: list[JSONValue] = []
+
+        def flush_tool_results() -> None:
+            if pending_tool_results:
+                encoded.append({"role": "user", "content": list(pending_tool_results)})
+                pending_tool_results.clear()
+
+        for message in messages:
+            if message.role == "system":
+                continue
+            if message.role == "tool":
+                pending_tool_results.append(
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": message.tool_call_id or message.name,
+                        "content": message.content or "(no output)",
+                    }
+                )
+                continue
+            flush_tool_results()
+            blocks: list[JSONValue] = []
+            for url in message.images:
+                split = _split_data_url(url)
+                if split is not None:
+                    blocks.append(
+                        {"type": "image", "source": {"type": "base64", "media_type": split[0], "data": split[1]}}
+                    )
+            if message.content:
+                blocks.append({"type": "text", "text": message.content})
+            for call in message.tool_calls:
+                blocks.append(
+                    {"type": "tool_use", "id": call.id or call.name, "name": call.name, "input": cast(JSONValue, call.arguments)}
+                )
+            if not blocks:
+                blocks.append({"type": "text", "text": ""})
+            encoded.append({"role": "assistant" if message.role == "assistant" else "user", "content": blocks})
+        flush_tool_results()
+        return system_text, encoded
+
+    def list_models(self, *, timeout: int = 30) -> list[OpenRouterModel]:
+        if not self._api_key:
+            raise HTTPError(400, "ANTHROPIC_KEY_MISSING: no Anthropic API key configured")
+        try:
+            response = self._http.get(f"{ANTHROPIC_BASE_URL}/models?limit=100", headers=self._headers(), timeout=timeout)
+        except HttpTimeoutError as exc:
+            raise HTTPError(504, "Anthropic model list request timed out") from exc
+        except Exception as exc:
+            raise HTTPError(502, f"Anthropic unreachable: {exc}") from exc
+        self._raise_for_status(response.status_code, response.text)
+        raw = response.json()
+        payload = cast(dict[str, object], raw) if isinstance(raw, dict) else {}
+        rows_raw = payload.get("data", [])
+        rows = cast(list[object], rows_raw) if isinstance(rows_raw, list) else []
+        models: list[OpenRouterModel] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            entry = cast(dict[str, object], row)
+            model_id = str(entry.get("id", "") or "")
+            if not model_id:
+                continue
+            models.append(
+                OpenRouterModel(
+                    id=model_id,
+                    name=str(entry.get("display_name", "") or model_id),
+                    supports_tools=True,
+                    supports_json=True,
+                )
+            )
+        models.sort(key=lambda m: m.id)
+        return models
+
+    def chat(
+        self,
+        messages: Sequence[LLMMessage],
+        tools: Sequence[ToolSpec] | None = None,
+        *,
+        json_mode: bool = False,
+        timeout: int = 90,
+    ) -> LLMReply:
+        if not self._api_key:
+            raise HTTPError(400, "ANTHROPIC_KEY_MISSING: no Anthropic API key configured")
+        system_text, encoded = self._encode(messages)
+        if json_mode and not tools:
+            system_text = f"{system_text}\n\nReply with a single JSON object and nothing else.".strip()
+        payload: dict[str, JSONValue] = {
+            "model": self.model,
+            "max_tokens": 8192,
+            "temperature": 0.4,
+            "messages": encoded,
+        }
+        if system_text:
+            payload["system"] = system_text
+        if tools:
+            payload["tools"] = [
+                {"name": tool.name, "description": tool.description, "input_schema": cast(JSONValue, tool.parameters)}
+                for tool in tools
+            ]
+            payload["tool_choice"] = {"type": "auto"}
+        try:
+            response = self._http.post(
+                f"{ANTHROPIC_BASE_URL}/messages", headers=self._headers(), json_payload=payload, timeout=timeout
+            )
+        except HttpTimeoutError as exc:
+            raise HTTPError(504, "Anthropic request timed out") from exc
+        except Exception as exc:
+            raise HTTPError(502, f"Anthropic unreachable: {exc}") from exc
+        self._raise_for_status(response.status_code, response.text)
+        try:
+            parsed = _AnthropicResponse.model_validate(response.json())
+        except (ValidationError, ValueError) as exc:
+            raise HTTPError(502, "Anthropic returned an unexpected payload") from exc
+        text = "\n".join(block.text for block in parsed.content if block.type == "text" and block.text)
+        calls = [
+            LLMToolCall(id=block.id or f"call_{index}", name=block.name, arguments=dict(block.input))
+            for index, block in enumerate(parsed.content)
+            if block.type == "tool_use" and block.name
+        ]
+        usage = (
+            LLMUsage(prompt_tokens=parsed.usage.input_tokens, completion_tokens=parsed.usage.output_tokens)
+            if parsed.usage is not None
+            else None
+        )
+        return LLMReply(text=text, tool_calls=calls, model=parsed.model or self.model, usage=usage)
+
+
+class XAIProvider(OpenAICompatibleProvider):
+    """Grok. xAI serves the OpenAI chat-completions shape, so only the base
+    URL, the key requirement and the error labels differ."""
+
+    name = "xai"
+
+    def __init__(self, http: HTTPClient, api_key: str, model: str = "") -> None:
+        super().__init__(http, api_key, model.strip() or XAI_DEFAULT_MODEL, base_url=XAI_BASE_URL, name="xai")
+
+    def _require_key(self) -> None:
+        if not self._api_key:
+            raise HTTPError(400, "XAI_KEY_MISSING: no xAI API key configured")
+
+
+def gemini_list_models(http: HTTPClient, api_key: str, *, timeout: int = 30) -> list[OpenRouterModel]:
+    """Models the Gemini API offers this key, filtered to ones that can chat."""
+    if not api_key:
+        raise HTTPError(400, "GEMINI_API_KEY_MISSING: no Gemini API key configured")
+    try:
+        response = http.get(f"{GEMINI_MODELS_URL}?pageSize=200", headers={"x-goog-api-key": api_key}, timeout=timeout)
+    except HttpTimeoutError as exc:
+        raise HTTPError(504, "Gemini model list request timed out") from exc
+    except Exception as exc:
+        raise HTTPError(502, f"Gemini unreachable: {exc}") from exc
+    if response.status_code in (401, 403):
+        raise HTTPError(401, "GEMINI_KEY_INVALID: Gemini rejected the API key")
+    if response.status_code != 200:
+        raise HTTPError(
+            502 if response.status_code >= 500 else response.status_code,
+            f"Gemini API error ({response.status_code}): {response.text.strip()[:300]}",
+        )
+    raw = response.json()
+    payload = cast(dict[str, object], raw) if isinstance(raw, dict) else {}
+    rows_raw = payload.get("models", [])
+    rows = cast(list[object], rows_raw) if isinstance(rows_raw, list) else []
+    models: list[OpenRouterModel] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        entry = cast(dict[str, object], row)
+        raw_name = str(entry.get("name", "") or "")
+        model_id = raw_name.split("/", 1)[-1] if raw_name else ""
+        methods = entry.get("supportedGenerationMethods", [])
+        supported = [str(m) for m in cast(list[object], methods)] if isinstance(methods, list) else []
+        if not model_id or (supported and "generateContent" not in supported):
+            continue
+        context = entry.get("inputTokenLimit")
+        models.append(
+            OpenRouterModel(
+                id=model_id,
+                name=str(entry.get("displayName", "") or model_id),
+                context_length=context if isinstance(context, int) else None,
+                supports_tools=True,
+                supports_json=True,
+            )
+        )
+    models.sort(key=lambda m: m.id)
+    return models
 
 
 def parse_json_block(text: str) -> object:

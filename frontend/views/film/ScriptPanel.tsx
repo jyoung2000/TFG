@@ -131,7 +131,7 @@ export function ScriptPanel({ onStoryboardCreated }: { onStoryboardCreated: () =
           title={
             hasDirectorProvider
               ? 'The AI Director model breaks the script into cinematographed shots'
-              : 'Add an OpenRouter or Gemini API key in Settings to enable AI storyboarding'
+              : 'Connect an AI Director provider in Settings → API Keys to enable AI storyboarding'
           }
         >
           <Sparkles className="h-3.5 w-3.5" />

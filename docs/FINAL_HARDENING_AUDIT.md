@@ -1,8 +1,9 @@
 # Final hardening audit (release candidate)
 
 Forensic audit of `jyoung2000/TFG` (branch `claude/ltx-filmmaking-integration-75pnwq`)
-at the end of the release-candidate pass, 2026-09-08. Every capability is
-classified with one of:
+at the end of the release-candidate pass, 2026-09-08, extended on 2026-09-09
+with the multi-provider / Model Library pass. Every capability is classified
+with one of:
 
 | Status | Meaning |
 |---|---|
@@ -55,6 +56,18 @@ headers are kept (`frontend/views/film/composer/*.ts`, `docs/INTEGRATED_UPSTREAM
 | OpenRouter provider: key storage in backend settings file, env fallback, masked UI, validate, model discovery from `GET /api/v1/models`, role models, remove | VERIFIED WORKING (tests + UI with placeholder key; real service never called) | `backend/film/llm_providers.py`, `frontend/components/OpenRouterSettings.tsx`; `test_film_openrouter.py`; `verify-hardening.mjs` #11 |
 | Gemini provider parity (function calling + JSON) | VERIFIED WORKING (tests, fake HTTP) | `GeminiProvider`; `test_film_openrouter.py::test_gemini_function_calling_path` |
 | OpenAI-compatible endpoints (LM Studio, vLLM, Ollama) with model refresh and connection test | VERIFIED WORKING (tests + UI; the endpoint itself unreachable here → typed 502) | `OpenAICompatibleProvider`, `OpenAICompatibleSettings`; `test_film_rc.py::TestOpenAICompatibleProvider`; `verify-rc.mjs` H |
+| Claude (Anthropic) provider: key + model settings, live model list, tool calling (`tool_use`/`tool_result` blocks), typed 401/404/429/529 | VERIFIED WORKING (tests + UI with placeholder key; real service never called) | `AnthropicProvider`; `test_model_providers.py::TestAnthropicProvider`; `verify-models.mjs` |
+| Grok (xAI) provider (OpenAI-compatible transport, own key/model/model list) | VERIFIED WORKING (tests + UI with placeholder key) | `XAIProvider`; `test_model_providers.py::TestXAIProvider` |
+| Provider selection: explicit or Auto (openrouter → anthropic → xai → gemini → openai_compatible), status naming the missing key for an explicitly-selected provider | VERIFIED WORKING (tests + live status) | `film_director_handler.py::_active_provider_name`, `status()`; `test_model_providers.py::TestProviderSelection`; `verify-models.mjs` |
+| In-chat Director / Video / Image model chips writing to the project or app defaults | VERIFIED WORKING (live: picking a provider changed the director provider; picking a video model was written onto the project) | `frontend/views/film/ModelPickers.tsx`; `verify-models.mjs` |
+| Hosted media providers (fal, WaveSpeed, Replicate): submit → poll → download, progress, cancel, timeout, data-URL conditioning images | VERIFIED WORKING (tests, fake HTTP) | `film/media_providers.py`, `film/media_runner.py`; `test_model_providers.py::TestMediaProviders`, `::TestMediaRunner` |
+| Hosted render inside the existing film queue (same versions, telemetry `execution_mode`, outputs, export) | VERIFIED WORKING (tests + live: a keyless hosted render failed with a typed, key-free message and recorded the provider as its execution mode) | `film_generation_handler.py::_run_hosted_job`; `test_model_providers.py::TestHostedFilmGeneration`; `verify-models.mjs` |
+| AI-generated asset reference images with the selected image model (local or hosted) | VERIFIED WORKING (tests + live missing-key path) | `film_generation_handler.py::generate_asset_reference`; `test_model_providers.py::TestAssetReference`; `verify-models.mjs` |
+| Model Library: one searchable catalog (WanGP defs, native LTX files, Ollama, OpenAI-compatible, OpenRouter/Claude/Grok/Gemini, fal/WaveSpeed/Replicate) with task/source filters, GPU-fit filter, per-source error isolation | VERIFIED WORKING (tests + live search/filter run) | `handlers/model_library_handler.py`, `frontend/views/film/ModelLibrary.tsx`; `test_model_providers.py::TestModelLibrary`; `verify-models.mjs` |
+| Model downloads from the library: WanGP weights from Hugging Face, Ollama pulls, progress + cancel; hosted rows refuse with an explanation | VERIFIED WORKING (tests + live refusal and install-state rows); a real multi-GB weight download BLOCKED — ENVIRONMENT | `model_library_handler.py::start_download`; `test_model_providers.py::TestModelLibrary`; `verify-models.mjs` |
+| Custom model ids: any pasted id is accepted, used and remembered | VERIFIED WORKING (live) | `POST /api/models/library/remember`; `verify-models.mjs` |
+| Honest hosted catalogs: fal/WaveSpeed rows shipped as labelled examples (no public catalog API), each linking to the provider's own list; Replicate discovered via collections | VERIFIED WORKING (tests + live "example"/"Needs API key" states) | `film/media_providers.py::curated_models`, `PROVIDER_CATALOG_URLS` |
+| Offline readiness reported honestly (`offline_ready` + note: a local video/image model **and** a local text model) | VERIFIED WORKING (live banner) | `ModelSearchResponse.offline_ready`; `verify-models.mjs` |
 | Offline builder / parser without any provider | VERIFIED WORKING | `film_director_handler.py` heuristic planner, `film/script_parser.py` |
 | Tool-calling loop, JSON-plan fallback, 12-turn cap, tool results fed back | VERIFIED WORKING (tests) | `FilmDirectorHandler.instruct`; `test_film_openrouter.py::TestToolCallingDirector` |
 | Full tool list incl. composer tools (`position/rotate/scale_object`, `update_pose`, `set_ots`, `set_camera`, `add/update/delete_keyframe`, `capture_shot`, `duplicate_shot`, `assign_prop`, `set_shot_type/…`, `generate_preview/final`) | VERIFIED WORKING (tests + live `set_ots`/`position_object` changing real state) | `film_director_handler.py` `_TOOL_SPECS`; `test_film_invariants.py::TestDirectorCompositionTools`; `verify-rc.mjs` D |
@@ -119,6 +132,7 @@ headers are kept (`frontend/views/film/composer/*.ts`, `docs/INTEGRATED_UPSTREAM
 | Keys never in responses, project JSON, exports, prompts; log + error-body redaction | VERIFIED WORKING (tests + live project JSON check) | `backend/logging_policy.py`; `test_security.py::TestSecretRedaction`; `verify-rc.mjs` I |
 | Electron: `contextIsolation`, `nodeIntegration:false`, `sandbox:true`, validated path IPC | unchanged from previous pass (VERIFIED by inspection) | `electron/main.ts`, `preload.ts` |
 | Secret storage | PARTIAL by design — backend settings file (same store as the host's LTX/FAL/Gemini keys) or env var; Electron `safeStorage` not adopted (documented) | `docs/OPENROUTER.md` |
+| Every new provider key (Claude, Grok, WaveSpeed, Replicate) write-only over the API: only a `has…` flag comes back, `DELETE /api/settings/api-keys/{id}` clears it | VERIFIED WORKING (tests + live check that a saved Claude key never returns) | `state/app_settings.py`, `handlers/settings_handler.py`; `test_model_providers.py::TestProviderKeys`; `verify-models.mjs` |
 
 ### Installers and CI
 
@@ -137,6 +151,37 @@ headers are kept (`frontend/views/film/composer/*.ts`, `docs/INTEGRATED_UPSTREAM
 | Per-version delete | MISSING (append-only history) |
 | Automatic "update available" detection for model weights | MISSING (needs upstream version metadata) |
 | Screen-reader audit, performance budgets | not performed |
+
+## 1b. Provider and Model Library pass (2026-09-09)
+
+Added after the RC audit above, verified the same way (mock-free backend
+tests + a live Electron walkthrough, `verify-models.mjs`, 21/21):
+
+- **Five text providers** — OpenRouter, Claude (Anthropic), Grok (xAI),
+  Gemini, and any local OpenAI-compatible server — behind one `LLMProvider`
+  contract, with per-provider keys and models, live model lists, and an Auto
+  order that names the missing key when a provider is chosen explicitly.
+- **Four media targets** — Local (the host engine, unchanged and still the
+  default) plus fal, WaveSpeed and Replicate, driven by one submit → poll →
+  download loop inside the existing film queue: same versions, same progress
+  and cancel, same outputs, same export, `execution_mode` recording the
+  provider.
+- **Model Library** — one searchable catalog over local WanGP definitions,
+  native LTX files, Ollama, an OpenAI-compatible server and every configured
+  hosted provider, with task/source/GPU-fit filters, real downloads
+  (Hugging Face weights, Ollama pulls) with progress and cancel, per-source
+  error isolation, custom ids that are accepted and remembered, and an honest
+  `offline_ready` signal.
+- **In-chat model pickers** — Director / Video / Image chips in the AI
+  Director bar, writing to the open film project or to the app defaults.
+- **AI asset reference images** using the selected image model, local or
+  hosted.
+
+Two fixes came out of the live run rather than the unit tests: hosted rows
+showed *example* even without a key (the state precedence now puts
+`needs_key` first, which is what the user needs to see), and fal image
+results shaped `{"images":[{"url":…}]}` were not extracted by the result
+parser.
 
 ## 2. Fixes made during this audit
 
@@ -165,16 +210,19 @@ headers are kept (`frontend/views/film/composer/*.ts`, `docs/INTEGRATED_UPSTREAM
 
 | Suite | Count | Result |
 |---|---|---|
-| Backend pytest (`backend/tests`, mock-free, incl. pyright-strict test) | 432 | PASS |
+| Backend pytest (`backend/tests`, mock-free, incl. pyright-strict test) | 461 | PASS |
 | Frontend vitest (`frontend/**/*.test.ts`) | 29 | PASS |
 | `tsc --noEmit` / `pyright` strict | — | 0 errors |
 | Vite production build | — | PASS (composer is a lazy chunk) |
 | E2E `scripts/verify/verify-hardening.mjs` (live Electron) | 33 | 33/33 PASS |
 | E2E `scripts/verify/verify-rc.mjs` (live Electron) | 39 | 39/39 PASS |
-| Real GPU render, real provider calls, Windows/macOS installers | — | BLOCKED — ENVIRONMENT |
+| E2E `scripts/verify/verify-models.mjs` (live Electron) | 21 | 21/21 PASS |
+| Real GPU render, real provider calls, real weight download, Windows/macOS installers | — | BLOCKED — ENVIRONMENT |
 
-New this pass: `test_film_invariants.py` (20), `test_security.py` (21),
-`test_film_rc.py` (28), vitest suites (29), `verify-rc.mjs` (39 checks).
+New in the provider/model pass: `test_model_providers.py` (28) and
+`verify-models.mjs` (21 live checks). Earlier passes added
+`test_film_invariants.py` (20), `test_security.py` (21), `test_film_rc.py`
+(28), the vitest suites (29) and `verify-rc.mjs` (39 checks).
 
 ## 4. Acceptance tests (product contract)
 
@@ -192,7 +240,9 @@ New this pass: `test_film_invariants.py` (20), `test_security.py` (21),
 |---|---|
 | P0 | Windows installer has never been installed on a clean Windows machine from this repository (CI job builds and inspects it; the clean-VM checklist in `RELEASE_CHECKLIST.md` § 2 is still open). |
 | P0 | No real GPU render has been observed from this repository; the RTX 4070 matrix is entirely BLOCKED. |
-| P1 | Real OpenRouter / Gemini / local-endpoint calls were never made (all provider tests use fake HTTP); tool-support quality per model is unknown. |
+| P1 | No real provider call was made from this environment — OpenRouter, Claude, Grok, Gemini, a local endpoint, fal, WaveSpeed or Replicate (all provider tests use fake HTTP with a placeholder key); per-model tool-support quality and hosted render latency are unknown. |
+| P1 | No weight was actually downloaded through the Model Library (no bandwidth/disk for a multi-GB Hugging Face pull, no Ollama server here); the download plumbing is verified with fakes and the refusal paths live. |
+| P2 | fal and WaveSpeed publish no catalog API, so their rows are shipped examples marked `curated` — ids should be checked against the provider's own list (which every row links to). Any pasted id works and is remembered. |
 | P1 | Gizmo pointer interaction and Video Editor context-menu actions are verified by code and types only, not by automated UI. |
 | P2 | Model "update available" state cannot be detected (no version metadata); "update" = remove + re-download. |
 | P2 | Per-version delete and cross-project shot library absent. |
