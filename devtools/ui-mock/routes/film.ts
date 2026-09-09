@@ -8,8 +8,8 @@ import type {
   FilmShot,
   FilmPose,
 } from '../../../frontend/types/film'
-import { MockHttpError, type Router } from '../http'
-import { isVideoPath, labelFromPath, placeholderFrame, sampleClip } from '../media'
+import { MockHttpError, RawResponse, type Router } from '../http'
+import { isVideoPath, labelFromPath, placeholderFrame } from '../media'
 import type { Store } from '../state'
 import { seedProject } from '../seed'
 
@@ -74,7 +74,8 @@ function syncComposition(shot: FilmShot, composition: CompositionScene | null): 
   if (composition.duration_seconds > 0) shot.duration_seconds = composition.duration_seconds
 }
 
-export function registerFilmRoutes(router: Router, store: Store): void {
+export function registerFilmRoutes(router: Router, store: Store, clipUrl: string): void {
+  const clip = () => new RawResponse(302, { location: clipUrl }, null)
   const project = (id: string): FilmProject => store.ensureProject(id)
 
   const touched = (p: FilmProject): { project: FilmProject } => {
@@ -411,13 +412,13 @@ export function registerFilmRoutes(router: Router, store: Store): void {
 
   router.get('/api/film/projects/:projectId/media', req => {
     const path = req.query.get('path') ?? ''
-    if (isVideoPath(path)) return sampleClip()
+    if (isVideoPath(path) && clipUrl) return clip()
     return placeholderFrame(labelFromPath(path), `${req.params.projectId} · ${path}`, path)
   })
 
   router.get('/api/film/output', req => {
     const path = req.query.get('path') ?? ''
-    if (isVideoPath(path)) return sampleClip()
+    if (isVideoPath(path) && clipUrl) return clip()
     return placeholderFrame(labelFromPath(path), path, path)
   })
 }

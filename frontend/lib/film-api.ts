@@ -1,6 +1,7 @@
 // Typed client for the backend /api/film surface.
 
 import { backendFetch, getBackendCredentials } from './backend'
+import { mediaResolver } from './media-resolver'
 import type {
   CompositionScene,
   ContinuityReport,
@@ -396,12 +397,16 @@ export const filmApi = {
 
 /** Authenticated URL for a film-project media file (capture, reference image). */
 export async function filmMediaUrl(projectId: string, relativePath: string): Promise<string> {
+  const standalone = mediaResolver()
+  if (standalone) return standalone.media(projectId, relativePath)
   const { url, token } = await getBackendCredentials()
   return `${url}/api/film/projects/${enc(projectId)}/media?path=${enc(relativePath)}&token=${enc(token)}`
 }
 
 /** Authenticated URL for a generated output living in the outputs directory. */
 export async function filmOutputUrl(outputPath: string): Promise<string> {
+  const standalone = mediaResolver()
+  if (standalone) return standalone.output(outputPath)
   const { url, token } = await getBackendCredentials()
   return `${url}/api/film/output?path=${enc(outputPath)}&token=${enc(token)}`
 }

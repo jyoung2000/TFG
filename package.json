@@ -15,6 +15,7 @@
     "dev": "vite",
     "dev:debug": "cross-env BACKEND_DEBUG=1 ELECTRON_DEBUG=1 vite",
     "dev:ui": "cross-env VITE_UI_MOCK=1 vite",
+    "build:ui": "cross-env VITE_UI_STANDALONE=1 vite build",
     "typecheck": "concurrently \"pnpm run typecheck:ts\" \"pnpm run typecheck:py\"",
     "typecheck:ts": "tsc --noEmit && tsc -p devtools/ui-mock/tsconfig.json --noEmit",
     "typecheck:py": "cd backend && uv run pyright",

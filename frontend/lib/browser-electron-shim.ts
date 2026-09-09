@@ -11,11 +11,18 @@
  * resolves leaves a UI path untestable, which is the opposite of the point.
  */
 
-/** True while `pnpm dev:ui` is running; compiled out of production builds. */
-const UI_MOCK = import.meta.env.VITE_UI_MOCK === '1'
+/** The standalone HTML build: the mock backend runs in this tab. */
+const STANDALONE = import.meta.env.VITE_UI_STANDALONE === '1'
 
-/** UI-only mode talks to the dev server it was served from. */
-const BROWSER_BACKEND_URL = UI_MOCK ? window.location.origin : 'http://localhost:8000'
+/** True in either UI-only mode; compiled out of production builds. */
+const UI_MOCK = import.meta.env.VITE_UI_MOCK === '1' || STANDALONE
+
+/**
+ * `pnpm dev:ui` talks to the dev server it was served from. The standalone
+ * build has no origin to talk to — a `file://` page has none — so it leaves
+ * backend URLs relative for the patched `fetch` to answer.
+ */
+const BROWSER_BACKEND_URL = STANDALONE ? '' : UI_MOCK ? window.location.origin : 'http://localhost:8000'
 
 const MOCK_HOME = '/home/you/LTX Desktop'
 

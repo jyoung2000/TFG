@@ -17,5 +17,8 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["**/*.ts"]
+  // browser.ts is DOM code imported by the renderer, so it is type-checked by
+  // the frontend program instead.
+  "include": ["**/*.ts"],
+  "exclude": ["browser.ts"]
 }

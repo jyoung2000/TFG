@@ -410,14 +410,20 @@ the setup below — no Python, no `uv`, no GPU, no model weights, no Electron:
 
 ```bash
 pnpm install
-pnpm dev:ui          # http://localhost:5173
+pnpm dev:ui          # http://localhost:5173, with hot reload
 ```
 
-That runs the **same renderer** the packaged app ships, in a plain browser,
-against a mock of the backend contract, opening on a seeded demo film with
-scenes, shots, assets, a script, continuity warnings and a model library. Full
-details and what is (and is not) simulated:
-[`docs/UI_ONLY_MODE.md`](docs/UI_ONLY_MODE.md).
+Or build a single HTML file you can just open — no server, nothing installed,
+runs straight off disk:
+
+```bash
+pnpm build:ui        # dist-ui/ltx-desktop-ui.html — double-click it
+```
+
+Both run the **same renderer** the packaged app ships, against a mock of the
+backend contract, opening on a seeded demo film with scenes, shots, assets, a
+script, continuity warnings and a model library. Full details and what is (and
+is not) simulated: [`docs/UI_ONLY_MODE.md`](docs/UI_ONLY_MODE.md).
 
 ### The full app
 

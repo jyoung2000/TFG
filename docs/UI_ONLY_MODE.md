@@ -1,14 +1,33 @@
-# UI-only mode (`pnpm dev:ui`)
+# UI-only mode
 
-Work on the interface without installing the app.
+Work on the interface without installing the app. Two ways in.
+
+## A file you can double-click
+
+```bash
+pnpm build:ui        # writes dist-ui/ltx-desktop-ui.html
+```
+
+One self-contained HTML file (~1.8 MB). Open it from your file manager, mail
+it, drop it in a Slack thread, put it on a USB stick — it runs from `file://`
+with **nothing** installed and no server anywhere, because the mock backend
+runs in the tab. Use this to show the UI to someone, or to look at it on a
+machine that has none of the toolchain.
+
+Its state lives in that browser's `localStorage`, so your changes survive a
+reload. To start over, clear site data for the page, or open it in a private
+window.
+
+## A dev server with hot reload
 
 ```bash
 pnpm install
 pnpm dev:ui          # http://localhost:5173
 ```
 
-No Python, no `uv sync`, no torch, no WanGP checkout, no GPU, no model
-weights, no Electron. Just Vite and a browser.
+Use this while you are actually editing components: it is the same thing with
+Vite's hot reload. Still no Python, no `uv sync`, no torch, no WanGP checkout,
+no GPU, no model weights, no Electron.
 
 ## What it is
 
@@ -22,14 +41,21 @@ Two pieces make that work:
 
 | Piece | What it stands in for |
 |---|---|
-| `devtools/ui-mock/` | The Python backend. A Vite plugin serves it as real HTTP on the dev server's own origin. |
+| `devtools/ui-mock/` | The Python backend. |
 | `frontend/lib/browser-electron-shim.ts` | The Electron preload bridge (`window.electronAPI`). |
 
-The mock is served over **real HTTP** rather than by patching `fetch` in the
-renderer. That distinction is what keeps the mode faithful: `<img src>` and
-`<video src>` load, redirects and status codes work, error bodies come back in
-the backend's own `{detail, message}` envelope, and no renderer code knows the
-difference.
+The mock's routes and state machine are one body of code with no Node or DOM
+dependencies, reached two ways:
+
+- **`pnpm dev:ui`** — `node-adapter.ts` serves it as real HTTP from the dev
+  server, on the app's own origin. Nothing is patched, so `<img src>`,
+  `<video src>`, redirects and status codes exercise the same paths they do
+  against Python.
+- **`pnpm build:ui`** — `browser.ts` runs it in the tab behind a patched
+  `fetch`, keeps state in `localStorage`, and resolves media to `data:` and
+  `blob:` URLs, because a `file://` page has no origin that could serve them.
+
+Same handlers, same responses, either way.
 
 ## What you get on first run
 
@@ -68,7 +94,7 @@ curl -X POST http://localhost:5173/api/__ui_mock/reset
 | Build Film / storyboard generation | The deterministic offline planner — the same thing the real backend falls back to with no provider |
 | AI Director | With no provider: the real `AI_DIRECTOR_KEY_MISSING` message and disabled state. Save any placeholder key and it answers with correctly shaped responses whose text says plainly that they came from the mock, never from a model. A small built-in reader does understand shot size, OTS, push-in and durations, so the storyboard visibly reacts |
 | Captures and reference images | Generated SVG frames, labelled with the shot or asset so layout and cropping problems are visible |
-| Rendered clips | A real MP4 already in the repo (`public/splash/splash.mp4`), served by redirect — so playback, canvas thumbnail extraction and the timeline all behave normally |
+| Rendered clips | `dev:ui` redirects to an MP4 already in the repo (`public/splash/splash.mp4`); the standalone file records a few seconds of canvas animation with `MediaRecorder`, which is real, playable video and adds nothing to the file's size |
 
 Secrets follow the real rule: a key can be written but never read back, only
 `has*` flags come out, and `DELETE /api/settings/api-keys/{provider}` clears
@@ -83,6 +109,25 @@ it. Nothing in UI-only mode makes a network request to any provider.
   the backend says with no provider.
 - **Real file dialogs.** The shim returns plausible paths so the flows continue.
 
+### Two things the standalone file does not carry
+
+- **Home's background video.** It lives in `public/` (27 MB, decorative), and
+  copying it would defeat the point of a single file. The banner falls back to
+  its gradient.
+- **Web fonts**, if you are offline. They load from Google in the packaged app
+  too, so the fallback stack is the same one real users see offline.
+
+`dev:ui` has neither limitation — it serves `public/` normally.
+
+### One browser caveat
+
+`dev:ui` serves the repo's H.264 sample clip. Chromium builds without
+proprietary codecs (Playwright's bundled Chromium, some Linux distribution
+builds) cannot decode it, so the storyboard's video thumbnail stays blank
+there; Chrome, Edge, Safari and Firefox with system codecs all play it. The
+standalone file is unaffected — it records VP8/VP9, which every browser
+decodes.
+
 ## Keeping it 1:1
 
 The mock imports the renderer's own types — `frontend/types/film.ts`,
@@ -95,11 +140,15 @@ What that does **not** catch is the backend changing while the frontend types
 stay still. Those types are the contract for both, so treat
 `frontend/types/*.ts` as the place a backend change lands first.
 
-To check the whole mode end to end:
+To check the whole mode end to end — the same 21 checks run against either
+way in:
 
 ```bash
 pnpm dev:ui
-node scripts/verify/verify-ui-only.mjs   # 21 checks, from a dir with playwright
+node scripts/verify/verify-ui-only.mjs
+
+pnpm build:ui
+UI_ONLY_URL=file://$PWD/dist-ui/ltx-desktop-ui.html node scripts/verify/verify-ui-only.mjs
 ```
 
 ## Adding an endpoint
@@ -111,8 +160,10 @@ node scripts/verify/verify-ui-only.mjs   # 21 checks, from a dir with playwright
 
 ## It cannot reach production
 
-`VITE_UI_MOCK` is only set by `pnpm dev:ui`. Vite replaces it with a literal at
-build time, so the two branches that read it (`lib/file-url.ts`,
-`lib/browser-electron-shim.ts`) and the demo-project seed are eliminated from
-the bundle, and the plugin itself is `apply: 'serve'`. The production build is
-checked to contain no trace of the mock.
+`VITE_UI_MOCK` is set only by `pnpm dev:ui` and `VITE_UI_STANDALONE` only by
+`pnpm build:ui`. Vite replaces both with literals at build time, so every
+branch that reads them — `lib/file-url.ts`, `lib/media-resolver.ts`,
+`lib/browser-electron-shim.ts`, the demo-project seed and the in-browser mock
+itself — is eliminated from the app bundle, and the dev-server plugin is
+`apply: 'serve'`. The production build is checked to contain no trace of the
+mock.

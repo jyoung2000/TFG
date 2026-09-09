@@ -1,15 +1,19 @@
-// Walks the browser-only UI (`pnpm dev:ui`) screen by screen and checks that
-// each one renders the same content it does in the packaged app, backed by the
-// mock backend in devtools/ui-mock. No Python, no Electron, no GPU, no models.
+// Walks the browser-only UI screen by screen and checks that each one renders
+// the same content it does in the packaged app, backed by the mock backend in
+// devtools/ui-mock. No Python, no Electron, no GPU, no models.
 //
-// Run: pnpm dev:ui, then `node scripts/verify/verify-ui-only.mjs`
+// Two modes, both checked the same way:
+//   pnpm dev:ui   → node scripts/verify/verify-ui-only.mjs
+//   pnpm build:ui → UI_ONLY_URL=file:///abs/path/dist-ui/ltx-desktop-ui.html node ...
 // (from a directory with playwright installed: npm i playwright)
 import { chromium } from 'playwright'
 import fs from 'node:fs'
 
 const BASE = process.env.UI_ONLY_URL ?? 'http://127.0.0.1:5173'
+/** The standalone file has no origin and no server: everything runs in the tab. */
+const STANDALONE = BASE.startsWith('file://')
 const CHROME = process.env.CHROME_PATH ?? undefined
-const SHOTS = './verify-shots/ui-only'
+const SHOTS = STANDALONE ? './verify-shots/ui-standalone' : './verify-shots/ui-only'
 fs.mkdirSync(SHOTS, { recursive: true })
 
 const results = []
@@ -26,14 +30,17 @@ page.on('dialog', d => d.accept())
 // Anything the page could not load is a real defect in UI-only mode: the whole
 // point is that no request goes anywhere the browser cannot reach.
 // Only same-origin failures matter: the app's web-font links go to Google and
-// are expected to fail in a sandbox with no outbound network.
-const sameOrigin = url => url.startsWith(BASE) || url.startsWith('http://localhost:5173')
+// are expected to fail in a sandbox with no outbound network. The standalone
+// file also has no public/ folder, so its decorative hero video is absent.
+const sameOrigin = url =>
+  !STANDALONE && (url.startsWith(BASE) || url.startsWith('http://localhost:5173'))
 const failedRequests = []
 page.on('requestfailed', r => {
   const error = r.failure()?.errorText ?? ''
-  // A video element that unmounts, or a page that navigates, aborts its own
-  // range requests; that is the browser working normally, not a broken URL.
-  if (error === 'net::ERR_ABORTED' && /\.(mp4|webm)$/i.test(new URL(r.url()).pathname)) return
+  // ERR_ABORTED means the browser cancelled the request itself — a reload
+  // mid-flight, or a <video> that unmounted before its range request
+  // finished. That is normal behaviour, not a URL that does not work.
+  if (error === 'net::ERR_ABORTED') return
   if (sameOrigin(r.url())) failedRequests.push(`${r.url()} (${error})`)
 })
 page.on('response', r => {
@@ -57,13 +64,19 @@ const api = (path, init = {}) =>
 
 try {
   // Always start from the seed so the run is repeatable.
-  await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' })
+  await page.goto(STANDALONE ? BASE : `${BASE}/`, { waitUntil: 'domcontentloaded' })
+  await page.waitForTimeout(3000)
   await api('/api/__ui_mock/reset', { method: 'POST' })
   await page.reload({ waitUntil: 'domcontentloaded' })
   await page.waitForTimeout(5000)
 
   // ---- 1. Boot ----
-  log('Boots in a plain browser with no backend process', await page.getByText('What do you want to make?').isVisible())
+  log(
+    STANDALONE
+      ? 'Opens straight from disk over file:// with no server at all'
+      : 'Boots in a plain browser with no backend process',
+    await page.getByText('What do you want to make?').isVisible(),
+  )
   const health = await api('/health')
   log('Mock backend answers /health like the real one', health.status === 200 && health.json.models_loaded === true)
   await snap('01-home')
@@ -92,14 +105,57 @@ try {
   await snap('03-storyboard')
 
   // ---- 4. Media actually loads (the reason the mock is served over HTTP) ----
-  const media = await page.evaluate(async () => {
-    const images = [...document.querySelectorAll('img')].filter(i => i.src.includes('/api/'))
-    const videos = [...document.querySelectorAll('video')].filter(v => v.src.includes('/api/'))
-    const loaded = images.filter(i => i.naturalWidth > 0).length
-    return { images: images.length, loaded, videos: videos.length }
-  })
-  log('Shot captures render as real images', media.images > 0 && media.loaded === media.images, `${media.loaded}/${media.images} images`)
-  log('Rendered clips are served as playable video', media.videos > 0, `${media.videos} video elements`)
+  // Served over HTTP with the dev server, or as data:/blob: URLs in the
+  // standalone file — either way the browser has to actually decode them.
+  const mediaPattern = STANDALONE ? /^(data|blob):/ : /\/api\//
+  // The dev server hands back the repo's H.264 sample; the standalone file
+  // records VP8/VP9 in the tab. A Chromium built without proprietary codecs
+  // decodes the second but not the first, so say which case this is instead of
+  // reporting a pass the browser did not actually earn.
+  const canDecodeH264 =
+    STANDALONE ||
+    (await page.evaluate(() => document.createElement('video').canPlayType('video/mp4; codecs="avc1.42E01E"') !== ''))
+  // Decoding a real clip takes a moment over HTTP; give it one before judging.
+  await page
+    .waitForFunction(
+      pattern => {
+        const re = new RegExp(pattern)
+        const videos = [...document.querySelectorAll('video')].filter(v => re.test(v.src))
+        return videos.length > 0 && videos.every(v => v.videoWidth > 0)
+      },
+      mediaPattern.source,
+      { timeout: 15000 },
+    )
+    .catch(() => {})
+  const media = await page.evaluate(pattern => {
+    const re = new RegExp(pattern)
+    const images = [...document.querySelectorAll('img')].filter(i => re.test(i.src))
+    const videos = [...document.querySelectorAll('video')].filter(v => re.test(v.src))
+    return {
+      images: images.length,
+      loaded: images.filter(i => i.naturalWidth > 0).length,
+      videos: videos.length,
+      playable: videos.filter(v => v.videoWidth > 0).length,
+    }
+  }, mediaPattern.source)
+  log(
+    'Shot captures decode as real images',
+    media.images > 0 && media.loaded === media.images,
+    `${media.loaded}/${media.images} images`,
+  )
+  if (canDecodeH264) {
+    log(
+      'Rendered clips decode as playable video',
+      media.videos > 0 && media.playable === media.videos,
+      `${media.playable}/${media.videos} videos`,
+    )
+  } else {
+    log(
+      'Rendered clips are wired to a video source (decode not checked)',
+      media.videos > 0,
+      `${media.videos} video elements; this browser has no H.264 decoder, so the dev server's sample clip cannot play here`,
+    )
+  }
 
   // ---- 5. Continuity ----
   const continuity = await api('/api/film/projects/ui-mock-film/continuity')

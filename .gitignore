@@ -84,3 +84,6 @@ backend/requirements-dist.txt
 
 # UI verification screenshots (scripts/verify)
 verify-shots/
+
+# Standalone UI build (pnpm build:ui)
+dist-ui/

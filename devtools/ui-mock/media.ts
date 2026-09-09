@@ -3,16 +3,13 @@
  *
  * Captures and reference images are drawn as SVG so they carry a readable
  * label (which shot, which asset) instead of being grey boxes — that makes
- * layout and cropping problems obvious while working on the UI. Rendered
- * clips redirect to a real video already in the repo, so `<video>`, thumbnail
- * extraction from a canvas, duration probing and the timeline all behave as
- * they do against the Python backend.
+ * layout and cropping problems obvious while working on the UI. Where a
+ * playable clip comes from is the platform's business: the dev server
+ * redirects to a real video it already serves, the standalone build makes one
+ * in the browser.
  */
 
-import { RawResponse, redirect } from './http'
-
-/** A real MP4 that Vite already serves from `public/`. */
-const SAMPLE_CLIP = '/splash/splash.mp4'
+import { RawResponse } from './http'
 
 const PALETTE = [
   ['#0f172a', '#334155', '#f8fafc'],
@@ -39,7 +36,7 @@ function escapeXml(value: string): string {
  * detail and a mock-mode marker so a screenshot is never mistaken for a real
  * render.
  */
-export function placeholderFrame(title: string, detail = '', seed = title): RawResponse {
+export function placeholderSvg(title: string, detail = '', seed = title): string {
   const [bg, accent, ink] = PALETTE[hash(seed) % PALETTE.length]
   const angle = (hash(seed + 'a') % 60) - 30
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 720" width="1280" height="720" role="img" aria-label="${escapeXml(title)}">
@@ -65,16 +62,21 @@ export function placeholderFrame(title: string, detail = '', seed = title): RawR
   <text x="64" y="654" fill="${ink}" opacity="0.75" font-family="Inter, system-ui, sans-serif" font-size="30">${escapeXml(detail)}</text>
   <text x="64" y="96" fill="${ink}" opacity="0.6" font-family="Inter, system-ui, sans-serif" font-size="26" letter-spacing="4">UI MOCK — NOT A RENDER</text>
 </svg>`
+  return svg
+}
+
+/** The same frame as an HTTP response, for hosts that serve it over a URL. */
+export function placeholderFrame(title: string, detail = '', seed = title): RawResponse {
   return new RawResponse(
     200,
     { 'content-type': 'image/svg+xml; charset=utf-8', 'cache-control': 'no-store' },
-    svg,
+    placeholderSvg(title, detail, seed),
   )
 }
 
-/** Rendered clips point at the sample video so playback is genuinely real. */
-export function sampleClip(): RawResponse {
-  return redirect(SAMPLE_CLIP)
+/** The same frame as a `data:` URL, for hosts with no server to serve it. */
+export function placeholderDataUrl(title: string, detail = '', seed = title): string {
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(placeholderSvg(title, detail, seed))}`
 }
 
 /** Treat anything that looks like a video path as a clip, everything else as a frame. */

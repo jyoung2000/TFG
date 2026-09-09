@@ -3,13 +3,11 @@
  *
  * Mirrors what the Python backend owns: film projects, app settings (with the
  * write-only secrets kept out of every response), the generation queue and the
- * model-download jobs. Persisted to disk so a dev-server restart does not
- * throw away whatever you were looking at; `POST /api/__ui_mock/reset` puts it
- * back to the seed.
+ * model-download jobs. Where it is persisted is the platform's business — a
+ * file beside the dev server, `localStorage` in the standalone build — so the
+ * store only asks for somewhere to put a string.
+ * `POST /api/__ui_mock/reset` puts it back to the seed.
  */
-
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { dirname } from 'node:path'
 
 import type { FilmProject, FilmQueue, QueuedJob } from '../../frontend/types/film'
 import type { AppSettings, ClearableKeyProvider } from '../../frontend/types/settings'
@@ -88,11 +86,22 @@ export function freshState(): MockState {
   }
 }
 
+/** Somewhere to keep the state between runs. Both sides may be no-ops. */
+export interface Persistence {
+  read(): string | null
+  write(data: string): void
+}
+
+export const NO_PERSISTENCE: Persistence = {
+  read: () => null,
+  write: () => {},
+}
+
 export class Store {
   private state: MockState
-  private saveTimer: NodeJS.Timeout | null = null
+  private saveTimer: ReturnType<typeof setTimeout> | null = null
 
-  constructor(private readonly file: string) {
+  constructor(private readonly persistence: Persistence = NO_PERSISTENCE) {
     this.state = this.load()
   }
 
@@ -133,10 +142,13 @@ export class Store {
 
   private load(): MockState {
     try {
-      const parsed = JSON.parse(readFileSync(this.file, 'utf8')) as MockState
-      // A stored file from an older shape would break the UI in confusing
-      // ways; a missing project map is the cheapest reliable signal.
-      if (parsed && typeof parsed === 'object' && parsed.projects) return parsed
+      const raw = this.persistence.read()
+      if (raw) {
+        const parsed = JSON.parse(raw) as MockState
+        // Stored state from an older shape would break the UI in confusing
+        // ways; a missing project map is the cheapest reliable signal.
+        if (parsed && typeof parsed === 'object' && parsed.projects) return parsed
+      }
     } catch {
       // No state yet, or it is unreadable — seed instead.
     }
@@ -145,15 +157,17 @@ export class Store {
 
   private scheduleSave(): void {
     if (this.saveTimer) clearTimeout(this.saveTimer)
-    this.saveTimer = setTimeout(() => {
+    const timer = setTimeout(() => {
       try {
-        mkdirSync(dirname(this.file), { recursive: true })
-        writeFileSync(this.file, JSON.stringify(this.state, null, 2))
+        this.persistence.write(JSON.stringify(this.state, null, 2))
       } catch {
-        // Persistence is a convenience; a read-only disk must not break the UI.
+        // Persistence is a convenience; a full or read-only store must not
+        // break the UI.
       }
     }, 250)
-    this.saveTimer.unref?.()
+    this.saveTimer = timer
+    // Node only: do not hold the process open just to flush state.
+    ;(timer as { unref?: () => void }).unref?.()
   }
 }
 

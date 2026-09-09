@@ -1,13 +1,10 @@
 /**
- * Minimal request plumbing for the UI-only mock backend.
+ * Request plumbing for the UI-only mock backend.
  *
- * The mock is served as real HTTP by the Vite dev server rather than by
- * patching `fetch` in the renderer, so `<img src>`, `<video src>`, redirects
- * and status codes all behave exactly as they do against the Python backend.
- * Nothing here is reachable from a production build.
+ * Deliberately free of any Node or DOM API: the same handlers run behind the
+ * Vite dev server (`node-adapter.ts`) and inside a plain browser with no
+ * server at all (`browser.ts`, used by the standalone HTML build).
  */
-
-import type { IncomingMessage, ServerResponse } from 'node:http'
 
 export interface MockRequest {
   method: string
@@ -39,19 +36,26 @@ export class MockHttpError extends Error {
 }
 
 /**
- * A response the caller wants to shape itself (media bytes, redirects) rather
- * than have serialized as JSON.
+ * A response the caller wants to shape itself (media, redirects) rather than
+ * have serialized as JSON.
  */
 export class RawResponse {
   constructor(
     readonly status: number,
     readonly headers: Record<string, string>,
-    readonly body: Buffer | string | null,
+    readonly body: string | null,
   ) {}
 }
 
 export function redirect(location: string): RawResponse {
   return new RawResponse(302, { location }, null)
+}
+
+/** What a platform adapter turns into its own response type. */
+export interface MockResult {
+  status: number
+  headers: Record<string, string>
+  body: string
 }
 
 export class Router {
@@ -106,29 +110,12 @@ function safeDecode(value: string): string {
   }
 }
 
-export async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
-  if (req.method === 'GET' || req.method === 'HEAD') return {}
-  const chunks: Buffer[] = []
-  for await (const chunk of req) chunks.push(chunk as Buffer)
-  if (chunks.length === 0) return {}
+export function parseJsonBody(raw: string): Record<string, unknown> {
+  if (!raw) return {}
   try {
-    const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+    const parsed: unknown = JSON.parse(raw)
     return parsed !== null && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {}
   } catch {
     return {}
   }
-}
-
-export function sendJson(res: ServerResponse, status: number, payload: unknown): void {
-  const body = JSON.stringify(payload ?? null)
-  res.statusCode = status
-  res.setHeader('content-type', 'application/json')
-  res.setHeader('cache-control', 'no-store')
-  res.end(body)
-}
-
-export function sendRaw(res: ServerResponse, raw: RawResponse): void {
-  res.statusCode = raw.status
-  for (const [key, value] of Object.entries(raw.headers)) res.setHeader(key, value)
-  res.end(raw.body ?? undefined)
 }

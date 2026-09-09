@@ -16,6 +16,7 @@ LTX Desktop is an Electron app for AI video generation using LTX models. Three-l
 |---|---|
 | `pnpm dev` | Start dev server (Vite + Electron + Python backend) |
 | `pnpm dev:ui` | Browser-only UI dev against a mock backend — no Python, Electron, GPU or models (`docs/UI_ONLY_MODE.md`) |
+| `pnpm build:ui` | One self-contained `dist-ui/ltx-desktop-ui.html` that runs the UI from `file://` with nothing installed |
 | `pnpm dev:debug` | Dev with Electron inspector + Python debugpy |
 | `pnpm typecheck` | Run TypeScript (`tsc --noEmit`) and Python (`pyright`) type checks |
 | `pnpm typecheck:ts` | TypeScript only |

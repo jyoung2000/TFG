@@ -3,17 +3,23 @@ import react from '@vitejs/plugin-react'
 import electron from 'vite-plugin-electron'
 import renderer from 'vite-plugin-electron-renderer'
 import path from 'path'
-import { isUiMockEnabled, uiMockPlugin } from './devtools/ui-mock/plugin'
+import { isUiMockEnabled, isUiStandalone, uiMockPlugin } from './devtools/ui-mock/node-adapter'
+import { singleFilePlugin } from './devtools/ui-mock/single-file'
 
 // UI-only mode (`pnpm dev:ui`): the renderer runs in a plain browser against a
 // mock backend, so no Python, Electron, GPU or model weights are needed to work
 // on the interface. Everything Electron-specific is skipped.
-const uiOnly = isUiMockEnabled()
+//
+// Standalone (`pnpm build:ui`) goes further: the mock runs in the browser and
+// the whole app is folded into one HTML file that opens from disk.
+const standalone = isUiStandalone()
+const uiOnly = isUiMockEnabled() || standalone
 
 export default defineConfig({
   plugins: [
     react(),
-    ...(uiOnly ? [uiMockPlugin(path.resolve(__dirname, 'node_modules/.cache/ui-mock/state.json'))] : []),
+    ...(uiOnly && !standalone ? [uiMockPlugin(path.resolve(__dirname, 'node_modules/.cache/ui-mock/state.json'))] : []),
+    ...(standalone ? [singleFilePlugin()] : []),
     ...(uiOnly ? [] : electron([
       {
         entry: 'electron/main.ts',
@@ -61,7 +67,26 @@ export default defineConfig({
     }
   },
   base: './',  // Use relative paths for Electron file:// protocol
-  build: {
-    outDir: 'dist'
-  }
+  // The standalone page is meant to be one file you can pass around, so the
+  // public/ folder (a 27 MB decorative hero video among it) is not copied.
+  publicDir: standalone ? false : undefined,
+  build: standalone
+    ? {
+        outDir: 'dist-ui',
+        emptyOutDir: true,
+        // A `file://` page cannot load ES modules, so the whole app has to be
+        // one classic script: no code splitting, no module preloads.
+        modulePreload: false,
+        cssCodeSplit: false,
+        assetsInlineLimit: Number.MAX_SAFE_INTEGER,
+        rollupOptions: {
+          output: {
+            format: 'iife',
+            inlineDynamicImports: true,
+          },
+        },
+      }
+    : {
+        outDir: 'dist'
+      }
 })

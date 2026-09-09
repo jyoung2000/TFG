@@ -13,6 +13,7 @@ node scripts/verify/verify-rc.mjs             # release-candidate walkthrough: c
 node scripts/verify/verify-hardening.mjs      # home, quick mode, build film, continuity, queue, OpenRouter settings, packages (33 checks)
 node scripts/verify/verify-models.mjs         # Model Library search/filters/download refusal/custom ids, Claude+Grok+media provider settings, chat model chips, hosted generation without a key, asset reference (21 checks)
 node scripts/verify/verify-ui-only.mjs        # browser-only UI mode against the mock backend: boot, every screen, media, queue, edits (21 checks) — needs `pnpm dev:ui`, not the Electron app
+UI_ONLY_URL=file://$PWD/dist-ui/ltx-desktop-ui.html node scripts/verify/verify-ui-only.mjs   # the same 21 checks against the standalone file from `pnpm build:ui`
 node scripts/verify/verify-ui.mjs             # original storyboard/composer/generation walkthrough
 # packaged AppImage instead of dev:
 ./release/LTX\ Desktop-*.AppImage --appimage-extract-and-run --no-sandbox --remote-debugging-port=9223 &
