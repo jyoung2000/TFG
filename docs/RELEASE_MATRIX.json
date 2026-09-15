@@ -6,7 +6,7 @@
   "gates": {
     "backend_tests": {
       "status": "PASS",
-      "evidence": "551 passed (pytest, mock-free)"
+      "evidence": "565 passed (pytest, mock-free)"
     },
     "frontend_tests": {
       "status": "PASS",
@@ -22,7 +22,7 @@
     },
     "e2e_ui_only": {
       "status": "PASS",
-      "evidence": "verify-ui-only.mjs 50/50 on the dev server and on the standalone file"
+      "evidence": "verify-ui-only.mjs 55/55 on the dev server and on the standalone file"
     },
     "e2e_electron": {
       "status": "PASS",
@@ -165,14 +165,14 @@
     {
       "id": "version_deletion",
       "name": "Safe per-version deletion and orphan cleanup",
-      "status": "NOT_IMPLEMENTED",
-      "implementation": "versions are append-only; promote/retry/compare exist, delete does not",
-      "persistence": "n/a",
-      "ui": "none",
-      "test": "none",
-      "e2e": "none",
-      "evidence": "grep 'delete_version': 0 occurrences",
-      "blocker": "Section 19 not started"
+      "status": "PASS",
+      "implementation": "film_handler.delete_version + _remove_version_media; ShotVersion gains a 'deleted' status with deleted_at/deleted_media; DELETE /api/film/.../versions/{number}?force=",
+      "persistence": "The version becomes a tombstone in project.json \u2014 prompt, model, seed, wardrobe and shot snapshot kept, output_path cleared \u2014 so the take can be explained and re-rendered; the number is never reused",
+      "ui": "Delete on each take in the shot drawer, disabled with an explanation on the approved take, a confirmation naming the consequence for the current take, and a tombstone row saying what was kept",
+      "test": "tests/test_film_version_deletion.py \u2014 14 tests: every refusal (approved, current-without-force, still rendering, already deleted, unknown), media rules incl. a file outside the outputs dir that must survive, the tombstone's contents, numbers never reused, fallback to the newest surviving take, the shot leaving review when nothing is left, and deletion working with learning off",
+      "e2e": "verify-ui-only.mjs 5 deletion steps, PASS on the dev server and on the standalone file",
+      "evidence": "Approved take refused with 400 even with force; current take 409 without force and 200 with it; second delete 400; the file was removed from disk while a file outside the app's outputs was left in place; the record survived with its prompt intact",
+      "blocker": ""
     },
     {
       "id": "model_update_detection",
@@ -236,11 +236,11 @@
     }
   ],
   "summary": {
-    "pass": 10,
+    "pass": 11,
     "blocked_environment": 2,
-    "not_implemented": 3,
+    "not_implemented": 2,
     "fail": 0
   },
   "final_status": "NOT PRODUCTION READY",
-  "final_status_reason": "Three product-critical capabilities from the brief are not implemented: AI timeline editing, the cross-project shot library, and per-version deletion. The PF2 knowledge engine and the model-specific prompt compiler now ship complete (implementation, persistence, UI, tests, e2e)."
+  "final_status_reason": "Two product-critical capabilities from the brief are not implemented: AI timeline editing and the cross-project shot library. The PF2 knowledge engine, the model-specific prompt compiler and per-version deletion now ship complete (implementation, persistence, UI, tests, e2e)."
 }

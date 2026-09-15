@@ -139,6 +139,8 @@ function version(number: number, fields: Partial<ShotVersion> = {}): ShotVersion
     number,
     kind: 'preview',
     status: 'complete',
+    deleted_at: null,
+    deleted_media: '',
     prompt: '',
     negative_prompt: '',
     model: 'fast',

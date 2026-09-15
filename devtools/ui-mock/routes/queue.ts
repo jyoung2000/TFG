@@ -36,6 +36,8 @@ function newVersion(project: FilmProject, shot: FilmShot, kind: VersionKind): Sh
     number,
     kind,
     status: 'queued',
+    deleted_at: null,
+    deleted_media: '',
     prompt: shot.visual_prompt || `${shot.title}. ${shot.action}`.trim(),
     negative_prompt: shot.negative_prompt || project.settings.default_negative_prompt,
     model: shot.generation.model || (preview ? 'fast' : project.settings.default_model),

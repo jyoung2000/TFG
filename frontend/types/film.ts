@@ -208,7 +208,8 @@ export type ShotStatus =
   | 'approved'
   | 'rejected'
 export type VersionKind = 'preview' | 'final'
-export type VersionStatus = 'queued' | 'generating' | 'complete' | 'failed' | 'cancelled'
+/** `deleted` is a tombstone: the record stays, the media is gone. */
+export type VersionStatus = 'queued' | 'generating' | 'complete' | 'failed' | 'cancelled' | 'deleted'
 
 export interface ShotCharacter {
   asset_id: string
@@ -251,6 +252,10 @@ export interface ShotVersion {
   peak_vram_gb: number | null
   execution_mode: string
   created_at: number
+  /** Set when this take was deleted; the rest of the record is kept. */
+  deleted_at: number | null
+  /** What happened to the media: 'removed', 'kept' or 'missing'. */
+  deleted_media: string
 }
 
 export interface FilmShot {

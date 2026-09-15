@@ -45,7 +45,7 @@ page.on('requestfailed', r => {
 })
 // Some steps deliberately provoke a 4xx to prove the backend refuses bad input.
 // Those are the assertion, not a broken URL, so they are named here.
-const EXPECTED_REFUSALS = ['/api/knowledge/import', '/api/prompts/compile']
+const EXPECTED_REFUSALS = ['/api/knowledge/import', '/api/prompts/compile', '/versions/']
 page.on('response', r => {
   if (r.status() < 400 || !sameOrigin(r.url())) return
   if (EXPECTED_REFUSALS.some(path => r.url().includes(path))) return
@@ -310,6 +310,41 @@ try {
   const queue = await api('/api/film/queue')
   log('The queue reports an active job with progress', queue.json.active !== null && queue.json.progress !== null, `${queue.json.progress}% ${queue.json.phase}`)
   await api('/api/film/queue/cancel', { method: 'POST' })
+
+  // ---- 10b. Deleting one take: what it refuses is the point ----
+  const takes = await page.evaluate(async () => {
+    const call = async (path, init) => {
+      const res = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...init })
+      return { status: res.status, body: await res.json().catch(() => null) }
+    }
+    const base = '/api/film/projects/ui-mock-film/scenes/scene-1/shots/shot-1-2'
+    const project = await (await fetch('/api/film/projects/ui-mock-film')).json()
+    const shot = project.project.scenes.flatMap(s => s.shots).find(s => s.id === 'shot-1-2')
+    const number = shot.current_version
+
+    // Approved shot: refused outright, even with force.
+    await call(`${base}`, { method: 'PUT', body: JSON.stringify({ status: 'approved' }) })
+    const onApproved = await call(`${base}/versions/${number}?force=true`, { method: 'DELETE' })
+
+    // Back to review: the current take now needs force, and works with it.
+    await call(`${base}`, { method: 'PUT', body: JSON.stringify({ status: 'review' }) })
+    const withoutForce = await call(`${base}/versions/${number}`, { method: 'DELETE' })
+    const withForce = await call(`${base}/versions/${number}?force=true`, { method: 'DELETE' })
+    const twice = await call(`${base}/versions/${number}?force=true`, { method: 'DELETE' })
+
+    const after = await (await fetch('/api/film/projects/ui-mock-film')).json()
+    const afterShot = after.project.scenes.flatMap(s => s.shots).find(s => s.id === 'shot-1-2')
+    const tombstone = afterShot.versions.find(v => v.number === number)
+    return { number, onApproved, withoutForce, withForce, twice, tombstone }
+  })
+  log('The approved take cannot be deleted, even with force', takes.onApproved.status === 400)
+  log('The current take needs an explicit force', takes.withoutForce.status === 409)
+  log('With force, the take is deleted', takes.withForce.status === 200 && takes.withForce.body.status === 'deleted')
+  log('Deleting twice is refused rather than silently repeated', takes.twice.status === 400)
+  log(
+    'The record survives as a tombstone with what produced it',
+    takes.tombstone.status === 'deleted' && takes.tombstone.output_path === '' && takes.tombstone.prompt.length > 0,
+  )
 
   // ---- 11. Editing round-trips through the mock ----
   const renamed = await api('/api/film/projects/ui-mock-film/scenes/scene-1/shots/shot-1-1', {

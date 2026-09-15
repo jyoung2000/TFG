@@ -10,6 +10,7 @@ import {
   Sparkles,
   ThumbsDown,
   ThumbsUp,
+  Trash2,
   Wand2,
   X,
 } from 'lucide-react'
@@ -301,7 +302,7 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
     [workflow],
   )
 
-  const { setStatus, promote, currentVersion, sendToTimeline, linkedClip, queueInfo } = workflow
+  const { setStatus, promote, deleteVersion, currentVersion, sendToTimeline, linkedClip, queueInfo } = workflow
   // The drawer's own busy flag covers its edits; the workflow hook covers generation/hand-off.
   const anyBusy = busy !== null || workflow.busy !== null
   const displayNote = note || workflow.note
@@ -667,7 +668,9 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
                         ? 'text-emerald-400'
                         : version.status === 'failed'
                           ? 'text-red-400'
-                          : 'text-amber-400'
+                          : version.status === 'deleted'
+                            ? 'text-zinc-600'
+                            : 'text-amber-400'
                     }
                   >
                     {version.status}
@@ -691,6 +694,13 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
                 {version.status === 'failed' && (
                   <div className="text-[10px] text-red-400 break-words">{version.error}</div>
                 )}
+                {version.status === 'deleted' && (
+                  <div className="text-[10px] text-zinc-500 break-words">
+                    Media deleted
+                    {version.deleted_media === 'kept' ? ' (the file lives outside this app and was left alone)' : ''}
+                    . The prompt, model and seed are kept, so this take can be re-rendered as it was.
+                  </div>
+                )}
                 <div className="flex gap-1">
                   {version.status === 'complete' && shot.current_version !== version.number && (
                     <button
@@ -709,6 +719,20 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
                       title="Add this version to the timeline as a new clip"
                     >
                       To timeline
+                    </button>
+                  )}
+                  {version.status !== 'deleted' && version.status !== 'queued' && version.status !== 'generating' && (
+                    <button
+                      onClick={() => void deleteVersion(version.number)}
+                      disabled={anyBusy || (shot.status === 'approved' && shot.current_version === version.number)}
+                      className="flex items-center gap-1 px-2 py-0.5 rounded bg-zinc-800 hover:bg-red-950 disabled:opacity-40 text-[10px] text-zinc-400 hover:text-red-300"
+                      title={
+                        shot.status === 'approved' && shot.current_version === version.number
+                          ? 'This is the approved take — approve a different one, or set the shot back to review, first'
+                          : 'Delete this take\'s video. The record of what produced it is kept.'
+                      }
+                    >
+                      <Trash2 className="h-2.5 w-2.5" /> Delete
                     </button>
                   )}
                   {version.status === 'failed' && (

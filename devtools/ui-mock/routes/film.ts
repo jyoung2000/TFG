@@ -398,6 +398,76 @@ export function registerFilmRoutes(router: Router, store: Store, clipUrl: string
     }),
   )
 
+  // Deleting a take: the same refusals as the app, because the point of them
+  // is what the user is stopped from doing by accident.
+  router.delete('/api/film/projects/:projectId/scenes/:sceneId/shots/:shotId/versions/:number', req =>
+    store.mutate(() => {
+      const p = project(req.params.projectId)
+      const shot = findShot(findScene(p, req.params.sceneId), req.params.shotId)
+      const number = Number(req.params.number)
+      const force = req.query.get('force') === 'true'
+      const version = shot.versions.find(v => v.number === number)
+      if (!version) throw new MockHttpError(404, `Version not found: ${number}`)
+      if (version.status === 'deleted') throw new MockHttpError(400, `Version ${number} is already deleted`)
+      if (version.status === 'queued' || version.status === 'generating') {
+        throw new MockHttpError(400, 'That take is still rendering — cancel it before deleting it')
+      }
+      if (shot.current_version === number) {
+        if (shot.status === 'approved') {
+          throw new MockHttpError(
+            400,
+            'That is the approved take. Approve a different one, or set the shot back to review, before deleting it.',
+          )
+        }
+        if (!force) {
+          throw new MockHttpError(
+            409,
+            `Version ${number} is the take this shot is currently on. Delete it with force=true, or promote another take first.`,
+          )
+        }
+      }
+
+      const removedPath = version.output_path
+      version.status = 'deleted'
+      version.deleted_at = now()
+      version.deleted_media = removedPath ? 'removed' : 'missing'
+      version.output_path = ''
+      version.error = ''
+
+      if (shot.current_version === number) {
+        const survivor = [...shot.versions]
+          .sort((a, b) => b.number - a.number)
+          .find(v => v.status === 'complete')
+        shot.current_version = survivor?.number ?? null
+        if (!survivor && (shot.status === 'review' || shot.status === 'approved' || shot.status === 'rejected')) {
+          shot.status = shot.capture_path ? 'ready' : 'draft'
+        }
+      }
+      shot.updated_at = now()
+      touched(p)
+
+      recordMockEvent(store.data, {
+        kind: 'version_deleted',
+        model: version.model,
+        provider: version.execution_mode,
+        project_id: p.id,
+        scene_id: req.params.sceneId,
+        shot_id: shot.id,
+        version_number: number,
+        prompt: version.prompt,
+      })
+
+      return {
+        status: 'deleted',
+        number,
+        media: version.deleted_media,
+        removed_path: removedPath,
+        current_version: shot.current_version,
+        remaining_versions: shot.versions.filter(v => v.status === 'complete').length,
+      }
+    }),
+  )
+
   // ---- Poses ----
 
   router.post('/api/film/projects/:projectId/poses', req =>

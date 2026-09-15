@@ -225,6 +225,23 @@ export const filmApi = {
       { method: 'POST' },
     ),
 
+  /**
+   * Delete one take's media, keeping its record. `force` is needed for the
+   * take the shot is currently on; the take on an approved shot is refused.
+   */
+  deleteVersion: (projectId: string, sceneId: string, shotId: string, number: number, force = false) =>
+    request<{
+      status: string
+      number: number
+      media: string
+      removed_path: string
+      current_version: number | null
+      remaining_versions: number
+    }>(
+      `/api/film/projects/${enc(projectId)}/scenes/${enc(sceneId)}/shots/${enc(shotId)}/versions/${number}${force ? '?force=true' : ''}`,
+      { method: 'DELETE' },
+    ),
+
   savePose: (projectId: string, name: string, joints: Record<string, Vec3>, category = 'custom') =>
     request<{ pose: FilmPose }>(`/api/film/projects/${enc(projectId)}/poses`, {
       method: 'POST',

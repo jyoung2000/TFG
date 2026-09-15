@@ -100,6 +100,36 @@ export function useShotWorkflow(scene: FilmScene, shot: FilmShot) {
     [projectId, scene.id, shot.id, refresh],
   )
 
+  const deleteVersion = useCallback(
+    async (number: number) => {
+      if (!projectId) return
+      const current = shot.current_version === number
+      const question = current
+        ? `Delete v${number}? It is the take this shot is currently on — the shot will fall back to the newest take that still has media.`
+        : `Delete v${number}? Its video file is removed; the record of what produced it is kept.`
+      if (!window.confirm(question)) return
+      setBusy('delete')
+      try {
+        // `force` only for the current take. The backend refuses the approved
+        // one outright, and that refusal is the one worth showing the user.
+        const result = await filmApi.deleteVersion(projectId, scene.id, shot.id, number, current)
+        await refresh()
+        setNote(
+          result.media === 'kept'
+            ? `v${number} deleted — its file lives outside this app, so it was left alone`
+            : result.media === 'missing'
+              ? `v${number} deleted — it had no file`
+              : `v${number} deleted`,
+        )
+      } catch (e) {
+        setNote(`Delete failed: ${e instanceof Error ? e.message : e}`)
+      } finally {
+        setBusy(null)
+      }
+    },
+    [projectId, scene.id, shot.id, shot.current_version, refresh],
+  )
+
   const setStatus = useCallback(
     async (status: FilmShot['status']) => {
       if (!projectId) return
@@ -239,6 +269,7 @@ export function useShotWorkflow(scene: FilmScene, shot: FilmShot) {
     generate,
     cancelJob,
     promote,
+    deleteVersion,
     setStatus,
     sendToTimeline,
   }

@@ -312,6 +312,8 @@ export function registerProjectOpsRoutes(router: Router, store: Store): void {
             number: 1,
             kind: 'final',
             status: 'complete',
+            deleted_at: null,
+            deleted_media: '',
             prompt: String(req.body.prompt ?? ''),
             negative_prompt: String(req.body.negative_prompt ?? ''),
             model: String(req.body.model ?? ''),

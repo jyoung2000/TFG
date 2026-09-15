@@ -281,6 +281,21 @@ class BatchGenerateResponse(BaseModel):
     queued: list[QueuedJob]
 
 
+class DeleteVersionResponse(BaseModel):
+    """What deleting a take actually did."""
+
+    status: str = "deleted"
+    number: int = 0
+    #: "removed" | "kept" (it lived outside this app's outputs) | "missing".
+    media: str = ""
+    #: Where the media was, so the caller can find a timeline clip that pointed
+    #: at it rather than leaving a clip whose file has silently gone.
+    removed_path: str = ""
+    #: The take the shot is on now — None when none is left with media.
+    current_version: int | None = None
+    remaining_versions: int = 0
+
+
 class PromoteVersionResponse(BaseModel):
     status: str
     current_version: int

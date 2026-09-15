@@ -13,12 +13,13 @@ from film.film_api_types import (
     CreateAssetRequest,
     CreateSceneRequest,
     CreateShotRequest,
+    DeleteVersionResponse,
     ExportPackageRequest,
     FilmProjectResponse,
     FixContinuityRequest,
+    FixContinuityResponse,
     GenerateAssetReferenceRequest,
     GenerateAssetReferenceResponse,
-    FixContinuityResponse,
     ImportGenerationRequest,
     ImportGenerationResponse,
     ImportPackageRequest,
@@ -310,6 +311,26 @@ def route_promote_version(
 ) -> PromoteVersionResponse:
     shot = handler.film.promote_version(project_id, scene_id, shot_id, number)
     return PromoteVersionResponse(status="promoted", current_version=shot.current_version or number)
+
+
+@router.delete(
+    "/projects/{project_id}/scenes/{scene_id}/shots/{shot_id}/versions/{number}",
+    response_model=DeleteVersionResponse,
+)
+def route_delete_version(
+    project_id: str,
+    scene_id: str,
+    shot_id: str,
+    number: int,
+    force: bool = False,
+    handler: AppHandler = Depends(get_state_service),
+) -> DeleteVersionResponse:
+    """Delete one take's media, keeping its record.
+
+    `force` is needed to delete the take the shot is currently on; the take on
+    an approved shot is refused outright.
+    """
+    return handler.film.delete_version(project_id, scene_id, shot_id, number, force=force)
 
 
 # ---- Poses -------------------------------------------------------------

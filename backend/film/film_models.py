@@ -245,7 +245,10 @@ ShotStatus = Literal[
     "rejected",
 ]
 VersionKind = Literal["preview", "final"]
-VersionStatus = Literal["queued", "generating", "complete", "failed", "cancelled"]
+#: "deleted" is a tombstone, not a removal: the record stays so the number is
+#: never reused and the history of what was tried stays readable, while the
+#: media it produced is gone from disk.
+VersionStatus = Literal["queued", "generating", "complete", "failed", "cancelled", "deleted"]
 
 
 class ShotCharacter(BaseModel):
@@ -295,6 +298,13 @@ class ShotVersion(BaseModel):
     peak_vram_gb: float | None = None
     execution_mode: str = ""
     created_at: int = Field(default_factory=now_ms)
+    #: Set when this take was deleted. The rest of the record — prompt, model,
+    #: seed, snapshot — is kept, so a deleted take can still be explained and
+    #: re-rendered from the settings that produced it.
+    deleted_at: int | None = None
+    #: What happened to the media: "removed", "kept" (it lived outside this
+    #: app's outputs, so it was left alone) or "missing".
+    deleted_media: str = ""
 
 
 class ShotSourceRef(BaseModel):

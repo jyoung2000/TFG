@@ -16,10 +16,11 @@ from threading import RLock
 from _routes._errors import HTTPError
 from film.film_api_types import (
     AddAssetReferenceRequest,
+    ContinuityResponse,
     CreateAssetRequest,
     CreateSceneRequest,
-    ContinuityResponse,
     CreateShotRequest,
+    DeleteVersionResponse,
     ExportPackageRequest,
     FixContinuityRequest,
     FixContinuityResponse,
@@ -30,11 +31,11 @@ from film.film_api_types import (
     PackageSummaryResponse,
     ProjectContinuityResponse,
     ReorderRequest,
-    ShotContinuitySummary,
+    ReplaceProjectRequest,
     SavePoseRequest,
     ShotCaptureRequest,
+    ShotContinuitySummary,
     UpdateAssetRequest,
-    ReplaceProjectRequest,
     UpdateFilmSettingsRequest,
     UpdateSceneRequest,
     UpdateScriptRequest,
@@ -71,7 +72,12 @@ from film.film_package import (
 )
 from film.film_prompt import synthesize_prompt
 from film.film_store import FilmStore, FilmStoreError
-from server_utils.path_policy import PathPolicyError, require_absolute_file, require_destination
+from server_utils.path_policy import (
+    PathPolicyError,
+    is_within,
+    require_absolute_file,
+    require_destination,
+)
 from film.knowledge_models import KnowledgeEvent
 from handlers.base import StateHandlerBase
 from handlers.knowledge_handler import KnowledgeHandler
@@ -613,6 +619,133 @@ class FilmHandler(StateHandlerBase):
             kind="version_promoted", shot=shot, project_id=project_id, scene_id=scene_id
         )
         return shot
+
+    def delete_version(
+        self, project_id: str, scene_id: str, shot_id: str, number: int, *, force: bool = False
+    ) -> DeleteVersionResponse:
+        """Remove one take's media, keeping the record of it.
+
+        Deleting a take is not the same as deleting a shot, and it must not
+        quietly undo a decision the user already made:
+
+        * The take the shot is currently on is refused unless the caller says
+          it means it, and the take on an *approved* shot is refused outright —
+          throwing away the render that was signed off is not an edit, it is a
+          loss.
+        * A take still rendering is refused: the worker would write its output
+          into a file this call just removed.
+        * The record survives as a tombstone. Its number is never reused and
+          its prompt, model, seed and snapshot stay, so a deleted take can
+          still be explained — and re-rendered from exactly what produced it.
+        * Media is only removed from inside this app's own outputs. A version
+          imported from elsewhere (Quick Mode, an analysed clip) points at a
+          file the user owns, and that file is left alone and reported as kept.
+        """
+        removed_path = ""
+        media = "missing"
+        with self.lock:
+            project = self._load(project_id)
+            scene = self._require_scene(project, scene_id)
+            shot = self._require_shot(scene, shot_id)
+            version = shot.version(number)
+            if version is None:
+                raise HTTPError(404, f"Version not found: {number}")
+            if version.status == "deleted":
+                raise HTTPError(400, f"Version {number} is already deleted")
+            if version.status in ("queued", "generating"):
+                raise HTTPError(400, "That take is still rendering — cancel it before deleting it")
+            if shot.current_version == number:
+                if shot.status == "approved":
+                    raise HTTPError(
+                        400,
+                        "That is the approved take. Approve a different one, or set the shot back "
+                        "to review, before deleting it.",
+                    )
+                if not force:
+                    raise HTTPError(
+                        409,
+                        f"Version {number} is the take this shot is currently on. "
+                        "Delete it with force=true, or promote another take first.",
+                    )
+
+            media, removed_path = self._remove_version_media(project_id, version)
+            version.status = "deleted"
+            version.deleted_at = now_ms()
+            version.deleted_media = media
+            version.output_path = ""
+            version.error = ""
+
+            if shot.current_version == number:
+                # Fall back to the newest take that still has media, so the
+                # shot shows something rather than a gap.
+                survivor = next(
+                    (
+                        candidate.number
+                        for candidate in sorted(shot.versions, key=lambda v: v.number, reverse=True)
+                        if candidate.status == "complete"
+                    ),
+                    None,
+                )
+                shot.current_version = survivor
+                if survivor is None and shot.status in ("review", "approved", "rejected"):
+                    shot.status = "ready" if shot.capture_path else "draft"
+
+            shot.updated_at = now_ms()
+            self._save(project)
+            remaining = sum(1 for v in shot.versions if v.status == "complete")
+            current = shot.current_version
+
+        # Outside the lock, and after the save: an opinion about a take can
+        # never be the reason the deletion did not stick.
+        if self._knowledge is not None:
+            self._knowledge.record(
+                KnowledgeEvent(
+                    kind="version_deleted",
+                    project_id=project_id,
+                    scene_id=scene_id,
+                    shot_id=shot_id,
+                    version_number=number,
+                    model=version.model,
+                    provider=version.execution_mode,
+                    task="video",
+                    execution_mode=version.execution_mode,
+                    prompt=version.prompt,
+                )
+            )
+
+        return DeleteVersionResponse(
+            status="deleted",
+            number=number,
+            media=media,
+            # The path is returned so the renderer can find any timeline clip
+            # that pointed at it and mark it, rather than silently showing a
+            # clip whose file has gone.
+            removed_path=removed_path,
+            current_version=current,
+            remaining_versions=remaining,
+        )
+
+    def _remove_version_media(self, project_id: str, version: ShotVersion) -> tuple[str, str]:
+        """Delete the take's output, but only from inside this app's outputs.
+
+        Returns (what happened, the path it was at). A version imported from
+        Quick Mode or an analysed clip points at a file the user owns; deleting
+        that because they tidied up a take would be destroying their own media.
+        """
+        if not version.output_path:
+            return "missing", ""
+        path = Path(version.output_path)
+        outputs = self._store.outputs_dir(project_id)
+        if not is_within(outputs, path):
+            return "kept", version.output_path
+        try:
+            if not path.is_file():
+                return "missing", version.output_path
+            path.unlink()
+        except OSError as exc:
+            logger.warning("Could not remove %s: %s", path, exc)
+            return "kept", version.output_path
+        return "removed", version.output_path
 
     # ---- Quick Mode → Film conversion ------------------------------------
 
