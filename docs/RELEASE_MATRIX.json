@@ -6,7 +6,7 @@
   "gates": {
     "backend_tests": {
       "status": "PASS",
-      "evidence": "633 passed (pytest, mock-free)"
+      "evidence": "642 passed (pytest, mock-free)"
     },
     "frontend_tests": {
       "status": "PASS",
@@ -207,7 +207,7 @@
       "ui": "n/a",
       "test": "path traversal and refusal tests in test_video_analysis.py",
       "e2e": "n/a",
-      "evidence": "'../../../etc/passwd' as a frame path returns 400",
+      "evidence": "'../../../etc/passwd' as a frame path returns 400 Final pass found and fixed two issues in the new surface: a library.json entry naming a path outside the previews directory could reach unlink/read (now refused, with parametrised tests for ../, absolute, nested and empty names); and the library preview endpoint was outside the media-path allowance, so a <video> tag would have 401'd in the packaged app (now allowed, with a test that the allowance does not extend to listing, editing or deleting).",
       "blocker": "A full security pass over the new surface (section 31) has not been run end to end"
     },
     {

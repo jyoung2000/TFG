@@ -141,7 +141,13 @@ class ShotLibraryHandler(StateHandlerBase):
         item = self.get(item_id)
         if not item.preview_path:
             raise HTTPError(404, "That library item has no preview")
-        path = self._store.preview_path(item.preview_path)
+        try:
+            path = self._store.preview_path(item.preview_path)
+        except ShotLibraryError as exc:
+            # `library.json` is a file the user can edit. An entry naming
+            # something outside the previews directory is bad input, not a
+            # server fault, and it is refused rather than followed.
+            raise HTTPError(400, str(exc)) from exc
         if not path.is_file():
             raise HTTPError(404, "That preview is missing from disk")
         return path
@@ -357,6 +363,8 @@ class ShotLibraryHandler(StateHandlerBase):
         """
         index = self._index()
         item = self._require(index, item_id)
+        # Best effort, and deliberately not fatal: a crafted or missing preview
+        # name must not leave the entry stuck in the library forever.
         self._store.remove_preview(item.preview_path)
         index.items = [candidate for candidate in index.items if candidate.id != item_id]
         self._write(index)

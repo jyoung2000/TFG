@@ -38,6 +38,18 @@ def migrate(payload: dict[str, object]) -> dict[str, object]:
     return payload
 
 
+def _safe_name(relative: str) -> str:
+    """A stored preview filename, or an error.
+
+    Nothing legitimate ever contains a separator or a parent reference: the
+    store mints these names itself as `<item-id><suffix>`.
+    """
+    name = relative.strip()
+    if not name or name in (".", "..") or "/" in name or "\\" in name or Path(name).name != name:
+        raise ShotLibraryError(f"Not a stored preview name: {relative!r}")
+    return name
+
+
 class ShotLibraryStore:
     def __init__(self, root: Path) -> None:
         self._root = root
@@ -97,21 +109,28 @@ class ShotLibraryStore:
         return target.name
 
     def preview_path(self, relative: str) -> Path:
-        return self._previews / relative
+        """Resolve a stored preview name, refusing anything that is not one.
+
+        The name is written by `copy_preview` and is always a bare filename.
+        But `library.json` is a file on the user's disk that they can edit, and
+        an entry saying "../../../something" must not become a read or a
+        delete outside the previews directory.
+        """
+        return self._previews / _safe_name(relative)
 
     def remove_preview(self, relative: str) -> None:
         """Best effort: a library entry going away must not fail on a stray file."""
         if not relative:
             return
         try:
-            self._previews.joinpath(relative).unlink(missing_ok=True)
-        except OSError as exc:
+            self._previews.joinpath(_safe_name(relative)).unlink(missing_ok=True)
+        except (OSError, ShotLibraryError) as exc:
             logger.warning("Could not remove library preview %s: %s", relative, exc)
 
     def duplicate_preview(self, source_relative: str, item_id: str) -> str:
         if not source_relative:
             return ""
-        source = self._previews / source_relative
+        source = self.preview_path(source_relative)
         if not source.is_file():
             return ""
         return self.copy_preview(item_id, source)

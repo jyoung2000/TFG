@@ -315,3 +315,39 @@ class TestItSurvivesRestart:
         assert again.tags == ["keeps"]
         assert again.rating == 5
         assert Path(reopened.store.preview_path(again.preview_path)).is_file()
+
+
+class TestAHandEditedLibraryFile:
+    """`library.json` is a file on the user's disk. It is input, not a promise."""
+
+    def _tamper(self, item_id: str, preview_path: str) -> None:
+        from state import get_state_service
+
+        store = get_state_service().shot_library.store
+        index = store.load()
+        item = next(i for i in index.items if i.id == item_id)
+        item.preview_path = preview_path
+        store.save(index)
+
+    @pytest.mark.parametrize(
+        "crafted",
+        ["../../../../etc/passwd", "/etc/passwd", "sub/dir/file.mp4", "..", ".", "  "],
+    )
+    def test_a_preview_path_that_leaves_the_directory_is_refused(self, client, crafted: str):
+        _, shot_id, _ = _shot_with_render(client, "lib-evil")
+        item = _save(client, "lib-evil", shot_id)
+        self._tamper(item["id"], crafted)
+        # Reading it fails rather than serving a file from elsewhere.
+        assert client.get(f"{BASE}/{item['id']}/preview").status_code in (400, 404, 500)
+
+    def test_deleting_an_item_with_a_crafted_path_removes_nothing_outside(self, client, tmp_path):
+        _, shot_id, _ = _shot_with_render(client, "lib-evil2")
+        item = _save(client, "lib-evil2", shot_id)
+
+        bystander = tmp_path / "not-ours.txt"
+        bystander.write_text("untouched")
+        self._tamper(item["id"], f"../../../../../../..{bystander}")
+
+        # The entry still goes; the file outside does not.
+        assert client.delete(f"{BASE}/{item['id']}").status_code == 200
+        assert bystander.is_file(), "a crafted preview path must not delete anything"

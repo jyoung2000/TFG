@@ -111,3 +111,27 @@ class TestMediaQueryToken:
                 params={"path": str(test_state.config.outputs_dir / "missing.mp4"), "token": "test-secret"},
             )
             assert response.status_code == 404
+
+
+def test_a_media_element_can_load_a_library_preview_with_a_query_token(test_state):
+    """A <video> cannot send an Authorization header, so these GETs take a token.
+
+    The allowance is deliberately narrow: read-only GETs that serve one file
+    the backend resolved itself, never a path the caller supplied.
+    """
+    app = create_app(handler=test_state, auth_token="test-secret")
+    with TestClient(app) as client:
+        unauthenticated = client.get("/api/shot-library/lib-nope/preview")
+        assert unauthenticated.status_code == 401
+        # With the token the request is authorised; the item still does not
+        # exist, which is a 404 — and that is the point: it got past auth.
+        authorised = client.get("/api/shot-library/lib-nope/preview?token=test-secret")
+        assert authorised.status_code == 404
+
+
+def test_the_query_token_allowance_does_not_extend_to_the_rest_of_the_library(test_state):
+    """Only the preview. Listing, editing and deleting still need a header."""
+    app = create_app(handler=test_state, auth_token="test-secret")
+    with TestClient(app) as client:
+        assert client.get("/api/shot-library?token=test-secret").status_code == 401
+        assert client.delete("/api/shot-library/lib-nope?token=test-secret").status_code == 401

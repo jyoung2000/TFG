@@ -45,8 +45,15 @@ DEFAULT_ALLOWED_ORIGINS: list[str] = [
 
 
 def _is_media_path(path: str) -> bool:
-    """True for the read-only film media endpoints that <img>/<video> load."""
+    """True for the read-only media endpoints that <img>/<video> load.
+
+    These are the only paths where a query token is accepted, because a media
+    element cannot send an Authorization header. Each is a GET that serves one
+    file the backend resolved itself — never a path the caller supplied.
+    """
     if path == "/api/film/output":
+        return True
+    if path.startswith("/api/shot-library/") and path.endswith("/preview"):
         return True
     return path.startswith("/api/film/projects/") and path.endswith("/media")
 
