@@ -23,18 +23,6 @@ from services.media_probe.fake_media_probe import FakeMediaProbe
 VIDEO = "/videos/source.mp4"
 
 
-@pytest.fixture
-def video(tmp_path):
-    """A real file on disk.
-
-    The fake probe never reads it, but the path policy insists a video exists
-    before anything opens it — which is the behaviour we want to keep.
-    """
-    path = tmp_path / "source.mp4"
-    path.write_bytes(b"\x00\x00\x00\x18ftypmp42")
-    return str(path)
-
-
 def _import(client, video, **overrides) -> dict:
     payload = {"path": video, "title": "Source", **overrides}
     response = client.post("/api/video-analysis/import", json=payload)

@@ -45,7 +45,7 @@ page.on('requestfailed', r => {
 })
 // Some steps deliberately provoke a 4xx to prove the backend refuses bad input.
 // Those are the assertion, not a broken URL, so they are named here.
-const EXPECTED_REFUSALS = ['/api/knowledge/import']
+const EXPECTED_REFUSALS = ['/api/knowledge/import', '/api/prompts/compile']
 page.on('response', r => {
   if (r.status() < 400 || !sameOrigin(r.url())) return
   if (EXPECTED_REFUSALS.some(path => r.url().includes(path))) return
@@ -263,6 +263,43 @@ try {
   await page.keyboard.press('Escape')
   await page.waitForTimeout(600)
 
+  // ---- 9c. The prompt compiler: one shot, written per model ----
+  const targets = await api('/api/prompts/targets')
+  const targetIds = targets.json.targets.map(t => t.id)
+  log('Prompt conventions are inspectable', targetIds.includes('ltx') && targetIds.includes('generic'), targetIds.join(', '))
+  // The rule that classifies a model must be visible, not just its verdict.
+  const ltxTarget = targets.json.targets.find(t => t.id === 'ltx')
+  log('A convention says what identifies it and where it came from', ltxTarget.matches.length > 0 && ltxTarget.basis === 'publisher_guidance')
+
+  const brief = {
+    scene_intent: 'Establish the diner', subjects: ['Mara, in a waitress uniform'],
+    action: 'She sets down a coffee pot and turns toward the door',
+    location: 'A roadside diner at 4am', shot_size: 'medium shot',
+    camera: 'three-quarter left angle', lens: '35mm', movement: 'slow push in',
+    lighting: 'practical ceiling light', style: 'muted palette', audio: 'rain on glass',
+    timeline: '6 seconds at 24fps', continuity: ['Mara wearing the green apron'],
+    negative: ['text', 'watermark'],
+  }
+  const compiled = await api('/api/prompts/compile', {
+    method: 'POST',
+    body: JSON.stringify({ models: ['ltxv-13b', 'wavespeed-ai/wan-2.2/t2v-480p', 'fal-ai/flux/dev', 'not-a-real-model'], brief }),
+  })
+  const byModel = Object.fromEntries(compiled.json.prompts.map(p => [p.model, p]))
+  log('The same shot reads differently per model family',
+    byModel['ltxv-13b'].prompt !== byModel['wavespeed-ai/wan-2.2/t2v-480p'].prompt)
+  log('Wan gets labelled clauses, LTX gets prose',
+    byModel['wavespeed-ai/wan-2.2/t2v-480p'].prompt.includes('Subject:') && !byModel['ltxv-13b'].prompt.includes('Subject:'))
+  log('The action survives into every target',
+    compiled.json.prompts.every(p => p.prompt.includes('coffee pot')))
+  log('A still model drops motion and says so',
+    byModel['fal-ai/flux/dev'].dropped.some(d => d.includes('movement')) && !byModel['fal-ai/flux/dev'].prompt.includes('push in'))
+  log('An unrecognised model is labelled as such, not dressed up as tailored',
+    byModel['not-a-real-model'].matched === false && byModel['ltxv-13b'].matched === true)
+  log('Scene intent never reaches a render model',
+    compiled.json.prompts.every(p => !p.prompt.includes('Establish the diner')))
+  const ambiguous = await api('/api/prompts/compile', { method: 'POST', body: JSON.stringify({ models: ['ltxv-13b'] }) })
+  log('A request with no source is refused rather than guessed at', ambiguous.status === 400)
+
   // ---- 10. Generation through the simulated queue ----
   const queued = await api('/api/film/projects/ui-mock-film/scenes/scene-2/shots/shot-2-2/generate', {
     method: 'POST',
@@ -306,6 +343,8 @@ try {
       prompt: analysed.shots[0].prompts.video,
       projectShots: project.scenes[0].shots.length,
       lineage: project.scenes[0].shots[0].source_ref?.kind,
+      modelSpecific: Object.keys(analysed.shots[0].prompts.model_specific),
+      analysisId: analysis.id,
     }
   })
   log('A video is split into shots', reverse.shots > 1, `${reverse.shots} shots`)
@@ -314,6 +353,11 @@ try {
   log(
     'The analysis becomes a real project with lineage to the source',
     reverse.projectShots === reverse.shots && reverse.lineage === 'video_analysis',
+  )
+  log(
+    'Every analysed shot carries a prompt compiled for the models it could be sent to',
+    reverse.modelSpecific.length > 0,
+    reverse.modelSpecific.join(', '),
   )
 
   // ---- 12. Nothing broke along the way ----

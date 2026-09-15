@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { CompiledPrompts } from '../components/CompiledPrompts'
 import {
   ArrowLeft,
   Clapperboard,
@@ -618,6 +619,15 @@ function ShotInspector({
       />
 
       <PromptEditor shot={shot} busy={busy !== ''} onSave={onEditPrompts} />
+
+      {/* The same shot, written the way each model wants to hear it. Keyed on
+          the shot so switching shots recompiles rather than showing the last
+          one's prompts. */}
+      <CompiledPrompts
+        key={shot.id}
+        source={{ analysis_id: analysis.id, analysis_shot_id: shot.id }}
+        models={Object.keys(shot.prompts.model_specific)}
+      />
 
       {shot.evidence_note && (
         <details className="rounded border border-zinc-800 bg-zinc-900/60">

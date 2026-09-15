@@ -17,6 +17,7 @@ from handlers import (
     ModelLibraryHandler,
     ImageGenerationHandler,
     KnowledgeHandler,
+    PromptHandler,
     ModelsHandler,
     PipelinesHandler,
     SuggestGapPromptHandler,
@@ -270,6 +271,13 @@ class AppHandler:
             probe=media_probe,
             task_runner=task_runner,
             film_store=self.film.store,
+        )
+
+        self.prompts = PromptHandler(
+            state=self.state,
+            lock=self._lock,
+            film_handler=self.film,
+            analysis_store=self.video_analysis.store,
         )
 
         self.film_generation = FilmGenerationHandler(

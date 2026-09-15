@@ -9,10 +9,19 @@
 
 import type { FilmProject } from '../../../frontend/types/film'
 import type { AnalyzedShot, VideoAnalysis } from '../../../frontend/types/video-analysis'
+import { EMPTY_BRIEF } from '../../../frontend/types/prompts'
 import { MockHttpError, type Router } from '../http'
+import { compilePrompt } from './prompts'
 import { placeholderFrame } from '../media'
 import { seedProject } from '../seed'
 import type { MockState, Store } from '../state'
+
+/** What this user could render with: their configured models plus the local host. */
+function compileTargets(state: MockState): string[] {
+  return [state.settings.defaultVideoModel ?? '', 'ltx-2']
+    .map(model => model.trim())
+    .filter((model, index, all) => model && all.indexOf(model) === index)
+}
 
 const DEMO_CUTS = [2.0, 4.0, 6.5, 9.0, 11.0]
 const DURATION = 13.5
@@ -169,6 +178,26 @@ export function registerVideoAnalysisRoutes(router: Router, store: Store): void 
                 storyboard: `${['wide', 'medium', 'closeup'][shot.index % 3]} shot`,
                 video: `Shot ${shot.index + 1} of the imported clip, static camera, available light`,
                 negative: 'text, watermark, logo, distorted hands, extra limbs',
+                // Same rule as the app: compile for what this user could
+                // actually render with, not for the whole catalog.
+                model_specific: Object.fromEntries(
+                  compileTargets(state).map(model => [
+                    model,
+                    compilePrompt(
+                      {
+                        ...EMPTY_BRIEF,
+                        action: `Shot ${shot.index + 1} of the imported clip`,
+                        shot_size: `${['wide', 'medium', 'closeup'][shot.index % 3]} shot`,
+                        camera: 'front',
+                        movement: 'static camera',
+                        lighting: 'available light',
+                        timeline: `${shot.duration.toFixed(1)} seconds`,
+                        negative: ['text', 'watermark', 'logo'],
+                      },
+                      model,
+                    ).prompt,
+                  ]),
+                ),
               },
           analysis_provider: 'ui-mock',
           analysis_model: 'mock-vision',

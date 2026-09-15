@@ -19,56 +19,13 @@ from film.film_models import (
     FilmScene,
     FilmShot,
 )
-
-_SHOT_SIZE_PHRASES: dict[str, str] = {
-    "xwide": "extreme wide shot",
-    "wide": "wide shot",
-    "full": "full shot",
-    "medium": "medium shot",
-    "mcu": "medium close-up",
-    "closeup": "close-up",
-    "xcu": "extreme close-up",
-}
-_ANGLE_PHRASES: dict[str, str] = {
-    "front": "front angle",
-    "threeQuarterLeft": "three-quarter left angle",
-    "threeQuarterRight": "three-quarter right angle",
-    "profile": "profile angle",
-    "back": "shot from behind",
-    "ots": "over-the-shoulder shot",
-    "pov": "point-of-view shot",
-    "dutch": "dutch angle, tilted horizon",
-}
-_ELEVATION_PHRASES: dict[str, str] = {
-    "eye": "eye-level camera",
-    "low": "low-angle camera looking up",
-    "high": "high-angle camera looking down",
-    "bird": "bird's-eye view from above",
-    "worm": "worm's-eye view from ground level",
-}
-_COMPOSITION_PHRASES: dict[str, str] = {
-    "center": "subject centered in frame",
-    "leftThird": "subject on the left third of the frame",
-    "rightThird": "subject on the right third of the frame",
-    "upperThird": "subject in the upper third of the frame",
-    "lowerThird": "subject in the lower third of the frame",
-    "negativeSpace": "strong negative space, subject far off-center",
-    "symmetrical": "symmetrical composition",
-    "leadingLines": "leading lines drawing the eye to the subject",
-}
-_CAMERA_MOVE_PHRASES: dict[str, str] = {
-    "static": "static camera, locked-off shot",
-    "push_in": "slow push in, camera moving toward the subject",
-    "pull_out": "slow pull out, camera moving away from the subject",
-    "pan_left": "camera panning left",
-    "pan_right": "camera panning right",
-    "tilt_up": "camera tilting up",
-    "tilt_down": "camera tilting down",
-    "dolly_left": "camera trucking left, lateral movement",
-    "dolly_right": "camera trucking right, lateral movement",
-    "orbit": "camera orbiting around the subject",
-    "follow": "camera following the subject",
-}
+from film.shot_vocabulary import (
+    ANGLE_PHRASES,
+    CAMERA_MOVE_PHRASES,
+    COMPOSITION_PHRASES,
+    ELEVATION_PHRASES,
+    SHOT_SIZE_PHRASES,
+)
 
 
 def _describe_character(asset: FilmAsset, emotion: str, pose_name: str) -> str:
@@ -102,10 +59,10 @@ def synthesize_prompt(project: FilmProject, scene: FilmScene, shot: FilmShot) ->
     cinematography = ", ".join(
         p
         for p in (
-            _SHOT_SIZE_PHRASES.get(framing.shot_size, ""),
-            _ANGLE_PHRASES.get(framing.camera_angle, ""),
-            _ELEVATION_PHRASES.get(framing.camera_elevation, ""),
-            _COMPOSITION_PHRASES.get(framing.composition, ""),
+            SHOT_SIZE_PHRASES.get(framing.shot_size, ""),
+            ANGLE_PHRASES.get(framing.camera_angle, ""),
+            ELEVATION_PHRASES.get(framing.camera_elevation, ""),
+            COMPOSITION_PHRASES.get(framing.composition, ""),
         )
         if p
     )
@@ -149,7 +106,7 @@ def synthesize_prompt(project: FilmProject, scene: FilmScene, shot: FilmShot) ->
     if scene.mood:
         fragments.append(f"{scene.mood} mood")
 
-    move_phrase = _CAMERA_MOVE_PHRASES.get(shot.camera_move, "")
+    move_phrase = CAMERA_MOVE_PHRASES.get(shot.camera_move, "")
     if move_phrase:
         fragments.append(move_phrase)
 

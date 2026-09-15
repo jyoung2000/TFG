@@ -6,7 +6,7 @@
   "gates": {
     "backend_tests": {
       "status": "PASS",
-      "evidence": "494 passed (pytest, mock-free)"
+      "evidence": "551 passed (pytest, mock-free)"
     },
     "frontend_tests": {
       "status": "PASS",
@@ -22,7 +22,7 @@
     },
     "e2e_ui_only": {
       "status": "PASS",
-      "evidence": "verify-ui-only.mjs 29/29 on dev server and on the standalone file"
+      "evidence": "verify-ui-only.mjs 50/50 on the dev server and on the standalone file"
     },
     "e2e_electron": {
       "status": "PASS",
@@ -117,14 +117,14 @@
     {
       "id": "model_prompt_compiler",
       "name": "Model-specific prompt compilation",
-      "status": "NOT_IMPLEMENTED",
-      "implementation": "ReversePrompts.model_specific exists and is always empty; no common cinematic representation, no per-model adapters",
-      "persistence": "field present",
-      "ui": "none",
-      "test": "none",
-      "e2e": "none",
-      "evidence": "grep: no compiler module exists",
-      "blocker": "Section 16 of the brief not started"
+      "status": "PASS",
+      "implementation": "film/prompt_compiler.py (ShotBrief: the 14-section common representation; targets declaring style/budget/negative/audio/motion with the basis of each convention; compile_prompt as a pure function), film/prompt_brief.py (briefs from a storyboard shot and from an analysed shot), film/shot_vocabulary.py (phrase tables shared with the host's own synthesis), handlers/prompt_handler.py, _routes/prompts.py",
+      "persistence": "ReversePrompts.model_specific is filled during analysis for the models the user has configured plus the local host; it used to be defined and always empty",
+      "ui": "'Written for other models' in the storyboard shot drawer and in the Analyse Video inspector: the brief above the prompts, each prompt with its convention, where that convention came from, and every section the target could not carry",
+      "test": "tests/test_prompt_compiler.py \u2014 25 tests: target resolution incl. the unrecognised case, genuinely different output per family, action surviving into every target, scene intent never sent and never falsely reported as dropped, each drop-with-reason path, budget sacrifice order, continuity surviving truncation, both brief builders against the real app, the routes incl. the ambiguous-source 400, and model_specific actually filled",
+      "e2e": "verify-ui-only.mjs 9 compiler steps, PASS on the dev server and on the standalone file",
+      "evidence": "One brief compiled for five models produced five different strings: LTX prose, Wan labelled clauses, SDXL tags, FLUX with motion/timeline/negative dropped and each reported, and an unknown id marked matched=false. A request naming no source is refused with 400 rather than guessed at.",
+      "blocker": ""
     },
     {
       "id": "knowledge_engine",
@@ -236,11 +236,11 @@
     }
   ],
   "summary": {
-    "pass": 9,
+    "pass": 10,
     "blocked_environment": 2,
-    "not_implemented": 4,
+    "not_implemented": 3,
     "fail": 0
   },
   "final_status": "NOT PRODUCTION READY",
-  "final_status_reason": "Four product-critical capabilities from the brief are not implemented: model-specific prompt compilation, AI timeline editing, the cross-project shot library, and per-version deletion. The PF2 knowledge engine now ships complete (implementation, persistence, UI, tests, e2e)."
+  "final_status_reason": "Three product-critical capabilities from the brief are not implemented: AI timeline editing, the cross-project shot library, and per-version deletion. The PF2 knowledge engine and the model-specific prompt compiler now ship complete (implementation, persistence, UI, tests, e2e)."
 }

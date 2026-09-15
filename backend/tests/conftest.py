@@ -110,6 +110,18 @@ def client(test_state):
 
 
 @pytest.fixture
+def video(tmp_path: Path) -> str:
+    """A real file on disk.
+
+    The fake probe never reads it, but the path policy insists a video exists
+    before anything opens it — which is the behaviour we want to keep.
+    """
+    path = tmp_path / "source.mp4"
+    path.write_bytes(b"\x00\x00\x00\x18ftypmp42")
+    return str(path)
+
+
+@pytest.fixture
 def default_app_settings() -> AppSettings:
     return DEFAULT_APP_SETTINGS.model_copy(deep=True)
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   AlertTriangle,
   Aperture,
@@ -18,6 +18,7 @@ import { useFilm } from '../../contexts/FilmContext'
 import { filmApi, filmMediaUrl, filmOutputUrl } from '../../lib/film-api'
 import { useUiMode } from '../../lib/ui-mode'
 import { Button } from '../../components/ui/button'
+import { CompiledPrompts } from '../../components/CompiledPrompts'
 import type {
   ContinuityLevel,
   ContinuityWarning,
@@ -29,6 +30,9 @@ import type {
 } from '../../types/film'
 import { CAMERA_MOVES, CONTINUITY_LEVEL_META, SHOT_STATUS_META, VISUAL_REVIEW_META, framingLabel } from '../../types/film'
 import { useShotWorkflow } from './useShotWorkflow'
+
+/** What the local host renders with. The quality profile varies; the family does not. */
+const LOCAL_VIDEO_MODEL = 'ltx-2'
 
 interface ShotDetailDrawerProps {
   scene: FilmScene
@@ -53,6 +57,17 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
   const { film, refresh, capabilities, isGenerating, setShotContinuity } = useFilm()
   const workflow = useShotWorkflow(scene, shot)
   const projectId = film?.id ?? ''
+  // Only what this project could actually render with — a prompt for every
+  // model in the catalog would be noise. `default_model` is deliberately absent:
+  // it holds a quality profile ("fast", "pro"), not a model id, and the local
+  // host's family is what the compiler needs.
+  const compileTargets = useMemo(
+    () =>
+      [film?.settings.video_model ?? '', LOCAL_VIDEO_MODEL]
+        .map(model => model.trim())
+        .filter((model, index, all) => model && all.indexOf(model) === index),
+    [film?.settings.video_model],
+  )
 
   const [draft, setDraft] = useState({
     title: shot.title,
@@ -528,6 +543,16 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
             {busy === 'save' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
             Save shot
           </Button>
+
+          {/* The same shot, written the way each model this project can reach
+              wants to hear it. The prompt above is what the host renders; this
+              is what a different model would be sent. */}
+          <CompiledPrompts
+            key={`${shot.id}-${shot.updated_at}`}
+            source={{ project_id: projectId, scene_id: scene.id, shot_id: shot.id }}
+            models={compileTargets}
+            title="Written for other models"
+          />
         </div>
 
         {/* Generation */}

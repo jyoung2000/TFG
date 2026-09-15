@@ -65,6 +65,8 @@ from film.video_analysis_models import (
     VisualAnalysis,
 )
 from film.film_store import FilmStore
+from film.prompt_brief import brief_from_analysis
+from film.prompt_compiler import compile_for
 from film.video_analysis_store import VideoAnalysisStore, VideoAnalysisStoreError
 from handlers.base import StateHandlerBase
 from server_utils.path_policy import PathPolicyError, require_absolute_file
@@ -73,6 +75,11 @@ from services.interfaces import TaskRunner
 from state.app_state_types import AppState
 
 logger = logging.getLogger(__name__)
+
+#: The local host always renders with LTX. Which quality profile it picks
+#: ("fast" or "pro") varies per render, but the family — and so the prompt
+#: convention — does not, which is all the compiler needs.
+_LOCAL_VIDEO_MODEL = "ltx-2"
 
 VIDEO_SUFFIXES = (".mp4", ".mov", ".mkv", ".webm", ".m4v", ".avi")
 
@@ -497,8 +504,23 @@ class VideoAnalysisHandler(StateHandlerBase):
             character=", ".join(part for part in (subject, visual.wardrobe) if part),
             motion=motion,
             negative="text, watermark, logo, distorted hands, extra limbs",
-            model_specific={},
+            model_specific=self._model_specific(analysis, shot),
         )
+
+    def _model_specific(self, analysis: VideoAnalysis, shot: AnalyzedShot) -> dict[str, str]:
+        """Compile the shot for the models this user would actually render with.
+
+        Only the configured ones, not every model in the catalog: a document
+        carrying a prompt for forty models would be mostly noise, and the
+        compile endpoint covers anything else on demand.
+        """
+        with self.lock:
+            settings = self.state.app_settings
+            candidates = [settings.default_video_model, settings.default_image_model]
+        # The local host is always a possibility, so it is always compiled for.
+        models = [model.strip() for model in (*candidates, _LOCAL_VIDEO_MODEL) if model.strip()]
+        brief = brief_from_analysis(analysis, shot)
+        return {model: result.prompt for model, result in compile_for(brief, models).items()}
 
     # ---- boundary editing ------------------------------------------------
 
