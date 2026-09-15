@@ -72,7 +72,9 @@ from film.film_package import (
 from film.film_prompt import synthesize_prompt
 from film.film_store import FilmStore, FilmStoreError
 from server_utils.path_policy import PathPolicyError, require_absolute_file, require_destination
+from film.knowledge_models import KnowledgeEvent
 from handlers.base import StateHandlerBase
+from handlers.knowledge_handler import KnowledgeHandler
 from state.app_state_types import AppState
 
 logger = logging.getLogger(__name__)
@@ -193,10 +195,54 @@ class FilmHandler(StateHandlerBase):
     def __init__(self, state: AppState, lock: RLock, film_root: Path) -> None:
         super().__init__(state, lock)
         self._store = FilmStore(film_root)
+        self._knowledge: KnowledgeHandler | None = None
 
     @property
     def store(self) -> FilmStore:
         return self._store
+
+    def attach_knowledge(self, knowledge: KnowledgeHandler) -> None:
+        """Give approvals somewhere to be remembered.
+
+        Attached after construction rather than injected, so the two handlers
+        can be built in any order and this one keeps working untouched if the
+        knowledge engine is never attached.
+        """
+        self._knowledge = knowledge
+
+    def _record_judgement(
+        self,
+        *,
+        kind: str,
+        shot: FilmShot,
+        project_id: str,
+        scene_id: str,
+    ) -> None:
+        """Report an approval decision to the knowledge engine, best-effort.
+
+        Called outside any heavy work and after the save, so an opinion about
+        the result can never be the reason the result was not stored. The
+        prompt travels with it: that is what makes phrase-level patterns
+        attributable to something the user actually kept.
+        """
+        if self._knowledge is None:
+            return
+        version = shot.version(shot.current_version) if shot.current_version else None
+        self._knowledge.record(
+            KnowledgeEvent(
+                kind=kind,  # type: ignore[arg-type]
+                project_id=project_id,
+                scene_id=scene_id,
+                shot_id=shot.id,
+                version_number=shot.current_version,
+                model=version.model if version else "",
+                provider=version.execution_mode if version else "",
+                task="video",
+                execution_mode=version.execution_mode if version else "",
+                prompt=version.prompt if version else shot.visual_prompt,
+                negative_prompt=version.negative_prompt if version else "",
+            )
+        )
 
     # ---- Loading helpers -------------------------------------------------
 
@@ -408,9 +454,14 @@ class FilmHandler(StateHandlerBase):
             shot = self._require_shot(scene, shot_id)
             provided = set(req.model_fields_set)
             clear_location = req.clear_location
+            judgement = ""
             if "status" in provided and req.status is not None:
                 if req.status not in _VALID_SHOT_STATUSES:
                     raise HTTPError(400, f"Invalid shot status: {req.status}")
+                if req.status != shot.status and req.status in ("approved", "rejected"):
+                    # Only a change counts. Re-saving an approved shot is not a
+                    # second endorsement of the model that made it.
+                    judgement = "version_approved" if req.status == "approved" else "version_rejected"
                 shot.status = req.status  # type: ignore[assignment]
             if "visual_prompt" in provided and req.visual_prompt is not None:
                 # An explicit prompt edit locks synthesis unless the caller
@@ -447,7 +498,12 @@ class FilmHandler(StateHandlerBase):
             shot.updated_at = now_ms()
             self._refresh_prompt(project, scene, shot)
             self._save(project)
-            return shot
+
+        # Outside the lock: the shot is already saved, so recording an opinion
+        # about it can never cost the edit.
+        if judgement:
+            self._record_judgement(kind=judgement, shot=shot, project_id=project_id, scene_id=scene_id)
+        return shot
 
     def delete_shot(self, project_id: str, scene_id: str, shot_id: str) -> None:
         with self.lock:
@@ -552,7 +608,11 @@ class FilmHandler(StateHandlerBase):
             shot.status = "review" if shot.status not in ("approved", "rejected") else shot.status
             shot.updated_at = now_ms()
             self._save(project)
-            return shot
+
+        self._record_judgement(
+            kind="version_promoted", shot=shot, project_id=project_id, scene_id=scene_id
+        )
+        return shot
 
     # ---- Quick Mode → Film conversion ------------------------------------
 

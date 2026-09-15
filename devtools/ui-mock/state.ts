@@ -11,9 +11,11 @@
 
 import type { FilmProject, FilmQueue, QueuedJob } from '../../frontend/types/film'
 import type { VideoAnalysis } from '../../frontend/types/video-analysis'
+import type { KnowledgeEvent, LearningSettings } from '../../frontend/types/knowledge'
 import type { AppSettings, ClearableKeyProvider } from '../../frontend/types/settings'
 import type { LibraryDownloadStatus } from '../../frontend/types/models'
 import { DEMO_PROJECT_ID, emptyProject, seedProject, seedSettings } from './seed'
+import { seedKnowledge } from './routes/knowledge'
 
 /** One simulated render, advanced by wall-clock time rather than a timer. */
 export interface MockJob extends QueuedJob {
@@ -48,6 +50,9 @@ export interface MockState {
   modelDownloads: Record<string, { progress: number; downloaded: boolean }>
   generation: MockGeneration | null
   downloadedModels: string[]
+  /** The knowledge engine's event log. Observations are derived, not stored. */
+  knowledge: KnowledgeEvent[]
+  learning: LearningSettings
 }
 
 export const EMPTY_LIBRARY_DOWNLOAD: LibraryDownloadStatus = {
@@ -87,6 +92,8 @@ export function freshState(): MockState {
     modelDownloads: {},
     generation: null,
     downloadedModels: ['checkpoint', 'text_encoder'],
+    knowledge: seedKnowledge(),
+    learning: { enabled: true, generation: true, approval: true, editing: true, feedback: true },
   }
 }
 

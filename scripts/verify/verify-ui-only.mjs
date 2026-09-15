@@ -43,8 +43,13 @@ page.on('requestfailed', r => {
   if (error === 'net::ERR_ABORTED') return
   if (sameOrigin(r.url())) failedRequests.push(`${r.url()} (${error})`)
 })
+// Some steps deliberately provoke a 4xx to prove the backend refuses bad input.
+// Those are the assertion, not a broken URL, so they are named here.
+const EXPECTED_REFUSALS = ['/api/knowledge/import']
 page.on('response', r => {
-  if (r.status() >= 400 && sameOrigin(r.url())) failedRequests.push(`${r.status()} ${r.url()}`)
+  if (r.status() < 400 || !sameOrigin(r.url())) return
+  if (EXPECTED_REFUSALS.some(path => r.url().includes(path))) return
+  failedRequests.push(`${r.status()} ${r.url()}`)
 })
 const pageErrors = []
 page.on('pageerror', e => pageErrors.push(e.message))
@@ -209,6 +214,54 @@ try {
   log('Testing an unconfigured provider reports no key, not a false pass', /no api key/i.test(testMessage), testMessage.slice(0, 60))
   await snap('06-settings')
   await page.keyboard.press('Escape')
+
+  // ---- 9b. Settings → Knowledge: what the app has learned, and how honestly ----
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('open-settings', { detail: { tab: 'knowledge' } })))
+  await page.waitForTimeout(1800)
+  log('Settings → Knowledge opens', await page.getByRole('heading', { name: 'What this app has learned' }).isVisible())
+
+  const summary = await api('/api/knowledge')
+  log('The knowledge store reports its size and location', summary.json.event_count > 0 && summary.json.database.length > 0, `${summary.json.event_count} events, ${summary.json.model_count} models`)
+
+  const models = await api('/api/knowledge/models')
+  const profiles = models.json.models ?? []
+  // The whole point of the screen: a count and a guess must not look alike.
+  const kinds = new Set(profiles.flatMap(p => p.observations.map(o => o.kind)))
+  log('Counts are labelled as facts', kinds.has('fact'))
+  log('A thin sample is labelled a hypothesis, not a pattern', kinds.has('hypothesis'), [...kinds].join(', '))
+  const facts = profiles.flatMap(p => p.observations).filter(o => o.kind === 'fact')
+  const guesses = profiles.flatMap(p => p.observations).filter(o => o.kind !== 'fact')
+  log('No derived claim is stated with certainty', guesses.every(o => o.confidence < 1) && facts.every(o => o.confidence === 1))
+  const patterned = profiles.find(p => p.prompt_patterns.some(x => x.verdict !== 'unclear'))
+  log('Prompt vocabulary is scored from use, not asserted', Boolean(patterned), patterned ? `${patterned.model}: ${patterned.prompt_patterns.filter(x => x.verdict !== 'unclear').map(x => x.phrase).join(', ')}` : '')
+
+  // Expanding a model shows the evidence behind every statement.
+  await page.getByRole('button', { name: /ltxv-13b/ }).first().click()
+  await page.waitForTimeout(800)
+  const confidenceShown = await page.getByText(/% confidence,/).first().isVisible()
+  log('Every statement is shown with its confidence and sample size', confidenceShown)
+  await snap('06b-knowledge')
+
+  // Turning learning off must stop collection, not just hide it.
+  await api('/api/knowledge/settings', {
+    method: 'PUT',
+    body: JSON.stringify({ enabled: false, generation: true, approval: true, editing: true, feedback: true }),
+  })
+  const declined = await api('/api/knowledge/feedback', { method: 'POST', body: JSON.stringify({ model: 'ltxv-13b-098-dev', rating: 5 }) })
+  log('With learning off, feedback is declined rather than silently dropped', declined.json.status === 'declined')
+  await api('/api/knowledge/settings', {
+    method: 'PUT',
+    body: JSON.stringify({ enabled: true, generation: true, approval: true, editing: true, feedback: true }),
+  })
+  const accepted = await api('/api/knowledge/feedback', { method: 'POST', body: JSON.stringify({ model: 'ltxv-13b-098-dev', rating: 5 }) })
+  log('With learning on, feedback is recorded', accepted.json.status === 'ok')
+
+  const exported = await api('/api/knowledge/export')
+  log('Knowledge can be exported for another machine', exported.json.schema_version === 1 && exported.json.events.length > 0, `${exported.json.events.length} events`)
+  const badImport = await api('/api/knowledge/import', { method: 'POST', body: JSON.stringify({ payload: { schema_version: 99, exported_at: 0, events: [], observations: [] } }) })
+  log('An export from an unknown version is refused', badImport.status === 400)
+  await page.keyboard.press('Escape')
+  await page.waitForTimeout(600)
 
   // ---- 10. Generation through the simulated queue ----
   const queued = await api('/api/film/projects/ui-mock-film/scenes/scene-2/shots/shot-2-2/generate', {

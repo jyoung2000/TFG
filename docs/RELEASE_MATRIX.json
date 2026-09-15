@@ -4,15 +4,42 @@
   "branch": "claude/ltx-filmmaking-integration-75pnwq",
   "assessed_at": "2026-09-15",
   "gates": {
-    "backend_tests": { "status": "PASS", "evidence": "494 passed (pytest, mock-free)" },
-    "frontend_tests": { "status": "PASS", "evidence": "33 passed (vitest)" },
-    "typecheck": { "status": "PASS", "evidence": "tsc --noEmit, ui-mock tsc, pyright strict: 0 errors" },
-    "production_build": { "status": "PASS", "evidence": "pnpm build:frontend; no mock code in dist/" },
-    "e2e_ui_only": { "status": "PASS", "evidence": "verify-ui-only.mjs 29/29 on dev server and on the standalone file" },
-    "e2e_electron": { "status": "PASS", "evidence": "verify-hardening 33/33, verify-rc 39/39, verify-models 21/21 (last run before the AI Models move; see blockers)" },
-    "installer_windows": { "status": "BLOCKED_ENVIRONMENT", "evidence": "no Windows machine in this environment" },
-    "gpu_qualification": { "status": "BLOCKED_ENVIRONMENT", "evidence": "no CUDA GPU; cuda_available=false" },
-    "live_provider_calls": { "status": "BLOCKED_ENVIRONMENT", "evidence": "no real API keys; every provider test uses the fake HTTP client" }
+    "backend_tests": {
+      "status": "PASS",
+      "evidence": "494 passed (pytest, mock-free)"
+    },
+    "frontend_tests": {
+      "status": "PASS",
+      "evidence": "33 passed (vitest)"
+    },
+    "typecheck": {
+      "status": "PASS",
+      "evidence": "tsc --noEmit, ui-mock tsc, pyright strict: 0 errors"
+    },
+    "production_build": {
+      "status": "PASS",
+      "evidence": "pnpm build:frontend; no mock code in dist/"
+    },
+    "e2e_ui_only": {
+      "status": "PASS",
+      "evidence": "verify-ui-only.mjs 29/29 on dev server and on the standalone file"
+    },
+    "e2e_electron": {
+      "status": "PASS",
+      "evidence": "verify-hardening 33/33, verify-rc 39/39, verify-models 21/21 (last run before the AI Models move; see blockers)"
+    },
+    "installer_windows": {
+      "status": "BLOCKED_ENVIRONMENT",
+      "evidence": "no Windows machine in this environment"
+    },
+    "gpu_qualification": {
+      "status": "BLOCKED_ENVIRONMENT",
+      "evidence": "no CUDA GPU; cuda_available=false"
+    },
+    "live_provider_calls": {
+      "status": "BLOCKED_ENVIRONMENT",
+      "evidence": "no real API keys; every provider test uses the fake HTTP client"
+    }
   },
   "features": [
     {
@@ -49,7 +76,7 @@
       "test": "test_detect_then_analyze_without_a_provider_still_describes_shots",
       "e2e": "verify-ui-only.mjs 'Inference stays empty until a model runs'",
       "evidence": "Offline pass fills measured fields only; inferred groups stay at confidence 0",
-      "blocker": "Real multimodal model output never exercised — BLOCKED_ENVIRONMENT for live quality"
+      "blocker": "Real multimodal model output never exercised \u2014 BLOCKED_ENVIRONMENT for live quality"
     },
     {
       "id": "reverse_storyboard",
@@ -73,7 +100,7 @@
       "test": "test_prompt_edits_are_pinned_against_regeneration",
       "e2e": "verify-ui-only.mjs 'Analysis derives a prompt per shot'",
       "evidence": "Edited prompt survives a re-analyse",
-      "blocker": "model_specific map is defined but not yet populated — see model_prompt_compiler"
+      "blocker": "model_specific map is defined but not yet populated \u2014 see model_prompt_compiler"
     },
     {
       "id": "provider_connection_test",
@@ -102,14 +129,14 @@
     {
       "id": "knowledge_engine",
       "name": "PF2 knowledge engine: model experience and learning",
-      "status": "NOT_IMPLEMENTED",
-      "implementation": "none",
-      "persistence": "none",
-      "ui": "none",
-      "test": "none",
-      "e2e": "none",
-      "evidence": "grep 'knowledge' across backend/frontend: 0 occurrences",
-      "blocker": "Sections 13-16, 35, 40 not started"
+      "status": "PASS",
+      "implementation": "film/knowledge_models.py (events/observations/profiles/prompt patterns kept apart by kind), film/knowledge_store.py (SQLite, WAL, aggregation in SQL), handlers/knowledge_handler.py (derivation with confidence n/(n+5); recommendation cites evidence), _routes/knowledge.py",
+      "persistence": "<outputs>/knowledge/knowledge.db \u2014 survives restart; path shown in the UI; export/import at schema_version 1",
+      "ui": "Settings -> Knowledge: per-model statistics, observations labelled fact/observed_pattern/user_preference/model_recommendation/hypothesis with confidence and sample size, prompt terms that worked and struggled, learning on/off wholesale and per category, export, import, forget-everything and forget-one-model",
+      "test": "tests/test_knowledge.py \u2014 32 tests: confidence curve, recording (incl. one driving the real queue over HTTP), every derivation rule and its label, learning switches, declined feedback, export/import with a refused schema version, reset by model and project, recommendation with and without history",
+      "e2e": "verify-ui-only.mjs 9 knowledge steps, PASS on the dev server and on the standalone file",
+      "evidence": "Live run through the real app: 7 events recorded from 6 real queue renders + 1 approval; knowledge.db created on disk; facts at confidence 1.0 and every derived claim below it; recurring failure surfaced verbatim; bad import refused with HTTP 400; reset removed 7 and left 0",
+      "blocker": ""
     },
     {
       "id": "ai_timeline_editing",
@@ -209,11 +236,11 @@
     }
   ],
   "summary": {
-    "pass": 8,
+    "pass": 9,
     "blocked_environment": 2,
-    "not_implemented": 5,
+    "not_implemented": 4,
     "fail": 0
   },
   "final_status": "NOT PRODUCTION READY",
-  "final_status_reason": "Five product-critical capabilities from the brief are not implemented: the PF2 knowledge engine, model-specific prompt compilation, AI timeline editing, the cross-project shot library, and per-version deletion. Everything implemented so far passes its gates, and no known software defect remains in what exists."
+  "final_status_reason": "Four product-critical capabilities from the brief are not implemented: model-specific prompt compilation, AI timeline editing, the cross-project shot library, and per-version deletion. The PF2 knowledge engine now ships complete (implementation, persistence, UI, tests, e2e)."
 }

@@ -7,6 +7,8 @@ from typing import Any, Literal, TypeGuard, TypeVar, cast, get_args
 
 from pydantic import BaseModel, ConfigDict, Field, create_model, field_validator
 
+from film.knowledge_models import LearningSettings
+
 # Canonical environment variable for the OpenRouter secret. The settings file
 # value wins when present; the env var is the fallback for users who prefer
 # not to persist the key on disk.
@@ -130,6 +132,11 @@ class AppSettings(SettingsBaseModel):
     # Model ids the user has typed or downloaded, newest first — the Model
     # Library shows them alongside the discovered catalogs.
     recent_model_ids: list[str] = Field(default_factory=list[str])
+
+    # What TFG may remember about how models behave here. Off switches are
+    # honoured when an event is written, not when it is read, so turning
+    # learning off stops collection rather than merely hiding it.
+    learning: LearningSettings = Field(default_factory=LearningSettings)
     seed_locked: bool = False
     locked_seed: int = 42
 
@@ -255,6 +262,11 @@ class SettingsResponse(SettingsBaseModel):
     default_video_model: str = ""
     default_image_model: str = ""
     recent_model_ids: list[str] = Field(default_factory=list[str])
+
+    # What TFG may remember about how models behave here. Off switches are
+    # honoured when an event is written, not when it is read, so turning
+    # learning off stops collection rather than merely hiding it.
+    learning: LearningSettings = Field(default_factory=LearningSettings)
     seed_locked: bool = False
     locked_seed: int = 42
 

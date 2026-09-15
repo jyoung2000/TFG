@@ -9,6 +9,7 @@
 
 import type { FilmProject, FilmShot, VersionKind, ShotVersion } from '../../../frontend/types/film'
 import { MockHttpError, type Router } from '../http'
+import { recordMockEvent } from './knowledge'
 import { DEMO_OUTPUT } from '../seed'
 import { jobProgress, queueSnapshot, type MockJob, type MockState, type Store } from '../state'
 
@@ -96,6 +97,22 @@ function finish(state: MockState, job: MockJob, outcome: 'complete' | 'cancelled
   found.shot.status = outcome === 'complete' ? 'review' : found.shot.capture_path ? 'ready' : 'draft'
   found.shot.updated_at = Date.now()
   project.updated_at = Date.now()
+
+  // Same loop as the app: the queue reports the outcome to the knowledge engine.
+  recordMockEvent(state, {
+    kind: outcome === 'complete' ? 'generation_completed' : 'generation_cancelled',
+    model: version?.model ?? '',
+    provider: version?.execution_mode ?? '',
+    execution_mode: version?.execution_mode ?? '',
+    project_id: job.project_id,
+    scene_id: job.scene_id,
+    shot_id: job.shot_id,
+    version_number: job.version_number,
+    prompt: version?.prompt ?? '',
+    negative_prompt: version?.negative_prompt ?? '',
+    outcome: outcome === 'complete' ? 'success' : 'cancelled',
+    duration_seconds: version?.generation_seconds ?? null,
+  })
 }
 
 /**

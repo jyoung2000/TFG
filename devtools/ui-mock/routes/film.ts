@@ -9,6 +9,7 @@ import type {
   FilmPose,
 } from '../../../frontend/types/film'
 import { MockHttpError, RawResponse, type Router } from '../http'
+import { recordMockEvent } from './knowledge'
 import { isVideoPath, labelFromPath, placeholderFrame } from '../media'
 import type { Store } from '../state'
 import { seedProject } from '../seed'
@@ -296,6 +297,7 @@ export function registerFilmRoutes(router: Router, store: Store, clipUrl: string
     store.mutate(() => {
       const p = project(req.params.projectId)
       const shot = findShot(findScene(p, req.params.sceneId), req.params.shotId)
+      const previousStatus = shot.status
       applyPatch(shot, req.body, ['id', 'versions', 'composition', 'clear_location', 'clear_gap'])
       if ('composition' in req.body) {
         syncComposition(shot, (req.body.composition as CompositionScene | null) ?? null)
@@ -304,6 +306,20 @@ export function registerFilmRoutes(router: Router, store: Store, clipUrl: string
       if (req.body.clear_gap === true) shot.gap_before_seconds = null
       shot.updated_at = now()
       touched(p)
+      // A change of verdict is a judgement about the model that made it.
+      if (shot.status !== previousStatus && (shot.status === 'approved' || shot.status === 'rejected')) {
+        const version = shot.versions.find(v => v.number === shot.current_version)
+        recordMockEvent(store.data, {
+          kind: shot.status === 'approved' ? 'version_approved' : 'version_rejected',
+          model: version?.model ?? '',
+          provider: version?.execution_mode ?? '',
+          project_id: p.id,
+          scene_id: req.params.sceneId,
+          shot_id: shot.id,
+          version_number: shot.current_version,
+          prompt: version?.prompt ?? shot.visual_prompt,
+        })
+      }
       return shot
     }),
   )

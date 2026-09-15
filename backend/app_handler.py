@@ -16,6 +16,7 @@ from handlers import (
     IcLoraHandler,
     ModelLibraryHandler,
     ImageGenerationHandler,
+    KnowledgeHandler,
     ModelsHandler,
     PipelinesHandler,
     SuggestGapPromptHandler,
@@ -256,6 +257,12 @@ class AppHandler:
             film_root=config.outputs_dir / "film_projects",
         )
 
+        self.knowledge = KnowledgeHandler(
+            state=self.state,
+            lock=self._lock,
+            database=config.outputs_dir / "knowledge" / "knowledge.db",
+        )
+
         self.video_analysis = VideoAnalysisHandler(
             state=self.state,
             lock=self._lock,
@@ -279,6 +286,10 @@ class AppHandler:
             media_runner=MediaRunner(http),
             image_generation_handler=self.image_generation,
         )
+        # The queue reports render outcomes to the knowledge engine; the film
+        # handler reports what the user did with them.
+        self.film_generation.attach_knowledge(self.knowledge)
+        self.film.attach_knowledge(self.knowledge)
 
         self.film_director = FilmDirectorHandler(
             state=self.state,

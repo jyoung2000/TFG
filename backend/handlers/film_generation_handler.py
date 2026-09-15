@@ -53,6 +53,7 @@ from film.film_models import (
 from film.film_prompt import synthesize_negative_prompt, synthesize_prompt
 from handlers.base import StateHandlerBase
 from handlers.film_handler import FilmHandler
+from handlers.knowledge_handler import KnowledgeHandler
 from handlers.generation_handler import GenerationHandler
 from handlers.image_generation_handler import ImageGenerationHandler
 from handlers.video_generation_handler import VideoGenerationHandler, get_allowed_durations
@@ -236,6 +237,9 @@ class FilmGenerationHandler(StateHandlerBase):
         self._wangp_bridge = wangp_bridge
         self._media_runner = media_runner
         self._image_generation = image_generation_handler
+        # Optional on purpose: the queue works without it, and learning is
+        # never allowed to be a reason a render fails.
+        self._knowledge: KnowledgeHandler | None = None
         # Set while a hosted job runs, so the queue can report and cancel it.
         self._hosted_cancel = False
         self._hosted_progress: tuple[int, str] | None = None
@@ -973,6 +977,43 @@ class FilmGenerationHandler(StateHandlerBase):
                 shot.status = "ready" if shot.capture_path else "composed"
             shot.updated_at = now_ms()
             self._film.store.save(project)
+            recorded = (
+                version.model,
+                version.execution_mode,
+                version.prompt,
+                version.negative_prompt,
+                version.generation_seconds,
+            )
+
+        # Outside the lock: learning is advisory and must never hold up a render
+        # or fail one. The handler itself declines if the user switched it off.
+        if self._knowledge is not None:
+            outcome = {"complete": "success", "cancelled": "cancelled"}.get(status, "failure")
+            model, mode, prompt, negative, seconds = recorded
+            self._knowledge.record_generation(
+                outcome=outcome,
+                model=model,
+                provider=mode,
+                project_id=job.project_id,
+                scene_id=job.scene_id,
+                shot_id=job.shot_id,
+                version_number=job.version_number,
+                task="video",
+                execution_mode=mode,
+                prompt=prompt,
+                negative_prompt=negative,
+                duration_seconds=seconds,
+                error=error,
+            )
+
+    def attach_knowledge(self, knowledge: KnowledgeHandler) -> None:
+        """Give the queue somewhere to report outcomes.
+
+        Set after construction rather than injected, so the knowledge handler
+        can be built in any order relative to this one and the queue keeps
+        working if it is never attached.
+        """
+        self._knowledge = knowledge
 
     # ---- Capabilities ----------------------------------------------------
 

@@ -16,6 +16,7 @@ from starlette.responses import Response as StarletteResponse
 from _routes._errors import HTTPError
 from _routes.film import router as film_router
 from _routes.film_director import router as film_director_router
+from _routes.knowledge import router as knowledge_router
 from _routes.video_analysis import router as video_analysis_router
 from _routes.film_generation import router as film_generation_router
 from _routes.generation import router as generation_router
@@ -133,5 +134,6 @@ def create_app(
     app.include_router(film_generation_router)
     app.include_router(film_director_router)
     app.include_router(video_analysis_router)
+    app.include_router(knowledge_router)
 
     return app
