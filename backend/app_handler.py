@@ -19,6 +19,7 @@ from handlers import (
     KnowledgeHandler,
     PromptHandler,
     ShotLibraryHandler,
+    TimelineHandler,
     ModelsHandler,
     PipelinesHandler,
     SuggestGapPromptHandler,
@@ -274,6 +275,12 @@ class AppHandler:
             film_store=self.film.store,
         )
 
+        self.timeline = TimelineHandler(
+            state=self.state,
+            lock=self._lock,
+            film_handler=self.film,
+        )
+
         self.shot_library = ShotLibraryHandler(
             state=self.state,
             lock=self._lock,
@@ -312,6 +319,7 @@ class AppHandler:
             lock=self._lock,
             film_handler=self.film,
             film_generation_handler=self.film_generation,
+            timeline_handler=self.timeline,
             http=http,
             video_processor=video_processor,
         )

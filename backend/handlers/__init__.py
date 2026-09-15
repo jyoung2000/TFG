@@ -19,6 +19,7 @@ from handlers.film_handler import FilmHandler
 from handlers.knowledge_handler import KnowledgeHandler
 from handlers.prompt_handler import PromptHandler
 from handlers.shot_library_handler import ShotLibraryHandler
+from handlers.timeline_handler import TimelineHandler
 from handlers.video_analysis_handler import VideoAnalysisHandler
 from handlers.video_generation_handler import VideoGenerationHandler
 
@@ -33,6 +34,7 @@ __all__ = [
     "KnowledgeHandler",
     "PromptHandler",
     "ShotLibraryHandler",
+    "TimelineHandler",
     "VideoAnalysisHandler",
     "VideoGenerationHandler",
     "FilmHandler",

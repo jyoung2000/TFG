@@ -6,6 +6,7 @@
 // xwide/xcu sizes, POV/dutch angles and bird/worm elevations.
 
 import type { TextProviderId } from './models'
+import type { ShotTransition } from './timeline'
 
 export type ShotSize = 'xwide' | 'wide' | 'full' | 'medium' | 'mcu' | 'closeup' | 'xcu'
 export type CameraAngle =
@@ -266,6 +267,9 @@ export interface FilmShot {
   duration_seconds: number
   /** Overrides the scene/project inter-shot gap before this shot. */
   gap_before_seconds: number | null
+  /** How this shot begins and ends on the timeline. A cut costs nothing. */
+  transition_in: ShotTransition
+  transition_out: ShotTransition
   framing: ShotFraming
   camera_move: CameraMove
   characters: ShotCharacter[]

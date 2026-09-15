@@ -45,7 +45,13 @@ page.on('requestfailed', r => {
 })
 // Some steps deliberately provoke a 4xx to prove the backend refuses bad input.
 // Those are the assertion, not a broken URL, so they are named here.
-const EXPECTED_REFUSALS = ['/api/knowledge/import', '/api/prompts/compile', '/versions/', '/api/shot-library/']
+const EXPECTED_REFUSALS = [
+  '/api/knowledge/import',
+  '/api/prompts/compile',
+  '/versions/',
+  '/api/shot-library/',
+  '/timeline/actions',
+]
 page.on('response', r => {
   if (r.status() < 400 || !sameOrigin(r.url())) return
   if (EXPECTED_REFUSALS.some(path => r.url().includes(path))) return
@@ -405,6 +411,58 @@ try {
   log('Archived items are on their own shelf', shotLibrary.shelved.body.items.some(i => i.id === shotLibrary.id))
   log('Restoring brings it back', shotLibrary.restored.body.archived === false)
   log('Deleting is permanent', shotLibrary.removed.status === 200 && shotLibrary.gone.status === 404)
+
+  // ---- 10d. Timeline editing, and the undo that makes it safe ----
+  await page.getByRole('button', { name: 'Storyboard' }).first().click()
+  await page.waitForTimeout(2000)
+  await page.getByRole('tab', { name: 'Timeline', exact: true }).click()
+  await page.waitForTimeout(1500)
+  log('The Timeline tab opens', await page.getByRole('heading', { name: 'Timeline' }).isVisible())
+  await snap('06d-timeline')
+
+  const cut = await page.evaluate(async () => {
+    const call = async (path, init) => {
+      const res = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...init })
+      return { status: res.status, body: await res.json().catch(() => null) }
+    }
+    const base = '/api/film/projects/ui-mock-film/timeline'
+    const act = (action, params = {}, actor = 'user') =>
+      call(`${base}/actions`, { method: 'POST', body: JSON.stringify({ action, params, actor }) })
+
+    const before = (await call(base)).body
+    const first = before.entries[0]
+
+    const split = await act('split_shot', { shot_id: first.shot_id })
+    const trimmed = await act('trim_shot', { shot_id: first.shot_id, duration_seconds: 2 })
+    const transition = await act('set_transition', { shot_id: first.shot_id, where: 'out', kind: 'dissolve', duration_seconds: 1 })
+    const byDirector = await act('set_gap', { shot_id: before.entries[1].shot_id, gap_seconds: 1.5 }, 'director')
+
+    // A refused edit must change nothing at all.
+    const stateBeforeRefusal = (await call(base)).body
+    const refused = await act('split_shot', { shot_id: first.shot_id, at_seconds: 999 })
+    const stateAfterRefusal = (await call(base)).body
+
+    const history = (await call(`${base}/history`)).body
+    const undone = await call(`${base}/undo`, { method: 'POST' })
+    const afterUndo = (await call(base)).body
+    return {
+      before, split, trimmed, transition, byDirector, refused,
+      unchanged: JSON.stringify(stateBeforeRefusal) === JSON.stringify(stateAfterRefusal),
+      history, undone, afterUndo,
+    }
+  })
+
+  log('The timeline is the film in running order', cut.before.entries.length >= 6, `${cut.before.entries.length} shots, ${cut.before.total_seconds}s`)
+  log('A shot can be split in two', cut.split.status === 200 && cut.split.body.action.affected_shot_ids.length === 2)
+  log('A shot can be trimmed', cut.trimmed.status === 200 && cut.trimmed.body.timeline.entries[0].duration_seconds === 2)
+  log('A transition can be set', cut.transition.body.timeline.entries[0].transition_out.kind === 'dissolve')
+  log('An edit made by the director is recorded as the director\'s',
+    cut.history.actions.some(a => a.actor === 'director') && cut.history.actions.some(a => a.actor === 'user'))
+  log('A refused edit is refused', cut.refused.status === 400)
+  log('A refused edit changes nothing', cut.unchanged)
+  log('Undo puts the film back', cut.undone.status === 200)
+  log('The undo snapshot never travels over the API', cut.history.actions.every(a => a.before === null))
+  log('Every edit is recorded with a readable summary', cut.history.actions.every(a => a.summary.length > 0), cut.history.actions.slice(-1)[0]?.summary ?? '')
 
   // ---- 11. Editing round-trips through the mock ----
   const renamed = await api('/api/film/projects/ui-mock-film/scenes/scene-1/shots/shot-1-1', {

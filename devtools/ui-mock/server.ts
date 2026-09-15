@@ -24,6 +24,7 @@ import { registerGenerationRoutes, tickGeneration } from './routes/generation'
 import { registerKnowledgeRoutes } from './routes/knowledge'
 import { registerPromptRoutes } from './routes/prompts'
 import { registerShotLibraryRoutes } from './routes/shot-library'
+import { registerTimelineRoutes } from './routes/timeline'
 import { registerModelRoutes } from './routes/models'
 import { registerProjectOpsRoutes } from './routes/project-ops'
 import { registerQueueRoutes, tickQueue } from './routes/queue'
@@ -63,6 +64,7 @@ export function createMockBackend(options: MockBackendOptions = {}): MockBackend
   registerKnowledgeRoutes(router, store)
   registerPromptRoutes(router, store)
   registerShotLibraryRoutes(router, store, options.clipUrl ?? '')
+  registerTimelineRoutes(router, store)
 
   // Local files the renderer would open with a `file://` URL under Electron.
   router.get('/api/__ui_mock/file', req => {

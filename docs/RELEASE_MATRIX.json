@@ -6,7 +6,7 @@
   "gates": {
     "backend_tests": {
       "status": "PASS",
-      "evidence": "590 passed (pytest, mock-free)"
+      "evidence": "633 passed (pytest, mock-free)"
     },
     "frontend_tests": {
       "status": "PASS",
@@ -22,7 +22,7 @@
     },
     "e2e_ui_only": {
       "status": "PASS",
-      "evidence": "verify-ui-only.mjs 69/69 on the dev server and on the standalone file"
+      "evidence": "verify-ui-only.mjs 80/80 on the dev server and on the standalone file"
     },
     "e2e_electron": {
       "status": "PASS",
@@ -141,14 +141,14 @@
     {
       "id": "ai_timeline_editing",
       "name": "AI Director control of the timeline",
-      "status": "NOT_IMPLEMENTED",
-      "implementation": "none; director tools cover the storyboard only",
-      "persistence": "n/a",
-      "ui": "none",
-      "test": "none",
-      "e2e": "none",
-      "evidence": "grep 'split_clip|timeline_edit': 0 occurrences",
-      "blocker": "Section 17 not started"
+      "status": "PASS",
+      "implementation": "film/timeline_ops.py (19 operations as pure functions over a FilmProject), film/timeline_models.py (ShotTransition on the shot, DirectorAction, TimelineView), handlers/timeline_handler.py (snapshot -> apply -> save -> record, plus undo), _routes/timeline.py; every action also registered as an AI Director tool with a spec, bridged through the same apply path",
+      "persistence": "The timeline IS the storyboard, so edits persist in project.json; the action log with undo snapshots persists in <project>/timeline_history.json (25 undoable, 200 retained) and survives restart",
+      "ui": "Timeline tab in the film workspace: running order with absolute times, gaps, transitions and render state; per-shot Split/Duplicate/B-roll/Remove, duration with Trim and Ripple, gap, in/out transitions, move to scene; whole-film Opening/Ending/Montage/Align/Normalise; Undo with a count; edit history with AI-vs-you attribution and undone entries struck through",
+      "test": "tests/test_timeline.py \u2014 43 tests. Load-bearing: undo restores exactly the prior state, walks back one edit at a time, cannot undo the same edit twice; a refused edit leaves nothing in the film AND nothing in the history. Plus every operation's rules and the director bridge (a model's edit recorded as the director's, and the director undoing its own work)",
+      "e2e": "verify-ui-only.mjs 11 timeline steps, PASS on the dev server and on the standalone file",
+      "evidence": "Split, trim and a dissolve applied through the API; a director-actor edit recorded beside a user one; a split at 999s refused with 400 and the whole timeline byte-identical before and after; undo restored the film; no snapshot ever crossed the API",
+      "blocker": ""
     },
     {
       "id": "shot_library",
@@ -236,11 +236,11 @@
     }
   ],
   "summary": {
-    "pass": 12,
+    "pass": 13,
     "blocked_environment": 2,
-    "not_implemented": 1,
+    "not_implemented": 0,
     "fail": 0
   },
-  "final_status": "NOT PRODUCTION READY",
-  "final_status_reason": "One product-critical capability from the brief is not implemented: AI timeline editing. The PF2 knowledge engine, the model-specific prompt compiler, per-version deletion and the cross-project shot library now ship complete (implementation, persistence, UI, tests, e2e)."
+  "final_status": "PRODUCTION READY \u2014 ENVIRONMENT VALIDATION REMAINS",
+  "final_status_reason": "Every product capability in the brief is implemented, persisted, reachable in the UI, tested and verified end to end: video intelligence, the reverse storyboard, the PF2 knowledge engine, model-specific prompt compilation, per-version deletion, the cross-project shot library and AI timeline editing. Two gates remain BLOCKED_ENVIRONMENT and cannot be closed from here: no CUDA GPU is present, so no real render or VRAM figure has been produced; no Windows machine is present, so the Windows installer is unbuilt; and no real provider API keys exist, so every hosted-provider path has only been exercised against the fake HTTP client. Those are environment limits, not defects, and each is listed as such rather than claimed as passing."
 }

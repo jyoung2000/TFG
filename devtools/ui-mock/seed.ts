@@ -73,6 +73,8 @@ function shot(
     description: '',
     duration_seconds: 5,
     gap_before_seconds: null,
+    transition_in: { kind: 'cut', duration_seconds: 0.5 },
+    transition_out: { kind: 'cut', duration_seconds: 0.5 },
     framing: {
       shot_size: shot_size ?? 'medium',
       camera_angle: camera_angle ?? 'front',

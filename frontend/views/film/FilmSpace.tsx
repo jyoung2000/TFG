@@ -2,6 +2,7 @@ import { Suspense, lazy, useCallback, useEffect, useMemo, useState } from 'react
 import {
   ArrowUpToLine,
   Clapperboard,
+  Film,
   Clock,
   FileText,
   Layers,
@@ -27,6 +28,7 @@ import { DirectorBar } from './DirectorBar'
 import { FilmRenderSettingsCard } from './ModelsPanel'
 import { PackageMenu } from './PackageMenu'
 import { ScriptPanel } from './ScriptPanel'
+import { TimelinePanel } from './TimelinePanel'
 import { ShotCard } from './ShotCard'
 import { ShotDetailDrawer } from './ShotDetailDrawer'
 
@@ -35,10 +37,11 @@ const ShotComposer = lazy(() => import('./composer/ShotComposer'))
 
 // Connecting and downloading models is app setup, not part of making a film:
 // it lives in Settings → AI Models.
-type FilmTab = 'storyboard' | 'script' | 'assets'
+type FilmTab = 'storyboard' | 'timeline' | 'script' | 'assets'
 
 const TABS: { id: FilmTab; label: string; icon: React.ReactNode }[] = [
   { id: 'storyboard', label: 'Storyboard', icon: <Clapperboard className="h-3.5 w-3.5" /> },
+  { id: 'timeline', label: 'Timeline', icon: <Film className="h-3.5 w-3.5" /> },
   { id: 'script', label: 'Script', icon: <FileText className="h-3.5 w-3.5" /> },
   { id: 'assets', label: 'Assets', icon: <Layers className="h-3.5 w-3.5" /> },
 ]
@@ -274,7 +277,10 @@ export function FilmSpace() {
   const [showBuild, setShowBuild] = useState(false)
   const [showQueue, setShowQueue] = useState(false)
   const [uiMode, setUiMode] = useUiMode()
-  const visibleTabs = uiMode === 'simple' ? TABS.filter(t => t.id === 'storyboard' || t.id === 'assets') : TABS
+  const visibleTabs =
+    uiMode === 'simple'
+      ? TABS.filter(t => t.id === 'storyboard' || t.id === 'timeline' || t.id === 'assets')
+      : TABS
   useEffect(() => {
     if (uiMode === 'simple' && tab === 'script') setTab('storyboard')
   }, [uiMode, tab])
@@ -575,6 +581,7 @@ export function FilmSpace() {
                 </div>
               </div>
             ))}
+          {tab === 'timeline' && <TimelinePanel />}
           {tab === 'script' && <ScriptPanel onStoryboardCreated={() => setTab('storyboard')} />}
           {tab === 'assets' && <AssetsPanel />}
 

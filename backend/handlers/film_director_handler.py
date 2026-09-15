@@ -107,6 +107,7 @@ from film.script_parser import parse_script, suggest_duration, suggest_shot_size
 from handlers.base import StateHandlerBase
 from handlers.film_generation_handler import FilmGenerationHandler
 from handlers.film_handler import FilmHandler
+from handlers.timeline_handler import TimelineHandler
 from services.interfaces import HTTPClient, VideoProcessor
 from state.app_settings import AppSettings
 from state.app_state_types import AppState
@@ -550,6 +551,122 @@ def _build_tool_specs() -> list[ToolSpec]:
             ),
         ),
         ToolSpec("delete_keyframe", "Delete a keyframe by id.", _schema({"shot_id": shot_id, "keyframe_id": _s("Keyframe id")}, ["shot_id", "keyframe_id"])),
+        # ---- The timeline. Every one of these is undoable, and every one is
+        # recorded with who made it, so a model editing the cut leaves a trail.
+        ToolSpec(
+            "split_shot",
+            "Cut one shot into two. The second half keeps the look but has no render — it is a different shot now.",
+            _schema({"shot_id": shot_id, "at_seconds": _n("Where to cut; the midpoint if omitted")}, ["shot_id"]),
+        ),
+        ToolSpec(
+            "trim_shot",
+            "Change a shot's duration. Nothing after it moves.",
+            _schema({"shot_id": shot_id, "duration_seconds": _n("New duration")}, ["shot_id", "duration_seconds"]),
+        ),
+        ToolSpec(
+            "ripple_trim",
+            "Trim a shot and hold the film's running time by taking the difference out of the gaps that follow.",
+            _schema({"shot_id": shot_id, "duration_seconds": _n("New duration")}, ["shot_id", "duration_seconds"]),
+        ),
+        ToolSpec(
+            "move_shot",
+            "Move a shot within its scene or into another one.",
+            _schema(
+                {"shot_id": shot_id, "scene_id": scene_id, "position": _n("Zero-based position; appended if omitted")},
+                ["shot_id", "scene_id"],
+            ),
+        ),
+        ToolSpec(
+            "insert_shot",
+            "Add an empty shot at a position in a scene.",
+            _schema(
+                {
+                    "scene_id": scene_id,
+                    "position": _n("Zero-based position; appended if omitted"),
+                    "title": _s("Title"),
+                    "duration_seconds": _n("Duration"),
+                },
+                ["scene_id"],
+            ),
+        ),
+        ToolSpec(
+            "replace_shot",
+            "Give a shot another shot's content while it keeps its place, duration and gap. Its renders are dropped, because it is a different shot now.",
+            _schema({"shot_id": shot_id, "source_shot_id": _s("Shot to take the content from")}, ["shot_id", "source_shot_id"]),
+        ),
+        ToolSpec(
+            "replace_with_version",
+            "Put a different completed take of the same shot on the timeline.",
+            _schema({"shot_id": shot_id, "version_number": _n("Take number")}, ["shot_id", "version_number"]),
+        ),
+        ToolSpec(
+            "set_transition",
+            "Set how a shot begins or ends: cut, dissolve, fade_in, fade_out, wipe or dip_to_black.",
+            _schema(
+                {
+                    "shot_id": shot_id,
+                    "where": _s("in or out", ["in", "out"]),
+                    "kind": _s("Transition", ["cut", "dissolve", "fade_in", "fade_out", "wipe", "dip_to_black"]),
+                    "duration_seconds": _n("How long it takes; ignored for a cut"),
+                },
+                ["shot_id", "where", "kind"],
+            ),
+        ),
+        ToolSpec(
+            "set_gap",
+            "Set the pause before a shot. Omit gap_seconds to hand it back to the scene default.",
+            _schema({"shot_id": shot_id, "gap_seconds": _n("Seconds")}, ["shot_id"]),
+        ),
+        ToolSpec(
+            "build_montage",
+            "Cut a run of shots into a montage: short, evenly timed, no gaps. Only the rhythm changes — what each shot is stays as it was.",
+            _schema(
+                {
+                    "scene_id": scene_id,
+                    "shot_ids": _list_s("Shots to include, in order"),
+                    "shot_seconds": _n("Length of each; 1.2 if omitted"),
+                },
+                ["scene_id", "shot_ids"],
+            ),
+        ),
+        ToolSpec(
+            "add_opening",
+            "Add a shot at the very front of the film that fades in.",
+            _schema({"title": _s("Title"), "duration_seconds": _n("Duration")}),
+        ),
+        ToolSpec(
+            "add_ending",
+            "Add a shot at the very end of the film that fades out.",
+            _schema({"title": _s("Title"), "duration_seconds": _n("Duration")}),
+        ),
+        ToolSpec(
+            "insert_broll",
+            "Insert a short cutaway after a shot, in the same location.",
+            _schema(
+                {
+                    "after_shot_id": _s("Shot to cut away from"),
+                    "title": _s("Title"),
+                    "duration_seconds": _n("Duration"),
+                    "prompt": _s("What the cutaway shows"),
+                },
+                ["after_shot_id"],
+            ),
+        ),
+        ToolSpec(
+            "align_durations",
+            "Give every shot in a scene the same length.",
+            _schema({"scene_id": scene_id, "duration_seconds": _n("Length")}, ["scene_id", "duration_seconds"]),
+        ),
+        ToolSpec(
+            "normalize_timeline",
+            "Tidy the whole film: consistent gaps, contiguous ordering, durations clamped into range. Deliberately conservative — it does not reshape how long shots run.",
+            _schema({"gap_seconds": _n("Gap between shots within a scene")}),
+        ),
+        ToolSpec(
+            "undo_timeline_edit",
+            "Undo the last timeline edit, putting the film back exactly as it was.",
+            _schema({}),
+        ),
         ToolSpec(
             "capture_shot",
             "Report the shot's capture state. Rendering a new capture needs the Shot Composer viewport (GPU/WebGL), which the director cannot drive; tell the user to press Capture there.",
@@ -568,12 +685,14 @@ class FilmDirectorHandler(StateHandlerBase):
         lock: RLock,
         film_handler: FilmHandler,
         film_generation_handler: FilmGenerationHandler,
+        timeline_handler: TimelineHandler,
         http: HTTPClient,
         video_processor: VideoProcessor | None = None,
     ) -> None:
         super().__init__(state, lock)
         self._film = film_handler
         self._film_generation = film_generation_handler
+        self._timeline = timeline_handler
         self._http = http
         self._video_processor = video_processor
         self._openrouter_models_cache: tuple[int, list[OpenRouterModel]] | None = None
@@ -631,6 +750,22 @@ class FilmDirectorHandler(StateHandlerBase):
             "update_keyframe": self._cmd_update_keyframe,
             "delete_keyframe": self._cmd_delete_keyframe,
             "capture_shot": self._cmd_capture_shot,
+            "split_shot": self._timeline_command("split_shot"),
+            "trim_shot": self._timeline_command("trim_shot"),
+            "ripple_trim": self._timeline_command("ripple_trim"),
+            "move_shot": self._timeline_command("move_shot"),
+            "insert_shot": self._timeline_command("insert_shot"),
+            "replace_shot": self._timeline_command("replace_shot"),
+            "replace_with_version": self._timeline_command("replace_with_version"),
+            "set_transition": self._timeline_command("set_transition"),
+            "set_gap": self._timeline_command("set_gap"),
+            "build_montage": self._timeline_command("build_montage"),
+            "add_opening": self._timeline_command("add_opening"),
+            "add_ending": self._timeline_command("add_ending"),
+            "insert_broll": self._timeline_command("insert_broll"),
+            "align_durations": self._timeline_command("align_durations"),
+            "normalize_timeline": self._timeline_command("normalize_timeline"),
+            "undo_timeline_edit": self._cmd_undo_timeline,
         }
         missing = {spec.name for spec in _TOOL_SPECS} ^ set(self._commands)
         assert not missing, f"tool specs and command registry differ: {missing}"
@@ -1931,6 +2066,30 @@ class FilmDirectorHandler(StateHandlerBase):
         obj.keyframes = [k for k in obj.keyframes if k.id != keyframe.id]
         self._save_composition(project_id, scene_id, shot_id, composition)
         return {"deleted": keyframe.id, "target": obj.name, "count": len(obj.keyframes)}
+
+    def _timeline_command(self, action: str) -> Callable[[str, dict[str, object]], object]:
+        """A director command that runs one timeline action.
+
+        Everything goes through `TimelineHandler.apply`, so a model's edit is
+        snapshotted, recorded and undoable exactly like a person's — and is
+        marked as the director's in the history.
+        """
+
+        def run(project_id: str, params: dict[str, object]) -> object:
+            record = self._timeline.apply(project_id, action, params, actor="director")
+            return {
+                "action": record.action,
+                "summary": record.summary,
+                "affected_shot_ids": record.affected_shot_ids,
+                "undoable": True,
+            }
+
+        return run
+
+    def _cmd_undo_timeline(self, project_id: str, params: dict[str, object]) -> object:
+        del params
+        record = self._timeline.undo(project_id)
+        return {"undone": record.action, "summary": record.summary}
 
     def _cmd_capture_shot(self, project_id: str, params: dict[str, object]) -> object:
         _, shot_id = self._find_shot(project_id, params)

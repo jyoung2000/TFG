@@ -13,6 +13,7 @@ import type { FilmProject, FilmQueue, QueuedJob } from '../../frontend/types/fil
 import type { VideoAnalysis } from '../../frontend/types/video-analysis'
 import type { KnowledgeEvent, LearningSettings } from '../../frontend/types/knowledge'
 import type { LibraryShot } from '../../frontend/types/shot-library'
+import type { DirectorAction } from '../../frontend/types/timeline'
 import type { AppSettings, ClearableKeyProvider } from '../../frontend/types/settings'
 import type { LibraryDownloadStatus } from '../../frontend/types/models'
 import { DEMO_PROJECT_ID, emptyProject, seedProject, seedSettings } from './seed'
@@ -37,6 +38,11 @@ export interface MockGeneration {
   duration_ms: number
 }
 
+/** One recorded timeline edit plus the project as it was before it. */
+export interface StoredTimelineAction extends DirectorAction {
+  snapshot: FilmProject | null
+}
+
 export interface MockState {
   projects: Record<string, FilmProject>
   /** Video analyses, keyed by id. */
@@ -57,6 +63,8 @@ export interface MockState {
   learning: LearningSettings
   /** The cross-project shot library: copies, not references. */
   shotLibrary: LibraryShot[]
+  /** Timeline edit history per project, each carrying its undo snapshot. */
+  timelineHistory: Record<string, StoredTimelineAction[]>
 }
 
 export const EMPTY_LIBRARY_DOWNLOAD: LibraryDownloadStatus = {
@@ -101,6 +109,7 @@ export function freshState(): MockState {
       project.scenes.flatMap(scene => scene.shots).find(shot => shot.versions.length > 0) ?? null,
       project.name,
     ),
+    timelineHistory: {},
     learning: { enabled: true, generation: true, approval: true, editing: true, feedback: true },
   }
 }

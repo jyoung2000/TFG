@@ -197,6 +197,19 @@ class CompositionObject(BaseModel):
     fov: float | None = None
 
 
+#: How one shot gives way to the next. "cut" is the absence of a transition and
+#: costs nothing; the rest take time out of the shots either side.
+TransitionKind = Literal["cut", "dissolve", "fade_in", "fade_out", "wipe", "dip_to_black"]
+
+
+class ShotTransition(BaseModel):
+    """How a shot begins or ends on the timeline."""
+
+    kind: TransitionKind = "cut"
+    #: Seconds. Ignored for a cut, which is instantaneous by definition.
+    duration_seconds: float = 0.5
+
+
 class ShotFraming(BaseModel):
     shot_size: ShotSize = "medium"
     camera_angle: CameraAngle = "front"
@@ -331,6 +344,10 @@ class FilmShot(BaseModel):
     duration_seconds: float = 4.0
     # Overrides the scene/project inter-shot gap before this shot on the timeline.
     gap_before_seconds: float | None = None
+    # How this shot begins and ends. A cut is the default and costs nothing;
+    # anything else takes time out of the shots either side.
+    transition_in: ShotTransition = Field(default_factory=ShotTransition)
+    transition_out: ShotTransition = Field(default_factory=ShotTransition)
 
     framing: ShotFraming = Field(default_factory=ShotFraming)
     camera_move: CameraMove = "static"
