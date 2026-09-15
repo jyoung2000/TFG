@@ -228,6 +228,41 @@ try {
   })
   log('Shot edits persist in the mock backend', renamed.json.title === 'Renamed by the verifier')
 
+  // ---- 11b. Analyse Video: the reverse flow, end to end ----
+  // Reload rather than navigating back: the app starts on Home, which makes
+  // this step independent of wherever the previous one left off.
+  await page.reload({ waitUntil: 'domcontentloaded' })
+  await page.waitForTimeout(4000)
+  log('Home offers Analyse video as an entry point', await page.getByText('Analyse video').first().isVisible())
+  await page.getByRole('button', { name: /Analyse a video|Analyse video/ }).first().click()
+  await page.waitForTimeout(1500)
+  log('The Analyse Video workspace opens', await page.getByRole('button', { name: 'Import a video' }).isVisible())
+  await snap('07-analyze')
+
+  const reverse = await page.evaluate(async () => {
+    const post = async (path, body) =>
+      (await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}) })).json()
+    const analysis = await post('/api/video-analysis/import', { path: '/movies/ref.mp4', title: 'Reference' })
+    const detected = await post(`/api/video-analysis/${analysis.id}/detect`)
+    const analysed = await post(`/api/video-analysis/${analysis.id}/analyze`, {})
+    const project = await post(`/api/video-analysis/${analysis.id}/reconstruct`, {})
+    return {
+      shots: detected.shots.length,
+      measuredBeforeModel: detected.shots[0].visual.confidence === 0,
+      stage: analysed.stage,
+      prompt: analysed.shots[0].prompts.video,
+      projectShots: project.scenes[0].shots.length,
+      lineage: project.scenes[0].shots[0].source_ref?.kind,
+    }
+  })
+  log('A video is split into shots', reverse.shots > 1, `${reverse.shots} shots`)
+  log('Inference stays empty until a model runs', reverse.measuredBeforeModel)
+  log('Analysis derives a prompt per shot', reverse.stage === 'complete' && reverse.prompt.length > 0)
+  log(
+    'The analysis becomes a real project with lineage to the source',
+    reverse.projectShots === reverse.shots && reverse.lineage === 'video_analysis',
+  )
+
   // ---- 12. Nothing broke along the way ----
   log('No page errors', pageErrors.length === 0, pageErrors.slice(0, 2).join(' | '))
   log('No failed same-origin requests', failedRequests.length === 0, failedRequests.slice(0, 3).join(' | '))

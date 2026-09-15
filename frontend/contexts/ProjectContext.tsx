@@ -42,6 +42,8 @@ interface ProjectContextType {
   goHome: () => void
   openPlayground: () => void
   openQuickMode: () => void
+  /** Analyse an existing video into an editable storyboard. */
+  openAnalyzeVideo: () => void
   
   // Cross-view communication (editor → gen space)
   genSpaceEditImageUrl: string | null
@@ -505,6 +507,11 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
     setCurrentProjectId(null)
     setCurrentView('quick')
   }, [])
+
+  const openAnalyzeVideo = useCallback(() => {
+    setCurrentProjectId(null)
+    setCurrentView('analyze')
+  }, [])
   
   return (
     <ProjectContext.Provider value={{
@@ -537,6 +544,7 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
       goHome,
       openPlayground,
       openQuickMode,
+      openAnalyzeVideo,
       genSpaceEditImageUrl,
       setGenSpaceEditImageUrl,
       genSpaceEditMode,

@@ -10,6 +10,7 @@
  */
 
 import type { FilmProject, FilmQueue, QueuedJob } from '../../frontend/types/film'
+import type { VideoAnalysis } from '../../frontend/types/video-analysis'
 import type { AppSettings, ClearableKeyProvider } from '../../frontend/types/settings'
 import type { LibraryDownloadStatus } from '../../frontend/types/models'
 import { DEMO_PROJECT_ID, emptyProject, seedProject, seedSettings } from './seed'
@@ -34,6 +35,8 @@ export interface MockGeneration {
 
 export interface MockState {
   projects: Record<string, FilmProject>
+  /** Video analyses, keyed by id. */
+  analyses: Record<string, VideoAnalysis>
   settings: AppSettings
   /** Stored secrets. Never serialized into a response — only `has*` flags are. */
   keys: Record<ClearableKeyProvider, string>
@@ -65,6 +68,7 @@ export function freshState(): MockState {
   const project = seedProject()
   return {
     projects: { [project.id]: project },
+    analyses: {},
     settings: seedSettings(),
     keys: {
       ltx: '',
@@ -147,7 +151,9 @@ export class Store {
         const parsed = JSON.parse(raw) as MockState
         // Stored state from an older shape would break the UI in confusing
         // ways; a missing project map is the cheapest reliable signal.
-        if (parsed && typeof parsed === 'object' && parsed.projects) return parsed
+        if (parsed && typeof parsed === 'object' && parsed.projects) {
+          return { ...freshState(), ...parsed, analyses: parsed.analyses ?? {} }
+        }
       }
     } catch {
       // No state yet, or it is unreadable — seed instead.

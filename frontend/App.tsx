@@ -12,6 +12,7 @@ import { Home } from './views/Home'
 import { Project } from './views/Project'
 import { Playground } from './views/Playground'
 import { QuickMode } from './views/QuickMode'
+import { AnalyzeVideo } from './views/AnalyzeVideo'
 import { LaunchGate } from './components/FirstRunSetup'
 import { PythonSetup } from './components/PythonSetup'
 import { SettingsModal, type SettingsTabId } from './components/SettingsModal'
@@ -435,6 +436,8 @@ function AppContent() {
         return <Playground />
       case 'quick':
         return <QuickMode />
+      case 'analyze':
+        return <AnalyzeVideo />
       default:
         return <Home />
     }
