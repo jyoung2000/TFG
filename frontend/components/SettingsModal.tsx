@@ -1,4 +1,4 @@
-import { AlertCircle, Boxes, Brain, Check, Download, Film, Folder, Info, KeyRound, Settings, Sliders, Sparkles, X, Zap } from 'lucide-react'
+import { AlertCircle, Boxes, Brain, Check, Library, Download, Film, Folder, Info, KeyRound, Settings, Sliders, Sparkles, X, Zap } from 'lucide-react'
 import React, { useEffect, useRef, useState } from 'react'
 import { Button } from './ui/button'
 import { useAppSettings, type AppSettings } from '../contexts/AppSettingsContext'
@@ -7,6 +7,7 @@ import { logger } from '../lib/logger'
 import { ApiKeyHelperRow, LtxApiKeyInput, LtxApiKeyHelperRow } from './LtxApiKeyInput'
 import { AiModelsSettings } from './AiModelsSettings'
 import { KnowledgeSettings } from './KnowledgeSettings'
+import { ShotLibraryPanel } from '../views/film/ShotLibraryPanel'
 
 interface TextEncoderStatus {
   downloaded: boolean
@@ -20,7 +21,7 @@ interface SettingsModalProps {
   initialTab?: TabId
 }
 
-type TabId = 'general' | 'aiModels' | 'knowledge' | 'apiKeys' | 'inference' | 'promptEnhancer' | 'about'
+type TabId = 'general' | 'aiModels' | 'knowledge' | 'shotLibrary' | 'apiKeys' | 'inference' | 'promptEnhancer' | 'about'
 
 export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProps) {
   const { settings, updateSettings, saveLtxApiKey, saveFalApiKey, forceApiGenerations } = useAppSettings()
@@ -277,6 +278,7 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
     { id: 'general' as TabId, label: 'General', icon: Settings },
     { id: 'aiModels' as TabId, label: 'AI Models', icon: Boxes },
     { id: 'knowledge' as TabId, label: 'Knowledge', icon: Brain },
+    { id: 'shotLibrary' as TabId, label: 'Shot Library', icon: Library },
     { id: 'apiKeys' as TabId, label: 'API Keys', icon: KeyRound },
     { id: 'inference' as TabId, label: 'Inference', icon: Sliders },
     { id: 'promptEnhancer' as TabId, label: 'Prompt Enhancer', icon: Sparkles },
@@ -899,6 +901,8 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
           {activeTab === 'aiModels' && <AiModelsSettings />}
 
           {activeTab === 'knowledge' && <KnowledgeSettings />}
+
+          {activeTab === 'shotLibrary' && <ShotLibraryPanel />}
 
           {activeTab === 'inference' && (
             <>

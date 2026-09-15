@@ -6,7 +6,7 @@
   "gates": {
     "backend_tests": {
       "status": "PASS",
-      "evidence": "565 passed (pytest, mock-free)"
+      "evidence": "590 passed (pytest, mock-free)"
     },
     "frontend_tests": {
       "status": "PASS",
@@ -22,7 +22,7 @@
     },
     "e2e_ui_only": {
       "status": "PASS",
-      "evidence": "verify-ui-only.mjs 55/55 on the dev server and on the standalone file"
+      "evidence": "verify-ui-only.mjs 69/69 on the dev server and on the standalone file"
     },
     "e2e_electron": {
       "status": "PASS",
@@ -153,14 +153,14 @@
     {
       "id": "shot_library",
       "name": "Cross-project shot library",
-      "status": "NOT_IMPLEMENTED",
-      "implementation": "none",
-      "persistence": "none",
-      "ui": "none",
-      "test": "none",
-      "e2e": "none",
-      "evidence": "grep 'shot_library|ShotLibrary': 0 occurrences",
-      "blocker": "Section 18 not started"
+      "status": "PASS",
+      "implementation": "film/shot_library_models.py, film/shot_library_store.py (JSON index + copied previews, atomic write), handlers/shot_library_handler.py (save/apply/search/curate/archive/restore/delete), _routes/shot_library.py",
+      "persistence": "<outputs>/shot_library/library.json + previews/ \u2014 outside any project, survives restart; every item is a copy (settings snapshotted, preview file copied) so it outlives the take, shot and project it came from",
+      "ui": "Settings -> Shot Library (search, tag filters with counts, favourites, archived shelf, sort, preview, rating, lineage, edit/duplicate/archive/restore/delete); 'Save to Shot Library' in the storyboard shot drawer; ShotLibraryPicker adds an item as a new shot in a scene",
+      "test": "tests/test_shot_library.py \u2014 25 tests, led by the survival cases: an entry still resolves and serves its preview after its source take is deleted and after the source project's directory is removed. Plus tag normalisation, apply copying rather than linking, search, all-tags filtering, favourites first, partial editing, duplication copying the preview, archive/restore, permanent delete removing the preview, and a fresh handler reading it all back",
+      "e2e": "verify-ui-only.mjs 14 shot-library steps, PASS on the dev server and on the standalone file",
+      "evidence": "Saved from one scene and applied into another; search and all-tags filtering found it; a rating edit left the notes intact; archiving removed it from the default listing and restore brought it back; deleting a duplicate returned 404 on the next read",
+      "blocker": ""
     },
     {
       "id": "version_deletion",
@@ -236,11 +236,11 @@
     }
   ],
   "summary": {
-    "pass": 11,
+    "pass": 12,
     "blocked_environment": 2,
-    "not_implemented": 2,
+    "not_implemented": 1,
     "fail": 0
   },
   "final_status": "NOT PRODUCTION READY",
-  "final_status_reason": "Two product-critical capabilities from the brief are not implemented: AI timeline editing and the cross-project shot library. The PF2 knowledge engine, the model-specific prompt compiler and per-version deletion now ship complete (implementation, persistence, UI, tests, e2e)."
+  "final_status_reason": "One product-critical capability from the brief is not implemented: AI timeline editing. The PF2 knowledge engine, the model-specific prompt compiler, per-version deletion and the cross-project shot library now ship complete (implementation, persistence, UI, tests, e2e)."
 }

@@ -5,6 +5,7 @@ import {
   Check,
   CheckCircle2,
   Film,
+  Library,
   Loader2,
   RefreshCw,
   Sparkles,
@@ -17,6 +18,7 @@ import {
 import { useAppSettings } from '../../contexts/AppSettingsContext'
 import { useFilm } from '../../contexts/FilmContext'
 import { filmApi, filmMediaUrl, filmOutputUrl } from '../../lib/film-api'
+import { shotLibraryApi } from '../../lib/shot-library-api'
 import { useUiMode } from '../../lib/ui-mode'
 import { Button } from '../../components/ui/button'
 import { CompiledPrompts } from '../../components/CompiledPrompts'
@@ -271,6 +273,27 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
       setBusy(null)
     }
   }, [projectId, scene.id, shot.id, refresh])
+
+  const saveToLibrary = useCallback(async () => {
+    if (!projectId) return
+    const title = window.prompt('Name this library item', shot.title || 'Untitled shot')
+    if (title === null) return
+    setBusy('library')
+    try {
+      // The library copies: the preview is duplicated into its own directory,
+      // so this entry keeps working after the take or the project is gone.
+      const saved = await shotLibraryApi.save({ project_id: projectId, shot_id: shot.id, title })
+      setRefineNote(
+        saved.preview_kind === 'none'
+          ? 'Saved to the Shot Library (no preview — render a take first for one)'
+          : 'Saved to the Shot Library',
+      )
+    } catch (e) {
+      setRefineNote(`Save failed: ${e instanceof Error ? e.message : e}`)
+    } finally {
+      setBusy(null)
+    }
+  }, [projectId, shot.id, shot.title])
 
   const unlockPrompt = useCallback(async () => {
     if (!projectId) return
@@ -544,6 +567,16 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
             {busy === 'save' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
             Save shot
           </Button>
+
+          <button
+            onClick={() => void saveToLibrary()}
+            disabled={busy !== null}
+            className="flex w-full items-center justify-center gap-1.5 rounded bg-zinc-800 px-2 py-1.5 text-[11px] text-zinc-300 hover:bg-zinc-700 disabled:opacity-40"
+            title="Keep this shot in the cross-project library — a copy, usable in any film"
+          >
+            {busy === 'library' ? <Loader2 className="h-3 w-3 animate-spin" /> : <Library className="h-3 w-3" />}
+            Save to Shot Library
+          </button>
 
           {/* The same shot, written the way each model this project can reach
               wants to hear it. The prompt above is what the host renders; this

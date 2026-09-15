@@ -45,7 +45,7 @@ page.on('requestfailed', r => {
 })
 // Some steps deliberately provoke a 4xx to prove the backend refuses bad input.
 // Those are the assertion, not a broken URL, so they are named here.
-const EXPECTED_REFUSALS = ['/api/knowledge/import', '/api/prompts/compile', '/versions/']
+const EXPECTED_REFUSALS = ['/api/knowledge/import', '/api/prompts/compile', '/versions/', '/api/shot-library/']
 page.on('response', r => {
   if (r.status() < 400 || !sameOrigin(r.url())) return
   if (EXPECTED_REFUSALS.some(path => r.url().includes(path))) return
@@ -345,6 +345,66 @@ try {
     'The record survives as a tombstone with what produced it',
     takes.tombstone.status === 'deleted' && takes.tombstone.output_path === '' && takes.tombstone.prompt.length > 0,
   )
+
+  // ---- 10c. The cross-project shot library ----
+  await page.evaluate(() => window.dispatchEvent(new CustomEvent('open-settings', { detail: { tab: 'shotLibrary' } })))
+  await page.waitForTimeout(1800)
+  log('Settings → Shot Library opens', await page.getByRole('heading', { name: 'Shot Library' }).isVisible())
+  log('The library shows what was saved', await page.getByText('Console close-up, torchlight').first().isVisible())
+  await snap('06c-shot-library')
+  await page.keyboard.press('Escape')
+  await page.waitForTimeout(600)
+
+  const shotLibrary = await page.evaluate(async () => {
+    const call = async (path, init) => {
+      const res = await fetch(path, { headers: { 'Content-Type': 'application/json' }, ...init })
+      return { status: res.status, body: await res.json().catch(() => null) }
+    }
+    // Save a shot from one film.
+    const saved = await call('/api/shot-library', {
+      method: 'POST',
+      body: JSON.stringify({
+        project_id: 'ui-mock-film', shot_id: 'shot-1-1',
+        title: 'Verifier item', tags: ['Night', ' night ', 'wide'], rating: 3,
+      }),
+    })
+    const id = saved.body.id
+
+    // Use it in a different one.
+    const applied = await call(`/api/shot-library/${id}/apply`, {
+      method: 'POST',
+      body: JSON.stringify({ project_id: 'ui-mock-film', scene_id: 'scene-2' }),
+    })
+
+    const search = await call('/api/shot-library?q=verifier')
+    const byTag = await call('/api/shot-library?tags=night&tags=wide')
+    const duplicated = await call(`/api/shot-library/${id}/duplicate`, { method: 'POST' })
+    const partial = await call(`/api/shot-library/${id}`, { method: 'PUT', body: JSON.stringify({ notes: 'kept' }) })
+    const ratingOnly = await call(`/api/shot-library/${id}`, { method: 'PUT', body: JSON.stringify({ rating: 5 }) })
+    await call(`/api/shot-library/${id}/archive`, { method: 'POST' })
+    const hidden = await call('/api/shot-library?q=verifier')
+    const shelved = await call('/api/shot-library?archived=true')
+    const restored = await call(`/api/shot-library/${id}/restore`, { method: 'POST' })
+    const removed = await call(`/api/shot-library/${duplicated.body.id}`, { method: 'DELETE' })
+    const gone = await call(`/api/shot-library/${duplicated.body.id}`)
+    return { saved, id, applied, search, byTag, duplicated, partial, ratingOnly, hidden, shelved, restored, removed, gone }
+  })
+
+  log('A shot can be saved to the library', shotLibrary.saved.status === 200 && shotLibrary.saved.body.title === 'Verifier item')
+  log('Tags are normalised on the way in', JSON.stringify(shotLibrary.saved.body.tags) === JSON.stringify(['night', 'wide']))
+  log('A library item can be used in another scene', shotLibrary.applied.status === 200 && shotLibrary.applied.body.title === 'Verifier item')
+  log('The applied prompt is locked, so synthesis does not undo it', shotLibrary.applied.body.prompt_locked === true)
+  log('Free-text search finds it', shotLibrary.search.body.items.some(i => i.id === shotLibrary.id))
+  log('Tag filtering requires all the tags, not any', shotLibrary.byTag.body.items.some(i => i.id === shotLibrary.id))
+  log('An item can be duplicated', shotLibrary.duplicated.status === 200 && shotLibrary.duplicated.body.id !== shotLibrary.id)
+  log(
+    'Editing only changes what was sent',
+    shotLibrary.ratingOnly.body.rating === 5 && shotLibrary.ratingOnly.body.notes === 'kept' && shotLibrary.ratingOnly.body.title === 'Verifier item',
+  )
+  log('Archiving hides it from the default listing', !shotLibrary.hidden.body.items.some(i => i.id === shotLibrary.id))
+  log('Archived items are on their own shelf', shotLibrary.shelved.body.items.some(i => i.id === shotLibrary.id))
+  log('Restoring brings it back', shotLibrary.restored.body.archived === false)
+  log('Deleting is permanent', shotLibrary.removed.status === 200 && shotLibrary.gone.status === 404)
 
   // ---- 11. Editing round-trips through the mock ----
   const renamed = await api('/api/film/projects/ui-mock-film/scenes/scene-1/shots/shot-1-1', {

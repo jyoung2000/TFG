@@ -12,10 +12,12 @@
 import type { FilmProject, FilmQueue, QueuedJob } from '../../frontend/types/film'
 import type { VideoAnalysis } from '../../frontend/types/video-analysis'
 import type { KnowledgeEvent, LearningSettings } from '../../frontend/types/knowledge'
+import type { LibraryShot } from '../../frontend/types/shot-library'
 import type { AppSettings, ClearableKeyProvider } from '../../frontend/types/settings'
 import type { LibraryDownloadStatus } from '../../frontend/types/models'
 import { DEMO_PROJECT_ID, emptyProject, seedProject, seedSettings } from './seed'
 import { seedKnowledge } from './routes/knowledge'
+import { seedShotLibrary } from './routes/shot-library'
 
 /** One simulated render, advanced by wall-clock time rather than a timer. */
 export interface MockJob extends QueuedJob {
@@ -53,6 +55,8 @@ export interface MockState {
   /** The knowledge engine's event log. Observations are derived, not stored. */
   knowledge: KnowledgeEvent[]
   learning: LearningSettings
+  /** The cross-project shot library: copies, not references. */
+  shotLibrary: LibraryShot[]
 }
 
 export const EMPTY_LIBRARY_DOWNLOAD: LibraryDownloadStatus = {
@@ -93,6 +97,10 @@ export function freshState(): MockState {
     generation: null,
     downloadedModels: ['checkpoint', 'text_encoder'],
     knowledge: seedKnowledge(),
+    shotLibrary: seedShotLibrary(
+      project.scenes.flatMap(scene => scene.shots).find(shot => shot.versions.length > 0) ?? null,
+      project.name,
+    ),
     learning: { enabled: true, generation: true, approval: true, editing: true, feedback: true },
   }
 }

@@ -18,6 +18,7 @@ from _routes.film import router as film_router
 from _routes.film_director import router as film_director_router
 from _routes.knowledge import router as knowledge_router
 from _routes.prompts import router as prompts_router
+from _routes.shot_library import router as shot_library_router
 from _routes.video_analysis import router as video_analysis_router
 from _routes.film_generation import router as film_generation_router
 from _routes.generation import router as generation_router
@@ -137,5 +138,6 @@ def create_app(
     app.include_router(video_analysis_router)
     app.include_router(knowledge_router)
     app.include_router(prompts_router)
+    app.include_router(shot_library_router)
 
     return app

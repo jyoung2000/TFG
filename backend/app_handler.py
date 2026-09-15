@@ -18,6 +18,7 @@ from handlers import (
     ImageGenerationHandler,
     KnowledgeHandler,
     PromptHandler,
+    ShotLibraryHandler,
     ModelsHandler,
     PipelinesHandler,
     SuggestGapPromptHandler,
@@ -271,6 +272,13 @@ class AppHandler:
             probe=media_probe,
             task_runner=task_runner,
             film_store=self.film.store,
+        )
+
+        self.shot_library = ShotLibraryHandler(
+            state=self.state,
+            lock=self._lock,
+            root=config.outputs_dir / "shot_library",
+            film_handler=self.film,
         )
 
         self.prompts = PromptHandler(
