@@ -78,6 +78,7 @@ def test_state(tmp_path: Path, fake_services: FakeServices):
         model_downloader=fake_services.model_downloader,
         gpu_info=fake_services.gpu_info,
         video_processor=fake_services.video_processor,
+        media_probe=fake_services.media_probe,
         text_encoder=fake_services.text_encoder,
         task_runner=fake_services.task_runner,
         ltx_api_client=fake_services.ltx_api_client,

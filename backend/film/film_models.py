@@ -297,6 +297,22 @@ class ShotVersion(BaseModel):
     created_at: int = Field(default_factory=now_ms)
 
 
+class ShotSourceRef(BaseModel):
+    """Where a shot came from, when it was not authored from scratch.
+
+    Set on shots reconstructed by analysing a video, so the storyboard can link
+    back to the exact span of the source and the evidence behind its prompt.
+    Optional and defaulted, so projects written before this existed still load.
+    """
+
+    kind: Literal["", "video_analysis"] = ""
+    analysis_id: str = ""
+    analysis_shot_id: str = ""
+    source_path: str = ""
+    start: float = 0.0
+    end: float = 0.0
+
+
 class FilmShot(BaseModel):
     id: str = Field(default_factory=lambda: new_id("shot"))
     order: int = 0
@@ -316,6 +332,9 @@ class FilmShot(BaseModel):
     action: str = ""
     dialogue: str = ""
     emotion: str = ""
+
+    #: Lineage back to an analysed video, when this shot was reconstructed.
+    source_ref: ShotSourceRef | None = None
 
     visual_prompt: str = ""
     negative_prompt: str = ""

@@ -23,11 +23,13 @@ from handlers import (
     RuntimePolicyHandler,
     SettingsHandler,
     TextHandler,
+    VideoAnalysisHandler,
     VideoGenerationHandler,
 )
 from film.media_runner import MediaRunner
 from runtime_config.runtime_config import RuntimeConfig
 from services.wangp_bridge import WanGPBridge
+from services.media_probe import MediaProbe
 from services.interfaces import (
     A2VPipeline,
     FastVideoPipeline,
@@ -60,6 +62,7 @@ class AppHandler:
         model_downloader: ModelDownloader,
         gpu_info: GpuInfo,
         video_processor: VideoProcessor,
+        media_probe: MediaProbe,
         text_encoder: TextEncoder,
         task_runner: TaskRunner,
         ltx_api_client: LTXAPIClient,
@@ -79,6 +82,7 @@ class AppHandler:
         self.model_downloader = model_downloader
         self.gpu_info = gpu_info
         self.video_processor = video_processor
+        self.media_probe = media_probe
         self.task_runner = task_runner
         self.ltx_api_client = ltx_api_client
         self.zit_api_client = zit_api_client
@@ -252,6 +256,15 @@ class AppHandler:
             film_root=config.outputs_dir / "film_projects",
         )
 
+        self.video_analysis = VideoAnalysisHandler(
+            state=self.state,
+            lock=self._lock,
+            root=config.outputs_dir / "video_analyses",
+            probe=media_probe,
+            task_runner=task_runner,
+            film_store=self.film.store,
+        )
+
         self.film_generation = FilmGenerationHandler(
             state=self.state,
             lock=self._lock,
@@ -288,6 +301,7 @@ class ServiceBundle:
     model_downloader: ModelDownloader
     gpu_info: GpuInfo
     video_processor: VideoProcessor
+    media_probe: MediaProbe
     text_encoder: TextEncoder
     task_runner: TaskRunner
     ltx_api_client: LTXAPIClient
@@ -316,6 +330,7 @@ def build_default_service_bundle(config: RuntimeConfig) -> ServiceBundle:
     from services.retake_pipeline.ltx_retake_pipeline import LTXRetakePipeline
     from services.task_runner.threading_runner import ThreadingRunner
     from services.text_encoder.ltx_text_encoder import LTXTextEncoder
+    from services.media_probe.media_probe_impl import MediaProbeImpl
     from services.video_processor.video_processor_impl import VideoProcessorImpl
 
     http = HTTPClientImpl()
@@ -326,6 +341,7 @@ def build_default_service_bundle(config: RuntimeConfig) -> ServiceBundle:
         model_downloader=HuggingFaceDownloader(),
         gpu_info=GpuInfoImpl(),
         video_processor=VideoProcessorImpl(),
+        media_probe=MediaProbeImpl(),
         text_encoder=LTXTextEncoder(
             device=config.device,
             http=http,
@@ -358,6 +374,7 @@ def build_initial_state(
         model_downloader=bundle.model_downloader,
         gpu_info=bundle.gpu_info,
         video_processor=bundle.video_processor,
+        media_probe=bundle.media_probe,
         text_encoder=bundle.text_encoder,
         task_runner=bundle.task_runner,
         ltx_api_client=bundle.ltx_api_client,

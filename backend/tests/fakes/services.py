@@ -11,6 +11,7 @@ from PIL import Image
 from api_types import ImageConditioningInput, VideoCameraMotion
 from services.interfaces import IcLoraDownloadPayload, IcLoraModelPayload, VideoInfoPayload
 from services.ltx_api_client.ltx_api_client import LTXRetakeResult
+from services.media_probe.fake_media_probe import FakeMediaProbe
 from tests.fakes.fake_gpu_info import FakeGpuInfo
 
 
@@ -750,6 +751,7 @@ class FakeServices:
     model_downloader: FakeModelDownloader = field(default_factory=FakeModelDownloader)
     gpu_info: FakeGpuInfo = field(default_factory=FakeGpuInfo)
     video_processor: FakeVideoProcessor = field(default_factory=FakeVideoProcessor)
+    media_probe: FakeMediaProbe = field(default_factory=FakeMediaProbe)
     text_encoder: FakeTextEncoder = field(default_factory=FakeTextEncoder)
     task_runner: FakeTaskRunner = field(default_factory=FakeTaskRunner)
     ltx_api_client: FakeLTXAPIClient = field(default_factory=FakeLTXAPIClient)

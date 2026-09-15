@@ -16,6 +16,7 @@ from handlers.text_handler import TextHandler
 from handlers.film_director_handler import FilmDirectorHandler
 from handlers.film_generation_handler import FilmGenerationHandler
 from handlers.film_handler import FilmHandler
+from handlers.video_analysis_handler import VideoAnalysisHandler
 from handlers.video_generation_handler import VideoGenerationHandler
 
 __all__ = [
@@ -26,6 +27,7 @@ __all__ = [
     "TextHandler",
     "PipelinesHandler",
     "GenerationHandler",
+    "VideoAnalysisHandler",
     "VideoGenerationHandler",
     "FilmHandler",
     "FilmGenerationHandler",

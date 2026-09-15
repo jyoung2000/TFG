@@ -814,6 +814,18 @@ class FilmDirectorHandler(StateHandlerBase):
                 return candidate
         return "none"
 
+    def optional_provider(self, role: str) -> LLMProvider | None:
+        """The provider for a role, or None when nothing is configured.
+
+        Callers that can degrade gracefully — video analysis falls back to a
+        deterministic pass — use this instead of `_provider`, which raises so
+        the chat surfaces can tell the user exactly which key is missing.
+        """
+        try:
+            return self._provider(role)
+        except HTTPError:
+            return None
+
     def _provider(self, role: str) -> LLMProvider:
         with self.lock:
             settings = self.state.app_settings.model_copy(deep=True)
