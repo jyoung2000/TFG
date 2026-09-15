@@ -89,6 +89,7 @@ Docs: [Filmmaking overview](docs/FILMMAKING.md) ·
 [Shot Composer](docs/SHOT_COMPOSER.md) ·
 [AI Director](docs/AI_DIRECTOR.md) ·
 [AI providers & Model Library](docs/AI_PROVIDERS.md) ·
+[Analyse Video](docs/VIDEO_ANALYSIS.md) ·
 [UI-only dev mode](docs/UI_ONLY_MODE.md) ·
 [OpenRouter](docs/OPENROUTER.md) ·
 [Generation Pipeline](docs/GENERATION_PIPELINE.md) ·
