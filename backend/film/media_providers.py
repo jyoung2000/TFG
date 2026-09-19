@@ -12,8 +12,11 @@ generation queue drives it with one loop regardless of vendor.
 
 from __future__ import annotations
 
+import base64
+import binascii
 from dataclasses import dataclass, replace
 from typing import Literal, cast
+from urllib.parse import unquote_to_bytes
 
 from pydantic import BaseModel, Field, ValidationError
 
@@ -22,6 +25,13 @@ from services.interfaces import HTTPClient, HttpResponseLike, HttpTimeoutError, 
 
 MediaTask = Literal["video", "image"]
 JobState = Literal["queued", "running", "complete", "failed"]
+
+# WaveSpeed's documented ceiling for an uploaded media file.
+MAX_UPLOAD_BYTES = 200 * 1024 * 1024
+
+# A conditioning frame is megabytes of base64; the 60s default is an upload
+# timeout on any ordinary home uplink, not a provider problem.
+IMAGE_SUBMIT_TIMEOUT_SECONDS = 300
 
 FAL_QUEUE_URL = "https://queue.fal.run"
 WAVESPEED_BASE_URL = "https://api.wavespeed.ai/api/v3"
@@ -166,6 +176,20 @@ def _decode_json(response: HttpResponseLike, provider: str) -> object:
         raise HTTPError(502, f"{provider} returned a non-JSON response ({_describe_body(response)})") from exc
 
 
+def _decode_data_url(data_url: str) -> tuple[bytes, str]:
+    """Split a ``data:`` URL into its bytes and media type."""
+    header, _, encoded = data_url.partition(",")
+    if not encoded or not header.startswith("data:"):
+        raise HTTPError(400, "The reference frame is not a valid data URL")
+    content_type = header[len("data:") :].split(";")[0] or "application/octet-stream"
+    if ";base64" not in header:
+        return unquote_to_bytes(encoded), content_type
+    try:
+        return base64.b64decode(encoded, validate=True), content_type
+    except (binascii.Error, ValueError) as exc:
+        raise HTTPError(400, "The reference frame is not valid base64") from exc
+
+
 def _first_url(value: object) -> str:
     """Pull a media URL out of the many shapes providers return."""
     if isinstance(value, str) and value.startswith("http"):
@@ -206,6 +230,16 @@ class MediaProvider:
     def discover(self, task: MediaTask | None = None) -> list[MediaModel]:
         """Models from the provider's own API; empty when it publishes none."""
         return []
+
+    def upload(self, data_url: str) -> str:
+        """Resolve a conditioning image to whatever this provider's submit
+        payload can carry.
+
+        fal and Replicate both accept a ``data:`` URL inline, so the default is
+        to hand it straight back and make no extra request. WaveSpeed takes
+        URLs only and overrides this.
+        """
+        return data_url
 
     # -- shared -----------------------------------------------------------
 
@@ -357,8 +391,67 @@ class _WaveSpeedEnvelope(BaseModel):
     data: _WaveSpeedData = Field(default_factory=_WaveSpeedData)
 
 
+class _WaveSpeedUploadTarget(BaseModel):
+    url: str = ""
+    method: str = "PUT"
+    headers: dict[str, str] = Field(default_factory=dict)
+
+
+class _WaveSpeedUploadData(BaseModel):
+    download_url: str = ""
+    upload: _WaveSpeedUploadTarget = Field(default_factory=_WaveSpeedUploadTarget)
+
+
+class _WaveSpeedUploadEnvelope(BaseModel):
+    code: int = 200
+    message: str = ""
+    data: _WaveSpeedUploadData = Field(default_factory=_WaveSpeedUploadData)
+
+
 class WaveSpeedProvider(MediaProvider):
     name = "wavespeed"
+
+    def upload(self, data_url: str) -> str:
+        """WaveSpeed takes image inputs as URLs only, never as a ``data:``
+        URI — its own first-party integrations upload first and pass the
+        resulting link. Ask for a ticket, PUT the bytes at it, and hand back
+        the stable ``download_url`` (files are kept 7 days).
+        """
+        if not data_url.startswith("data:"):
+            return data_url
+        blob, content_type = _decode_data_url(data_url)
+        if len(blob) > MAX_UPLOAD_BYTES:
+            raise HTTPError(
+                413,
+                f"WAVESPEED_IMAGE_TOO_LARGE: the reference frame is "
+                f"{len(blob) // (1024 * 1024)} MB; WaveSpeed accepts up to "
+                f"{MAX_UPLOAD_BYTES // (1024 * 1024)} MB",
+            )
+        suffix = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp"}.get(content_type, "")
+        raw = self._post(
+            f"{WAVESPEED_BASE_URL}/media/uploads",
+            {"filename": f"reference{suffix}", "size": len(blob), "content_type": content_type},
+            timeout=IMAGE_SUBMIT_TIMEOUT_SECONDS,
+        )
+        try:
+            envelope = _WaveSpeedUploadEnvelope.model_validate(raw)
+        except ValidationError as exc:
+            raise HTTPError(502, "WaveSpeed returned an unexpected upload payload") from exc
+        if envelope.code >= 400:
+            raise HTTPError(502, f"WaveSpeed refused the upload: {envelope.message[:200]}")
+        target = envelope.data.upload
+        if not target.url or not envelope.data.download_url:
+            raise HTTPError(502, "WaveSpeed did not return an upload target")
+        headers = {"Content-Type": content_type, **target.headers}
+        try:
+            response = self._http.put(target.url, data=blob, headers=headers, timeout=IMAGE_SUBMIT_TIMEOUT_SECONDS)
+        except HttpTimeoutError as exc:
+            raise HTTPError(504, "Uploading the reference frame to WaveSpeed timed out") from exc
+        except Exception as exc:  # noqa: BLE001 - network shapes vary by client
+            raise HTTPError(502, f"Could not upload the reference frame to WaveSpeed: {exc}") from exc
+        if not 200 <= response.status_code < 300:
+            raise HTTPError(502, f"WaveSpeed rejected the reference frame upload ({response.status_code})")
+        return envelope.data.download_url
 
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}

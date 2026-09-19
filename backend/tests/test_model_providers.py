@@ -708,3 +708,98 @@ class TestHostedPreSubmitCancellation:
         assert version["status"] == "cancelled", "a cancel before the submit must be honoured"
         submits_after = len([c for c in http.calls if c.url.startswith("https://queue.fal.run")])
         assert submits_after == submits_before, "nothing may be submitted after the cancel"
+
+
+class TestConditioningImageDelivery:
+    """fal and Replicate take a data: URI inline. WaveSpeed takes URLs only —
+    its own first-party integrations upload the bytes and pass the resulting
+    link — so every WaveSpeed image-to-video render used to fail.
+    """
+
+    def _runner(self, fake_services) -> MediaRunner:
+        return MediaRunner(fake_services.http, poll_interval_seconds=0, sleep=lambda _seconds: None)
+
+    def _data_url(self) -> str:
+        return f"data:image/png;base64,{base64.b64encode(_png_bytes()).decode('ascii')}"
+
+    def test_wavespeed_uploads_then_submits_a_url(self, fake_services):
+        http = fake_services.http
+        data_url = self._data_url()
+        http.queue(
+            "post",
+            FakeResponse(
+                status_code=200,
+                json_payload={
+                    "code": 200,
+                    "data": {
+                        "download_url": "https://media.wavespeed.ai/ref.png",
+                        "upload": {"url": "https://upload.wavespeed.ai/signed", "method": "PUT", "headers": {"x-amz-acl": "private"}},
+                    },
+                },
+            ),
+        )
+        http.queue("put", FakeResponse(status_code=200))
+        http.queue("post", FakeResponse(status_code=200, json_payload={"code": 200, "data": {"id": "w1", "urls": {"get": "https://ws/get"}}}))
+        http.queue("get", FakeResponse(status_code=200, json_payload={"data": {"status": "completed", "outputs": ["https://cdn/w.mp4"]}}))
+        http.queue("get", FakeResponse(status_code=200, content=b"ws-mp4"))
+
+        phases: list[str] = []
+        result = self._runner(fake_services).run(
+            provider="wavespeed",
+            api_key=FAKE_KEY,
+            spec=MediaSpec(model="wavespeed-ai/wan-2.2/i2v-480p", prompt="a city", image_data_url=data_url),
+            on_progress=lambda percent, phase: phases.append(phase),
+        )
+        assert result.status == "complete" and result.content == b"ws-mp4"
+        assert any("Uploading the reference frame" in phase for phase in phases)
+
+        ticket = next(c for c in http.calls if c.url.endswith("/media/uploads"))
+        assert (ticket.json_payload or {})["size"] == len(_png_bytes())
+        assert (ticket.json_payload or {})["content_type"] == "image/png"
+        assert ticket.headers is not None and ticket.headers["Authorization"] == f"Bearer {FAKE_KEY}"
+
+        put = next(c for c in http.calls if c.method == "put")
+        assert put.url == "https://upload.wavespeed.ai/signed"
+        assert put.data == _png_bytes(), "the raw bytes go to the signed target, not base64"
+        assert put.headers is not None and put.headers["x-amz-acl"] == "private"
+
+        submit = next(c for c in http.calls if c.method == "post" and "wan-2.2" in c.url)
+        assert (submit.json_payload or {})["image"] == "https://media.wavespeed.ai/ref.png"
+        assert not str((submit.json_payload or {})["image"]).startswith("data:")
+
+    def test_fal_passes_the_data_url_through_with_no_extra_request(self, fake_services):
+        http = fake_services.http
+        data_url = self._data_url()
+        http.queue("post", FakeResponse(status_code=200, json_payload={"request_id": "r", "status_url": "https://q/s", "response_url": "https://q/r"}))
+        http.queue("get", FakeResponse(status_code=200, json_payload={"status": "COMPLETED"}))
+        http.queue("get", FakeResponse(status_code=200, json_payload={"video": {"url": "https://cdn/a.mp4"}}))
+        http.queue("get", FakeResponse(status_code=200, content=b"fal-mp4"))
+        result = self._runner(fake_services).run(
+            provider="fal",
+            api_key=FAKE_KEY,
+            spec=MediaSpec(model="fal-ai/ltx-video", prompt="p", image_data_url=data_url),
+        )
+        assert result.status == "complete"
+        assert not any(call.method == "put" for call in http.calls), "fal needs no upload"
+        submit = next(c for c in http.calls if c.url.startswith("https://queue.fal.run"))
+        assert str((submit.json_payload or {})["image_url"]).startswith("data:")
+
+    def test_replicate_passes_the_data_url_through_with_no_extra_request(self, fake_services):
+        http = fake_services.http
+        http.queue("post", FakeResponse(status_code=200, json_payload={"id": "p1", "status": "starting", "urls": {"get": "https://r/p1"}}))
+        provider = ReplicateProvider(http, FAKE_KEY)
+        provider.submit(MediaSpec(model="lightricks/ltx-video", prompt="dunes", image_data_url=self._data_url()))
+        assert not any(call.method == "put" for call in http.calls)
+        assert str((http.calls[-1].json_payload or {})["input"]["image"]).startswith("data:")
+
+    def test_an_oversized_reference_frame_is_a_clear_error(self, fake_services):
+        from film.media_providers import MAX_UPLOAD_BYTES
+
+        oversized = base64.b64encode(b"\x00" * (MAX_UPLOAD_BYTES + 1)).decode("ascii")
+        result = self._runner(fake_services).run(
+            provider="wavespeed",
+            api_key=FAKE_KEY,
+            spec=MediaSpec(model="wavespeed-ai/wan-2.2/i2v-480p", prompt="p", image_data_url=f"data:image/png;base64,{oversized}"),
+        )
+        assert result.status == "failed"
+        assert "WAVESPEED_IMAGE_TOO_LARGE" in result.error and FAKE_KEY not in result.error

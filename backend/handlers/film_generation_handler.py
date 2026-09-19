@@ -141,9 +141,13 @@ def _wangp_task(architecture: str) -> str:
 
 
 def _image_data_url(path: str | None) -> str:
-    """A local conditioning image as a data: URL, which every hosted provider
-    accepts in place of a public URL — nothing of the user's is uploaded to a
-    file host first."""
+    """A local conditioning image as a data: URL.
+
+    fal and Replicate accept this inline, so for them nothing of the user's is
+    uploaded to a file host first. WaveSpeed takes image inputs as URLs only —
+    ``WaveSpeedProvider.upload`` turns this back into bytes and puts them on
+    WaveSpeed's own media store (kept 7 days) before the job is submitted.
+    """
     if not path:
         return ""
     try:

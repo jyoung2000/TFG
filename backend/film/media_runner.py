@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 
 from _routes._errors import HTTPError
@@ -69,6 +69,14 @@ class MediaRunner:
             )
         try:
             client = media_provider(provider, self._http, api_key)
+            if spec.image_data_url:
+                # Vendor-agnostic here: the base implementation hands the data
+                # URL straight back, and only a provider that needs a real URL
+                # (WaveSpeed) actually uploads anything.
+                on_progress(1, "Uploading the reference frame")
+                resolved = client.upload(spec.image_data_url)
+                if resolved != spec.image_data_url:
+                    spec = replace(spec, image_data_url=resolved)
             on_progress(2, f"Submitting to {provider}")
             job = client.submit(spec)
         except HTTPError as exc:
