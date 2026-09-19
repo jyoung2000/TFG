@@ -774,7 +774,7 @@ class FilmGenerationHandler(StateHandlerBase):
         else:
             api_key = settings.media_api_key(provider)
             if not api_key:
-                raise HTTPError(400, f"{provider.upper()}_KEY_MISSING: add the {provider} API key in Settings → API Keys")
+                raise HTTPError(400, f"{provider.upper()}_KEY_MISSING: add the {provider} API key in Settings → AI Models")
             runner = self._media_runner
             if runner is None:  # pragma: no cover - wired in AppHandler
                 raise HTTPError(500, "Hosted generation is not available in this build")
@@ -877,7 +877,7 @@ class FilmGenerationHandler(StateHandlerBase):
         if not api_key:
             return _HostedOutcome(
                 status="failed",
-                error=f"{provider.upper()}_KEY_MISSING: add the {provider} API key in Settings → API Keys, or switch this project back to local generation.",
+                error=f"{provider.upper()}_KEY_MISSING: add the {provider} API key in Settings → AI Models, or switch this project back to local generation.",
             )
 
         spec = MediaSpec(

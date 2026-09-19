@@ -986,3 +986,76 @@ class TestProviderModelMismatch:
         version = client.get(f"/api/film/projects/{PROJECT}").json()["project"]["scenes"][0]["shots"][0]["versions"][0]
         assert version["status"] == "failed" and "MEDIA_MODEL_PROVIDER_MISMATCH" in version["error"]
         assert len(test_state.http.calls) == calls_before
+
+
+class TestQuickWins:
+    def test_a_whitespace_only_key_does_not_count_as_configured(self, client):
+        """Settings claimed a key was present while generation failed
+        KEY_MISSING, because four of the six flags skipped .strip()."""
+        for camel, flag in (
+            ("ltxApiKey", "hasLtxApiKey"),
+            ("falApiKey", "hasFalApiKey"),
+            ("geminiApiKey", "hasGeminiApiKey"),
+            ("openaiCompatibleApiKey", "hasOpenaiCompatibleApiKey"),
+            ("wavespeedApiKey", "hasWavespeedApiKey"),
+            ("replicateApiKey", "hasReplicateApiKey"),
+        ):
+            assert client.post("/api/settings", json={camel: "   "}).status_code == 200
+            assert client.get("/api/settings").json()[flag] is False, flag
+
+    def test_remembered_model_ids_survive_a_restart(self, client, test_state):
+        client.post("/api/settings", json={"falApiKey": FAKE_KEY})
+        test_state.model_library.remember("fal", "fal-ai/some-new-model")
+        # The settings file is the only thing that outlives the process.
+        saved = json.loads(test_state.settings._settings_file.read_text(encoding="utf-8"))
+        assert "fal:fal-ai/some-new-model" in saved["recent_model_ids"]
+
+    def test_an_unknown_status_keeps_a_live_job_running(self, fake_services):
+        """A vendor adding a status ("queueing") must not fail a job that is
+        still rendering - and still being billed for."""
+        http = fake_services.http
+        http.queue("post", FakeResponse(status_code=200, json_payload={"request_id": "r", "status_url": "https://q/s", "response_url": "https://q/r"}))
+        provider = FalProvider(http, FAKE_KEY)
+        job = provider.submit(MediaSpec(model="fal-ai/ltx-video", prompt="p"))
+        http.queue("get", FakeResponse(status_code=200, json_payload={"status": "QUEUEING"}))
+        status = provider.poll(job)
+        assert status.state == "running"
+        assert status.unknown_status == "QUEUEING"
+
+    def test_an_explicitly_terminal_status_still_fails(self, fake_services):
+        http = fake_services.http
+        http.queue("post", FakeResponse(status_code=200, json_payload={"request_id": "r", "status_url": "https://q/s"}))
+        provider = FalProvider(http, FAKE_KEY)
+        job = provider.submit(MediaSpec(model="fal-ai/ltx-video", prompt="p"))
+        http.queue("get", FakeResponse(status_code=200, json_payload={"status": "FAILED", "error": "nsfw"}))
+        assert provider.poll(job).state == "failed"
+
+    def test_endless_unknown_statuses_are_given_up_on(self, fake_services):
+        from film.media_runner import MAX_CONSECUTIVE_UNKNOWN_STATUSES
+
+        http = fake_services.http
+        http.queue("post", FakeResponse(status_code=200, json_payload={"request_id": "r", "status_url": "https://q/s"}))
+        for _ in range(MAX_CONSECUTIVE_UNKNOWN_STATUSES + 2):
+            http.queue("get", FakeResponse(status_code=200, json_payload={"status": "WAT"}))
+        result = MediaRunner(http, poll_interval_seconds=0, sleep=lambda _s: None).run(
+            provider="fal", api_key=FAKE_KEY, spec=MediaSpec(model="m", prompt="p")
+        )
+        assert result.status == "failed" and "unrecognised status" in result.error
+
+    def test_a_recovered_status_resets_the_unknown_streak(self, fake_services):
+        from film.media_runner import MAX_CONSECUTIVE_UNKNOWN_STATUSES
+
+        http = fake_services.http
+        http.queue("post", FakeResponse(status_code=200, json_payload={"request_id": "r", "status_url": "https://q/s", "response_url": "https://q/r"}))
+        for _ in range(MAX_CONSECUTIVE_UNKNOWN_STATUSES):
+            http.queue("get", FakeResponse(status_code=200, json_payload={"status": "WAT"}))
+        http.queue("get", FakeResponse(status_code=200, json_payload={"status": "IN_PROGRESS"}))
+        for _ in range(MAX_CONSECUTIVE_UNKNOWN_STATUSES):
+            http.queue("get", FakeResponse(status_code=200, json_payload={"status": "WAT"}))
+        http.queue("get", FakeResponse(status_code=200, json_payload={"status": "COMPLETED"}))
+        http.queue("get", FakeResponse(status_code=200, json_payload={"video": {"url": "https://cdn/a.mp4"}}))
+        http.queue("get", FakeResponse(status_code=200, content=b"mp4"))
+        result = MediaRunner(http, poll_interval_seconds=0, sleep=lambda _s: None).run(
+            provider="fal", api_key=FAKE_KEY, spec=MediaSpec(model="m", prompt="p")
+        )
+        assert result.status == "complete"

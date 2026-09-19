@@ -97,6 +97,11 @@ class MediaJobStatus:
     output_url: str = ""
     error: str = ""
     queue_position: int | None = None
+    # Set when the vendor reported a status this adapter does not recognise.
+    # Reported as "running" so a newly introduced status ("starting",
+    # "queueing", ...) cannot fail a live job mid-render while the bill keeps
+    # running; MediaRunner gives up after a bounded number in a row.
+    unknown_status: str = ""
 
 
 # Example model ids per provider. These are starting points for the Model
@@ -171,6 +176,21 @@ def _fail(provider: str, status_code: int, text: str) -> None:
     if status_code == 429:
         raise HTTPError(429, f"{label}_RATE_LIMITED: rate limit hit, retry shortly")
     raise HTTPError(502 if status_code >= 500 else status_code, f"{provider} API error ({status_code}): {detail}")
+
+
+# Statuses that mean the job is over and produced nothing. Anything outside
+# this set is assumed to still be in flight rather than dead.
+_TERMINAL_FAILURE_STATUSES = frozenset(
+    {
+        "failed", "failure", "error", "errored", "cancelled", "canceled",
+        "timeout", "timed_out", "rejected", "aborted", "expired", "killed",
+        "content_moderated", "nsfw",
+    }
+)
+
+
+def _is_terminal_failure(status: str) -> bool:
+    return status.strip().lower().replace("-", "_") in _TERMINAL_FAILURE_STATUSES
 
 
 def _payload_dict(raw: object, provider: str) -> dict[str, object]:
@@ -416,6 +436,8 @@ class FalProvider(MediaProvider):
             if not url:
                 return MediaJobStatus(state="failed", error="fal finished without returning a file URL")
             return MediaJobStatus(state="complete", output_url=url)
+        if not _is_terminal_failure(state):
+            return MediaJobStatus(state="running", unknown_status=state)
         error = str(raw.get("error", "") or raw.get("detail", "") or state or "unknown status")
         return MediaJobStatus(state="failed", error=f"fal job failed: {error}"[:300])
 
@@ -561,6 +583,8 @@ class WaveSpeedProvider(MediaProvider):
             if not url:
                 return MediaJobStatus(state="failed", error="WaveSpeed finished without returning a file URL")
             return MediaJobStatus(state="complete", output_url=url)
+        if not _is_terminal_failure(status):
+            return MediaJobStatus(state="running", unknown_status=status)
         return MediaJobStatus(state="failed", error=f"WaveSpeed job failed: {envelope.data.error or status}"[:300])
 
 
@@ -669,6 +693,8 @@ class ReplicateProvider(MediaProvider):
             if not url:
                 return MediaJobStatus(state="failed", error="Replicate finished without returning a file URL")
             return MediaJobStatus(state="complete", output_url=url)
+        if not _is_terminal_failure(status):
+            return MediaJobStatus(state="running", unknown_status=status)
         return MediaJobStatus(state="failed", error=f"Replicate job {status}: {parsed.error or 'no reason given'}"[:300])
 
     def discover(self, task: MediaTask | None = None) -> list[MediaModel]:

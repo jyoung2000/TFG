@@ -20,11 +20,13 @@ export function ErrorNotice({
   const raw = error instanceof Error ? error.message : String(error)
   const action = () => {
     if (friendly.action === 'open-api-keys') requestSettings('apiKeys')
+    else if (friendly.action === 'open-ai-models') requestSettings('aiModels')
     else if (friendly.action === 'open-models') onOpenModels?.()
     else if (friendly.action === 'retry') onRetry?.()
   }
   const showAction =
     (friendly.action === 'open-api-keys') ||
+    (friendly.action === 'open-ai-models') ||
     (friendly.action === 'open-models' && !!onOpenModels) ||
     (friendly.action === 'retry' && !!onRetry)
   return (

@@ -83,11 +83,11 @@ export function GenerationErrorDialog({ error, onDismiss }: GenerationErrorDialo
 
         {/* Footer */}
         <div className="px-6 py-4 border-t border-zinc-800 flex justify-end gap-2">
-          {friendly.action === 'open-api-keys' && (
+          {(friendly.action === 'open-api-keys' || friendly.action === 'open-ai-models') && (
             <button
               onClick={() => {
                 onDismiss()
-                requestSettings('apiKeys')
+                requestSettings(friendly.action === 'open-ai-models' ? 'aiModels' : 'apiKeys')
               }}
               className="px-4 py-2 bg-zinc-800 text-zinc-100 text-sm font-medium rounded-lg hover:bg-zinc-700 transition-colors"
             >

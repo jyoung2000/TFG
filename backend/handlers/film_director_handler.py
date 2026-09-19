@@ -117,7 +117,7 @@ logger = logging.getLogger(__name__)
 _MAX_TOOL_STEPS = 12
 _OPENROUTER_MODELS_TTL_MS = 10 * 60 * 1000
 _KEY_MISSING = (
-    "AI_DIRECTOR_KEY_MISSING: connect a text model in Settings → API Keys — an OpenRouter, "
+    "AI_DIRECTOR_KEY_MISSING: connect a text model in Settings → AI Models — an OpenRouter, "
     "Claude, Grok or Gemini key, or a local OpenAI-compatible server for a fully offline "
     "director (or set the OPENROUTER_API_KEY environment variable)"
 )
@@ -836,7 +836,7 @@ class FilmDirectorHandler(StateHandlerBase):
         if settings.director_provider != "auto" and not configured.get(settings.director_provider, False):
             label = self._PROVIDER_LABELS.get(settings.director_provider, settings.director_provider)
             message = (
-                f"{label} is selected but not configured — add its key in Settings → API Keys, "
+                f"{label} is selected but not configured — add its key in Settings → AI Models, "
                 "or switch the provider."
             )
         elif active == "none":
@@ -992,7 +992,7 @@ class FilmDirectorHandler(StateHandlerBase):
         if selected == "xai":
             raise HTTPError(400, "XAI_KEY_MISSING: Grok is selected but no key is configured")
         if selected == "openai_compatible":
-            raise HTTPError(400, "OPENAI_COMPATIBLE_NOT_CONFIGURED: set the endpoint base URL and model in Settings → API Keys")
+            raise HTTPError(400, "OPENAI_COMPATIBLE_NOT_CONFIGURED: set the endpoint base URL and model in Settings → AI Models")
         raise HTTPError(400, _KEY_MISSING)
 
     @staticmethod

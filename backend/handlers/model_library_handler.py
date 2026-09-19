@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from threading import RLock
@@ -117,6 +118,7 @@ class ModelLibraryHandler(StateHandlerBase):
         gpu_info: GpuInfo,
         task_runner: TaskRunner,
         model_downloader: ModelDownloader,
+        save_settings: Callable[[], None] | None = None,
     ) -> None:
         super().__init__(state, lock)
         self._config = config
@@ -125,6 +127,7 @@ class ModelLibraryHandler(StateHandlerBase):
         self._gpu_info = gpu_info
         self._task_runner = task_runner
         self._downloader = model_downloader
+        self._save_settings = save_settings
         self._cache: dict[str, tuple[int, list[LibraryModel]]] = {}
         self._download: _Download | None = None
 
@@ -542,6 +545,10 @@ class ModelLibraryHandler(StateHandlerBase):
             settings = self.state.app_settings
             remaining = [item for item in settings.recent_model_ids if item != entry]
             settings.recent_model_ids = [entry, *remaining][:40]
+        # Outside the lock: the list is only useful if it survives a restart,
+        # and writing the file is IO.
+        if self._save_settings is not None:
+            self._save_settings()
 
     # ---- provider connection tests ---------------------------------------
 

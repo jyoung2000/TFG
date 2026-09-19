@@ -102,7 +102,11 @@ def test_logger_exception_usage_is_restricted_to_boundaries() -> None:
     }
 
     for path in backend_dir.rglob("*.py"):
-        if "tests" in path.parts or ".venv" in path.parts:
+        # Any virtualenv name, not just ".venv" exactly - otherwise a venv
+        # called ".venv313" makes this walk site-packages and fail spuriously.
+        if "tests" in path.parts or any(
+            part.startswith(".venv") or part == "site-packages" for part in path.parts
+        ):
             continue
         content = path.read_text(encoding="utf-8")
         if "logger.exception(" in content:

@@ -221,6 +221,7 @@ class AppHandler:
             gpu_info=gpu_info,
             task_runner=task_runner,
             model_downloader=model_downloader,
+            save_settings=self.settings.save_settings,
         )
 
         self.runtime_policy = RuntimePolicyHandler(config=config)

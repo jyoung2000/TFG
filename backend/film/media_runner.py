@@ -25,6 +25,10 @@ logger = logging.getLogger(__name__)
 
 RunStatus = Literal["complete", "failed", "cancelled"]
 
+# How many polls in a row may report a status the adapter does not recognise
+# before the job is given up on.
+MAX_CONSECUTIVE_UNKNOWN_STATUSES = 10
+
 
 @dataclass(slots=True)
 class MediaRunResult:
@@ -83,6 +87,7 @@ class MediaRunner:
             return MediaRunResult(status="failed", error=str(exc.detail), seconds=time.perf_counter() - started)
 
         polls = 0
+        unknown_streak = 0
         while True:
             if is_cancelled():
                 return MediaRunResult(status="cancelled", error="Cancelled", seconds=time.perf_counter() - started)
@@ -100,6 +105,19 @@ class MediaRunner:
                 break
             if status.state == "failed":
                 return MediaRunResult(status="failed", error=status.error, seconds=time.perf_counter() - started)
+            if status.unknown_status:
+                # A status this adapter does not know is assumed to mean "still
+                # going", so a vendor adding one cannot fail live jobs. It must
+                # not mean "poll forever", though.
+                unknown_streak += 1
+                if unknown_streak > MAX_CONSECUTIVE_UNKNOWN_STATUSES:
+                    return MediaRunResult(
+                        status="failed",
+                        error=f"{provider} kept reporting an unrecognised status ('{status.unknown_status}')",
+                        seconds=time.perf_counter() - started,
+                    )
+            else:
+                unknown_streak = 0
             polls += 1
             # No real progress signal from these APIs: report a slow ramp that
             # never claims to be finished, plus the provider's own queue phase.
