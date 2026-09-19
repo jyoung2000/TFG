@@ -15,7 +15,16 @@ from pathlib import Path
 from PIL import Image
 
 from film.llm_providers import ANTHROPIC_BASE_URL, XAI_BASE_URL
-from film.media_providers import FalProvider, MediaSpec, ReplicateProvider, WaveSpeedProvider
+from _routes._errors import HTTPError
+from film.media_providers import (
+    DEFAULT_SUBMIT_TIMEOUT_SECONDS,
+    IMAGE_SUBMIT_TIMEOUT_SECONDS,
+    FalProvider,
+    MediaSpec,
+    ReplicateProvider,
+    WaveSpeedProvider,
+)
+from services.interfaces import HttpTimeoutError
 from film.media_runner import MediaRunner, suffix_for
 from tests.fakes import FakeResponse
 
@@ -803,3 +812,55 @@ class TestConditioningImageDelivery:
         )
         assert result.status == "failed"
         assert "WAVESPEED_IMAGE_TOO_LARGE" in result.error and FAKE_KEY not in result.error
+
+
+class TestSubmitTimeouts:
+    """A conditioning frame rides inside the submit body as base64. The 60s
+    default is an upload timeout on an ordinary home uplink, and the resulting
+    504 gave no hint that image size was the cause."""
+
+    def _data_url(self) -> str:
+        return f"data:image/png;base64,{base64.b64encode(_png_bytes()).decode('ascii')}"
+
+    def test_text_only_submit_keeps_the_short_timeout(self, fake_services):
+        http = fake_services.http
+        http.queue("post", FakeResponse(status_code=200, json_payload={"request_id": "r", "status_url": "https://q/s"}))
+        FalProvider(http, FAKE_KEY).submit(MediaSpec(model="fal-ai/ltx-video", prompt="p"))
+        assert http.calls[-1].timeout == DEFAULT_SUBMIT_TIMEOUT_SECONDS
+
+    def test_image_submit_gets_the_long_timeout(self, fake_services):
+        http = fake_services.http
+        http.queue("post", FakeResponse(status_code=200, json_payload={"request_id": "r", "status_url": "https://q/s"}))
+        FalProvider(http, FAKE_KEY).submit(
+            MediaSpec(model="fal-ai/ltx-video", prompt="p", image_data_url=self._data_url())
+        )
+        assert http.calls[-1].timeout == IMAGE_SUBMIT_TIMEOUT_SECONDS
+
+    def test_replicate_image_submit_gets_the_long_timeout(self, fake_services):
+        http = fake_services.http
+        http.queue("post", FakeResponse(status_code=200, json_payload={"id": "p", "status": "starting", "urls": {"get": "https://r/p"}}))
+        ReplicateProvider(http, FAKE_KEY).submit(
+            MediaSpec(model="lightricks/ltx-video", prompt="p", image_data_url=self._data_url())
+        )
+        assert http.calls[-1].timeout == IMAGE_SUBMIT_TIMEOUT_SECONDS
+
+    def test_a_timeout_with_an_image_attached_says_so(self, fake_services):
+        http = fake_services.http
+        http.queue("post", HttpTimeoutError("too slow"))
+        try:
+            FalProvider(http, FAKE_KEY).submit(
+                MediaSpec(model="fal-ai/ltx-video", prompt="p", image_data_url=self._data_url())
+            )
+            raise AssertionError("expected a 504")
+        except HTTPError as exc:
+            assert exc.status_code == 504
+            assert "reference frame may be too large" in str(exc.detail)
+
+    def test_a_text_only_timeout_does_not_blame_the_image(self, fake_services):
+        http = fake_services.http
+        http.queue("post", HttpTimeoutError("too slow"))
+        try:
+            FalProvider(http, FAKE_KEY).submit(MediaSpec(model="fal-ai/ltx-video", prompt="p"))
+            raise AssertionError("expected a 504")
+        except HTTPError as exc:
+            assert "reference frame" not in str(exc.detail)

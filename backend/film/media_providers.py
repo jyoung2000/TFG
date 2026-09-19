@@ -31,6 +31,7 @@ MAX_UPLOAD_BYTES = 200 * 1024 * 1024
 
 # A conditioning frame is megabytes of base64; the 60s default is an upload
 # timeout on any ordinary home uplink, not a provider problem.
+DEFAULT_SUBMIT_TIMEOUT_SECONDS = 60
 IMAGE_SUBMIT_TIMEOUT_SECONDS = 300
 
 FAL_QUEUE_URL = "https://queue.fal.run"
@@ -176,6 +177,10 @@ def _decode_json(response: HttpResponseLike, provider: str) -> object:
         raise HTTPError(502, f"{provider} returned a non-JSON response ({_describe_body(response)})") from exc
 
 
+def _is_data_url(value: str) -> bool:
+    return value.startswith("data:")
+
+
 def _decode_data_url(data_url: str) -> tuple[bytes, str]:
     """Split a ``data:`` URL into its bytes and media type."""
     header, _, encoded = data_url.partition(",")
@@ -231,6 +236,13 @@ class MediaProvider:
         """Models from the provider's own API; empty when it publishes none."""
         return []
 
+    @staticmethod
+    def _submit_timeout(spec: MediaSpec) -> int:
+        """A conditioning frame rides inside the submit body as base64, and
+        several megabytes over an ordinary home uplink do not finish inside the
+        default. Text-only jobs keep the short timeout."""
+        return IMAGE_SUBMIT_TIMEOUT_SECONDS if _is_data_url(spec.image_data_url) else DEFAULT_SUBMIT_TIMEOUT_SECONDS
+
     def upload(self, data_url: str) -> str:
         """Resolve a conditioning image to whatever this provider's submit
         payload can carry.
@@ -247,12 +259,20 @@ class MediaProvider:
         if not self._api_key:
             raise HTTPError(400, f"{self.name.upper()}_KEY_MISSING: no {self.name} API key configured")
 
-    def _post(self, url: str, payload: dict[str, JSONValue], *, timeout: int = 60) -> dict[str, object]:
+    def _post(
+        self,
+        url: str,
+        payload: dict[str, JSONValue],
+        *,
+        timeout: int = DEFAULT_SUBMIT_TIMEOUT_SECONDS,
+        image_attached: bool = False,
+    ) -> dict[str, object]:
         self._require_key()
         try:
             response = self._http.post(url, headers=self._headers(), json_payload=payload, timeout=timeout)
         except HttpTimeoutError as exc:
-            raise HTTPError(504, f"{self.name} request timed out") from exc
+            hint = " — the reference frame may be too large to upload" if image_attached else ""
+            raise HTTPError(504, f"{self.name} request timed out{hint}") from exc
         except Exception as exc:
             raise HTTPError(502, f"{self.name} unreachable: {exc}") from exc
         _fail(self.name, response.status_code, response.text)
@@ -338,7 +358,12 @@ class FalProvider(MediaProvider):
         return payload
 
     def submit(self, spec: MediaSpec) -> MediaJob:
-        raw = self._post(f"{FAL_QUEUE_URL}/{spec.model.strip('/')}", self._inputs(spec))
+        raw = self._post(
+            f"{FAL_QUEUE_URL}/{spec.model.strip('/')}",
+            self._inputs(spec),
+            timeout=self._submit_timeout(spec),
+            image_attached=_is_data_url(spec.image_data_url),
+        )
         try:
             parsed = _FalSubmit.model_validate(raw)
         except ValidationError as exc:
@@ -475,7 +500,12 @@ class WaveSpeedProvider(MediaProvider):
         return payload
 
     def submit(self, spec: MediaSpec) -> MediaJob:
-        raw = self._post(f"{WAVESPEED_BASE_URL}/{spec.model.strip('/')}", self._inputs(spec))
+        raw = self._post(
+            f"{WAVESPEED_BASE_URL}/{spec.model.strip('/')}",
+            self._inputs(spec),
+            timeout=self._submit_timeout(spec),
+            image_attached=_is_data_url(spec.image_data_url),
+        )
         try:
             envelope = _WaveSpeedEnvelope.model_validate(raw)
         except ValidationError as exc:
@@ -570,11 +600,23 @@ class ReplicateProvider(MediaProvider):
     def submit(self, spec: MediaSpec) -> MediaJob:
         model = spec.model.strip().strip("/")
         inputs = self._inputs(spec)
+        timeout = self._submit_timeout(spec)
+        image_attached = _is_data_url(spec.image_data_url)
         if ":" in model:  # owner/name:version — the pinned-version endpoint
             _, _, version = model.partition(":")
-            raw = self._post(f"{REPLICATE_BASE_URL}/predictions", {"version": version, "input": inputs})
+            raw = self._post(
+                f"{REPLICATE_BASE_URL}/predictions",
+                {"version": version, "input": inputs},
+                timeout=timeout,
+                image_attached=image_attached,
+            )
         else:
-            raw = self._post(f"{REPLICATE_BASE_URL}/models/{model}/predictions", {"input": inputs})
+            raw = self._post(
+                f"{REPLICATE_BASE_URL}/models/{model}/predictions",
+                {"input": inputs},
+                timeout=timeout,
+                image_attached=image_attached,
+            )
         try:
             parsed = _ReplicatePrediction.model_validate(raw)
         except ValidationError as exc:
