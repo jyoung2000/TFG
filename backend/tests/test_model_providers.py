@@ -655,3 +655,56 @@ class TestHostedCancellation:
         with queue.lock:
             assert queue._cancel_active_locked() is True
             assert queue._hosted_cancel is False
+
+
+class TestHostedPreSubmitCancellation:
+    """_prepare_request can decode a whole video to pull the previous shot's
+    last frame. A cancel arriving in that window used to be routed at the local
+    pipeline (the job was not yet marked hosted) and then wiped by the hosted
+    re-initialisation, so the submit went out and the user was billed for a
+    shot they had already cancelled.
+    """
+
+    def _use_fal(self, client) -> None:
+        client.post("/api/settings", json={"falApiKey": FAKE_KEY, "mediaProvider": "fal", "defaultVideoModel": "fal-ai/ltx-video"})
+
+    def test_cancel_during_the_pre_submit_decode_prevents_the_submit(self, client, test_state):
+        self._use_fal(client)
+        scene_id = client.post(f"/api/film/projects/{PROJECT}/scenes", json={"title": "Scene"}).json()["id"]
+        first = client.post(
+            f"/api/film/projects/{PROJECT}/scenes/{scene_id}/shots",
+            json={"title": "First", "description": "opening beat", "duration_seconds": 3},
+        ).json()["id"]
+        second = client.post(
+            f"/api/film/projects/{PROJECT}/scenes/{scene_id}/shots",
+            json={"title": "Second", "description": "next beat", "duration_seconds": 3},
+        ).json()["id"]
+
+        # Render the first shot so the second has a previous frame to continue from.
+        http = test_state.http
+        http.queue("post", FakeResponse(status_code=200, json_payload={"request_id": "r1", "status_url": "https://q/s", "response_url": "https://q/r"}))
+        http.queue("get", FakeResponse(status_code=200, json_payload={"status": "COMPLETED"}))
+        http.queue("get", FakeResponse(status_code=200, json_payload={"video": {"url": "https://cdn/first.mp4"}}))
+        http.queue("get", FakeResponse(status_code=200, content=b"first-mp4"))
+        client.post(f"/api/film/projects/{PROJECT}/scenes/{scene_id}/shots/{first}/generate", json={"kind": "preview"})
+
+        client.put(
+            f"/api/film/projects/{PROJECT}/scenes/{scene_id}/shots/{second}",
+            json={"generation": {"continue_from_previous": True, "use_capture_as_reference": False}},
+        )
+
+        submits_before = len([c for c in http.calls if c.url.startswith("https://queue.fal.run")])
+
+        # The user hits cancel while the previous shot is being decoded.
+        def cancel_mid_decode(_path: str) -> None:
+            test_state.film_generation.cancel_all()
+
+        test_state.video_processor.on_open = cancel_mid_decode
+        client.post(f"/api/film/projects/{PROJECT}/scenes/{scene_id}/shots/{second}/generate", json={"kind": "preview"})
+        test_state.video_processor.on_open = None
+
+        shots = client.get(f"/api/film/projects/{PROJECT}").json()["project"]["scenes"][0]["shots"]
+        version = next(s for s in shots if s["id"] == second)["versions"][0]
+        assert version["status"] == "cancelled", "a cancel before the submit must be honoured"
+        submits_after = len([c for c in http.calls if c.url.startswith("https://queue.fal.run")])
+        assert submits_after == submits_before, "nothing may be submitted after the cancel"

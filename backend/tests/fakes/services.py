@@ -433,12 +433,19 @@ class FakeVideoProcessor:
     def __init__(self) -> None:
         self.videos: dict[str, FakeCapture] = {}
         self.writers: list[FakeWriter] = []
+        # Called with the path just before a capture is handed back, so a test
+        # can act while a decode is in flight - the real one is slow enough for
+        # a user to hit cancel during it.
+        self.on_open: Callable[[str], None] | None = None
 
     def register_video(self, path: str, capture: FakeCapture) -> None:
         self.videos[path] = capture
 
     def open_video(self, path: str) -> FakeCapture:
-        return self.videos.setdefault(path, FakeCapture())
+        capture = self.videos.setdefault(path, FakeCapture())
+        if self.on_open is not None:
+            self.on_open(path)
+        return capture
 
     def get_video_info(self, cap: FakeCapture) -> VideoInfoPayload:
         return {

@@ -257,6 +257,10 @@ class FilmGenerationHandler(StateHandlerBase):
         self._knowledge: KnowledgeHandler | None = None
         # Set while a hosted job runs, so the queue can report and cancel it.
         self._hosted_cancel = False
+        # True from the moment a job is dispatched to a hosted provider until
+        # it finishes, so cancellation knows which path to take even before the
+        # first request goes out.
+        self._hosted_active = False
         self._hosted_progress: tuple[int, str] | None = None
         self._queue: deque[_QueuedShotJob] = deque()
         self._active: _QueuedShotJob | None = None
@@ -628,6 +632,12 @@ class FilmGenerationHandler(StateHandlerBase):
     def _run_job(self, job: _QueuedShotJob) -> None:
         provider, model = self._media_selection(job.project_id)
         if provider != "local":
+            # Mark the job hosted before any slow work. _prepare_request can
+            # decode a whole video to pull the previous shot's last frame, and
+            # a cancel arriving in that window used to be routed at the local
+            # pipeline and then wiped by the old re-initialisation inside
+            # _run_hosted_job.
+            self._begin_hosted(provider)
             self._run_hosted_job(job, provider, model)
             return
         prepared = self._prepare_request(job)
@@ -817,10 +827,12 @@ class FilmGenerationHandler(StateHandlerBase):
         if prepared is None:
             return None
         request, seed = prepared
+        # _prepare_request may have taken a long time; honour a cancel that
+        # arrived during it rather than paying the provider for the submit.
+        if self._hosted_cancelled():
+            return _HostedOutcome(status="cancelled", error="Cancelled")
         with self.lock:
             settings = self.state.app_settings.model_copy(deep=True)
-            self._hosted_cancel = False
-            self._hosted_progress = (0, f"Preparing {provider} job")
         api_key = settings.media_api_key(provider)
         if not api_key:
             return _HostedOutcome(
@@ -864,6 +876,17 @@ class FilmGenerationHandler(StateHandlerBase):
             return _HostedOutcome(status="failed", error=f"Could not save the {provider} result: {exc}")
         return _HostedOutcome(status="complete", output_path=str(target), seed_used=seed)
 
+    def _begin_hosted(self, provider: str) -> None:
+        """Claim the active slot for a hosted render, in one atomic step.
+
+        Marker, cancel flag and first progress phase are set together, so a
+        cancel can never land between them and be lost.
+        """
+        with self.lock:
+            self._hosted_active = True
+            self._hosted_cancel = False
+            self._hosted_progress = (0, f"Preparing {provider} job")
+
     def _cancel_active_locked(self) -> bool:
         """Flag the active job as cancelled. The caller must hold the lock.
 
@@ -871,7 +894,7 @@ class FilmGenerationHandler(StateHandlerBase):
         outside the lock, i.e. when the active job is a local render. Both
         cancel paths share this so they cannot drift apart again.
         """
-        if self._hosted_progress is not None:
+        if self._hosted_active:
             self._hosted_cancel = True
             return False
         return True
@@ -886,6 +909,7 @@ class FilmGenerationHandler(StateHandlerBase):
 
     def _clear_hosted(self) -> None:
         with self.lock:
+            self._hosted_active = False
             self._hosted_progress = None
             self._hosted_cancel = False
 
