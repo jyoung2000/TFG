@@ -58,6 +58,10 @@ class HttpCall:
 class FakeHTTPClient:
     def __init__(self) -> None:
         self.calls: list[HttpCall] = []
+        # Called with (method, url) just before each response is handed back,
+        # so a test can act while a request is in flight - cancelling a running
+        # job, for instance - without patching anything.
+        self.on_request: Callable[[str, str], None] | None = None
         self._queues: dict[str, list[FakeResponse | Exception]] = {
             "post": [],
             "get": [],
@@ -66,6 +70,10 @@ class FakeHTTPClient:
 
     def queue(self, method: str, *items: FakeResponse | Exception) -> None:
         self._queues[method].extend(items)
+
+    def _notify(self, method: str, url: str) -> None:
+        if self.on_request is not None:
+            self.on_request(method, url)
 
     def _dequeue(self, method: str) -> FakeResponse:
         queue = self._queues[method]
@@ -85,7 +93,9 @@ class FakeHTTPClient:
         timeout: int = 30,
     ) -> FakeResponse:
         self.calls.append(HttpCall("post", url, headers, json_payload, data, timeout))
-        return self._dequeue("post")
+        response = self._dequeue("post")
+        self._notify("post", url)
+        return response
 
     def get(
         self,
@@ -94,7 +104,9 @@ class FakeHTTPClient:
         timeout: int = 30,
     ) -> FakeResponse:
         self.calls.append(HttpCall("get", url, headers, None, None, timeout))
-        return self._dequeue("get")
+        response = self._dequeue("get")
+        self._notify("get", url)
+        return response
 
     def put(
         self,
@@ -104,7 +116,9 @@ class FakeHTTPClient:
         timeout: int = 300,
     ) -> FakeResponse:
         self.calls.append(HttpCall("put", url, headers, None, data, timeout))
-        return self._dequeue("put")
+        response = self._dequeue("put")
+        self._notify("put", url)
+        return response
 
 
 class FakeTaskRunner:

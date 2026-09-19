@@ -420,9 +420,14 @@ class FilmGenerationHandler(StateHandlerBase):
         with self.lock:
             drained = list(self._queue)
             self._queue.clear()
+            # Read _active under the lock, and flag a hosted job the same way
+            # cancel_job does - cancel_generation() only reaches the local
+            # pipeline, so a hosted render used to poll on to completion and
+            # bill the user for a shot they had cancelled.
+            cancel_local = self._active is not None and self._cancel_active_locked()
         for job in drained:
             self._finish_version(job, status="cancelled", error="Cancelled before start")
-        if self._active is not None:
+        if cancel_local:
             self._generation.cancel_generation()
         return self.get_queue()
 
@@ -456,10 +461,8 @@ class FilmGenerationHandler(StateHandlerBase):
             self._finish_version(removed, status="cancelled", error="Cancelled before start")
         elif cancel_active:
             with self.lock:
-                hosted = self._hosted_progress is not None
-                if hosted:
-                    self._hosted_cancel = True
-            if not hosted:
+                cancel_local = self._cancel_active_locked()
+            if cancel_local:
                 self._generation.cancel_generation()
         else:
             raise HTTPError(404, "That shot is not queued or generating")
@@ -860,6 +863,18 @@ class FilmGenerationHandler(StateHandlerBase):
         except OSError as exc:
             return _HostedOutcome(status="failed", error=f"Could not save the {provider} result: {exc}")
         return _HostedOutcome(status="complete", output_path=str(target), seed_used=seed)
+
+    def _cancel_active_locked(self) -> bool:
+        """Flag the active job as cancelled. The caller must hold the lock.
+
+        Returns True when the caller still has to call ``cancel_generation()``
+        outside the lock, i.e. when the active job is a local render. Both
+        cancel paths share this so they cannot drift apart again.
+        """
+        if self._hosted_progress is not None:
+            self._hosted_cancel = True
+            return False
+        return True
 
     def _hosted_cancelled(self) -> bool:
         with self.lock:

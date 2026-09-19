@@ -597,3 +597,61 @@ class TestNonJsonProviderResponses:
         assert any(source["id"] == "native" for source in payload["sources"])
         # The curated Replicate examples still show even though discovery failed.
         assert any(model["provider"] == "replicate" for model in payload["models"])
+
+
+class TestHostedCancellation:
+    """cancel_generation() only reaches the local pipeline. A hosted render has
+    to be told through the hosted cancel flag, or it polls on to completion,
+    overwrites the cancelled shot and bills the user for it.
+    """
+
+    def _use_fal(self, client) -> None:
+        client.post("/api/settings", json={"falApiKey": FAKE_KEY, "mediaProvider": "fal", "defaultVideoModel": "fal-ai/ltx-video"})
+
+    def test_cancel_all_stops_a_running_hosted_job(self, client, test_state):
+        self._use_fal(client)
+        scene_id, shot_id = _scene_and_shot(client)
+        http = test_state.http
+        http.queue("post", FakeResponse(status_code=200, json_payload={"request_id": "r", "status_url": "https://q/s", "response_url": "https://q/r"}))
+        # The provider would happily keep running; nothing below should be read.
+        http.queue("get", FakeResponse(status_code=200, json_payload={"status": "IN_PROGRESS"}))
+        http.queue("get", FakeResponse(status_code=200, json_payload={"status": "COMPLETED"}))
+
+        def cancel_once_submitted(method: str, url: str) -> None:
+            if method == "post" and url.startswith("https://queue.fal.run"):
+                test_state.film_generation.cancel_all()
+
+        http.on_request = cancel_once_submitted
+        client.post(f"/api/film/projects/{PROJECT}/scenes/{scene_id}/shots/{shot_id}/generate", json={"kind": "preview"})
+
+        version = client.get(f"/api/film/projects/{PROJECT}").json()["project"]["scenes"][0]["shots"][0]["versions"][0]
+        assert version["status"] == "cancelled", "cancel_all must reach a hosted render"
+        assert not version["output_path"]
+        polls = [call for call in http.calls if call.method == "get" and call.url == "https://q/s"]
+        assert polls == [], "the runner must stop before polling, not download and complete"
+
+    def test_cancel_job_still_stops_a_running_hosted_job(self, client, test_state):
+        """The per-shot path shares _cancel_active_locked with cancel_all."""
+        self._use_fal(client)
+        scene_id, shot_id = _scene_and_shot(client)
+        http = test_state.http
+        http.queue("post", FakeResponse(status_code=200, json_payload={"request_id": "r", "status_url": "https://q/s"}))
+        http.queue("get", FakeResponse(status_code=200, json_payload={"status": "COMPLETED"}))
+
+        def cancel_once_submitted(method: str, url: str) -> None:
+            if method == "post" and url.startswith("https://queue.fal.run"):
+                test_state.film_generation.cancel_job(shot_id)
+
+        http.on_request = cancel_once_submitted
+        client.post(f"/api/film/projects/{PROJECT}/scenes/{scene_id}/shots/{shot_id}/generate", json={"kind": "preview"})
+        version = client.get(f"/api/film/projects/{PROJECT}").json()["project"]["scenes"][0]["shots"][0]["versions"][0]
+        assert version["status"] == "cancelled"
+
+    def test_local_renders_still_route_to_the_local_pipeline(self, test_state):
+        """The shared helper must still send a local job down the local path:
+        with no hosted render in flight it tells the caller to cancel the
+        pipeline, and it does not set the hosted flag."""
+        queue = test_state.film_generation
+        with queue.lock:
+            assert queue._cancel_active_locked() is True
+            assert queue._hosted_cancel is False
