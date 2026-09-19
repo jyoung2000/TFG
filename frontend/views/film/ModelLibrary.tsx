@@ -60,7 +60,7 @@ function StateChip({ model }: { model: LibraryModel }) {
  */
 export function ModelLibrary() {
   const { film, refresh, refreshCapabilities } = useFilm()
-  const { settings, updateSettings, refreshSettings } = useAppSettings()
+  const { settings, updateSettings } = useAppSettings()
   const [query, setQuery] = useState('')
   const [task, setTask] = useState<TaskFilter>('all')
   const [source, setSource] = useState<SourceFilter>('all')
@@ -188,12 +188,16 @@ export function ModelLibrary() {
             ? `${model.task === 'video' ? 'Video' : 'Image'} generation now uses ${model.id} on ${model.provider}`
             : `${model.task === 'video' ? 'Video' : 'Image'} generation stays on this computer`,
         )
-        await refreshSettings()
+        // No refreshSettings() here: updateSettings only sets React state and
+        // the POST behind it is debounced, so a GET now returns the values
+        // from before the patch and setSettings puts them straight back -
+        // after which the debounce re-POSTs the stale ones. The app-settings
+        // update stays last, matching ModelPickers.apply.
       } catch (e) {
         setNote(e instanceof Error ? e.message : String(e))
       }
     },
-    [film, refresh, refreshSettings, settings.openrouterModels, updateSettings],
+    [film, refresh, settings.openrouterModels, updateSettings],
   )
 
   const addCustom = useCallback(async () => {
@@ -204,11 +208,13 @@ export function ModelLibrary() {
       setCustomId('')
       setNote(`${id} added to the library`)
       await load(false)
-      await refreshSettings()
+      // Same hazard: remember() only touches recentModelIds, which this view
+      // does not read and which is stripped from the settings sync anyway, so
+      // re-GETting here could only clobber a patch still waiting on the debounce.
     } catch (e) {
       setNote(e instanceof Error ? e.message : String(e))
     }
-  }, [customId, customProvider, load, refreshSettings])
+  }, [customId, customProvider, load])
 
   const unconfigured = useMemo(
     () => (data?.sources ?? []).filter(s => s.kind === 'hosted' && !s.configured).map(s => s.label),
