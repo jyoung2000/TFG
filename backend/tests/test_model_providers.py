@@ -864,3 +864,40 @@ class TestSubmitTimeouts:
             raise AssertionError("expected a 504")
         except HTTPError as exc:
             assert "reference frame" not in str(exc.detail)
+
+
+class TestHostedRenderRecordsItsModel:
+    """A version is stamped with a local profile id when created, because that
+    is what a local render uses. A hosted render runs a different id entirely,
+    and _finish_version feeds version.model to record_generation — so hosted
+    takes were all filed under "fast"."""
+
+    def test_the_stored_model_is_the_hosted_id(self, client, test_state):
+        client.post(
+            "/api/settings",
+            json={
+                "wavespeedApiKey": FAKE_KEY,
+                "mediaProvider": "wavespeed",
+                "defaultVideoModel": "wavespeed-ai/wan-2.2/t2v-480p",
+            },
+        )
+        scene_id, shot_id = _scene_and_shot(client)
+        http = test_state.http
+        http.queue("post", FakeResponse(status_code=200, json_payload={"code": 200, "data": {"id": "w1", "urls": {"get": "https://ws/get"}}}))
+        http.queue("get", FakeResponse(status_code=200, json_payload={"data": {"status": "completed", "outputs": ["https://cdn/w.mp4"]}}))
+        http.queue("get", FakeResponse(status_code=200, content=b"ws-mp4"))
+        response = client.post(
+            f"/api/film/projects/{PROJECT}/scenes/{scene_id}/shots/{shot_id}/generate", json={"kind": "preview"}
+        )
+        assert response.status_code == 200, response.text
+
+        version = client.get(f"/api/film/projects/{PROJECT}").json()["project"]["scenes"][0]["shots"][0]["versions"][0]
+        assert version["status"] == "complete"
+        assert version["model"] == "wavespeed-ai/wan-2.2/t2v-480p"
+        assert version["model"] not in ("fast", "pro")
+        assert version["execution_mode"] == "wavespeed"
+
+        # The knowledge store learned about the model that actually ran.
+        profiles = client.get("/api/knowledge/models").json()["models"]
+        assert any(profile["model"] == "wavespeed-ai/wan-2.2/t2v-480p" for profile in profiles)
+        assert not any(profile["model"] == "fast" for profile in profiles)

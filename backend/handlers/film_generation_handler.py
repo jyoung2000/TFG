@@ -835,6 +835,8 @@ class FilmGenerationHandler(StateHandlerBase):
         # arrived during it rather than paying the provider for the submit.
         if self._hosted_cancelled():
             return _HostedOutcome(status="cancelled", error="Cancelled")
+        # Record what will actually generate this take, before it runs.
+        self._set_version_model(job, model)
         with self.lock:
             settings = self.state.app_settings.model_copy(deep=True)
         api_key = settings.media_api_key(provider)
@@ -879,6 +881,29 @@ class FilmGenerationHandler(StateHandlerBase):
         except OSError as exc:
             return _HostedOutcome(status="failed", error=f"Could not save the {provider} result: {exc}")
         return _HostedOutcome(status="complete", output_path=str(target), seed_used=seed)
+
+    def _set_version_model(self, job: _QueuedShotJob, model: str) -> None:
+        """Write the model that is really generating this take onto the version.
+
+        The version is stamped with a local profile id ("fast"/"pro") when it is
+        created, because that is what a local render uses. A hosted render runs
+        a completely different id, and _finish_version feeds version.model to
+        record_generation - so without this every hosted take was filed in the
+        knowledge store under a label that does not describe what ran.
+        """
+        if not model:
+            return
+        with self.lock:
+            project = self._film.store.load(job.project_id)
+            found = project.find_shot(job.shot_id)
+            if found is None:
+                return
+            _, shot = found
+            version = shot.version(job.version_number)
+            if version is None:
+                return
+            version.model = model
+            self._film.store.save(project)
 
     def _begin_hosted(self, provider: str) -> None:
         """Claim the active slot for a hosted render, in one atomic step.
