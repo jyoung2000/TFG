@@ -40,7 +40,7 @@ from film.film_api_types import (
     ReplaceProjectRequest,
 )
 from film.film_continuity import check_shot_continuity
-from film.media_providers import MediaSpec
+from film.media_providers import MediaSpec, provider_for_model_id
 from film.media_runner import MediaRunner, suffix_for
 from film.film_models import (
     FilmAsset,
@@ -156,6 +156,32 @@ def _image_data_url(path: str | None) -> str:
         return ""
     mime = mimetypes.guess_type(path)[0] or "image/png"
     return f"data:{mime};base64,{base64.b64encode(raw).decode('ascii')}"
+
+
+_PROVIDER_LABELS: dict[str, str] = {"fal": "fal.ai", "wavespeed": "WaveSpeed", "replicate": "Replicate"}
+
+
+def _check_media_pair(provider: str, model: str) -> None:
+    """Reject a model id that plainly belongs to a different vendor.
+
+    provider and model come from unrelated, unscoped settings fields, so a
+    project set to Replicate while the model id is still "fal-ai/..." used to
+    reach the network and come back REPLICATE_MODEL_NOT_FOUND, with nothing to
+    say the id belongs to another vendor. Nothing is rewritten here - the user
+    picks.
+    """
+    if provider == "local" or not model:
+        return
+    owner = provider_for_model_id(model)
+    if not owner or owner == provider:
+        return
+    owner_label = _PROVIDER_LABELS.get(owner, owner)
+    provider_label = _PROVIDER_LABELS.get(provider, provider)
+    raise HTTPError(
+        400,
+        f"MEDIA_MODEL_PROVIDER_MISMATCH: '{model}' is a {owner_label} model but this project is set to "
+        f"{provider_label} — pick a {provider_label} model in the Model Library",
+    )
 
 
 def _system_ram_gb() -> float | None:
@@ -634,7 +660,13 @@ class FilmGenerationHandler(StateHandlerBase):
                     self._worker_running = False
 
     def _run_job(self, job: _QueuedShotJob) -> None:
-        provider, model = self._media_selection(job.project_id)
+        try:
+            provider, model = self._media_selection(job.project_id)
+        except HTTPError as exc:
+            # A mismatched provider/model pair must fail this version, not the
+            # worker draining the queue behind it.
+            self._finish_version(job, status="failed", error=str(exc.detail))
+            return
         if provider != "local":
             # Mark the job hosted before any slow work. _prepare_request can
             # decode a whole video to pull the previous shot's last frame, and
@@ -733,6 +765,7 @@ class FilmGenerationHandler(StateHandlerBase):
             settings = self.state.app_settings.model_copy(deep=True)
         provider = (project.settings.media_provider or settings.media_provider or "local").strip()
         model = (project.settings.image_model or settings.default_image_model).strip()
+        _check_media_pair(provider, model)
         prompt = req.prompt.strip() or self._reference_prompt(asset, project.settings.style_prompt)
         width, height = self._REFERENCE_SIZES.get(asset.kind, (1024, 1024))
 
@@ -793,6 +826,7 @@ class FilmGenerationHandler(StateHandlerBase):
             project_provider, project_model = "", ""
         provider = (project_provider or settings.media_provider or "local").strip()
         model = (project_model or settings.default_video_model).strip()
+        _check_media_pair(provider, model)
         return provider, model
 
     def _run_hosted_job(self, job: _QueuedShotJob, provider: str, model: str) -> None:

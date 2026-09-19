@@ -901,3 +901,88 @@ class TestHostedRenderRecordsItsModel:
         profiles = client.get("/api/knowledge/models").json()["models"]
         assert any(profile["model"] == "wavespeed-ai/wan-2.2/t2v-480p" for profile in profiles)
         assert not any(profile["model"] == "fast" for profile in profiles)
+
+
+class TestProviderModelMismatch:
+    """provider and model come from unrelated, unscoped settings fields. A
+    project set to Replicate while the model id is still a fal one used to
+    reach the network and return REPLICATE_MODEL_NOT_FOUND, with no hint that
+    the id belongs to another vendor."""
+
+    def test_a_fal_id_on_replicate_fails_before_any_call(self, client, test_state):
+        client.post(
+            "/api/settings",
+            json={"replicateApiKey": FAKE_KEY, "mediaProvider": "replicate", "defaultVideoModel": "fal-ai/ltx-video-13b-distilled"},
+        )
+        scene_id, shot_id = _scene_and_shot(client)
+        calls_before = len(test_state.http.calls)
+        client.post(f"/api/film/projects/{PROJECT}/scenes/{scene_id}/shots/{shot_id}/generate", json={"kind": "preview"})
+        version = client.get(f"/api/film/projects/{PROJECT}").json()["project"]["scenes"][0]["shots"][0]["versions"][0]
+        assert version["status"] == "failed"
+        assert "MEDIA_MODEL_PROVIDER_MISMATCH" in version["error"]
+        assert "Replicate" in version["error"] and "fal.ai" in version["error"]
+        assert len(test_state.http.calls) == calls_before, "no HTTP call may be made"
+
+    def test_a_wavespeed_id_on_fal_fails_before_any_call(self, client, test_state):
+        client.post(
+            "/api/settings",
+            json={"falApiKey": FAKE_KEY, "mediaProvider": "fal", "defaultVideoModel": "wavespeed-ai/wan-2.2/t2v-480p"},
+        )
+        scene_id, shot_id = _scene_and_shot(client)
+        calls_before = len(test_state.http.calls)
+        client.post(f"/api/film/projects/{PROJECT}/scenes/{scene_id}/shots/{shot_id}/generate", json={"kind": "preview"})
+        version = client.get(f"/api/film/projects/{PROJECT}").json()["project"]["scenes"][0]["shots"][0]["versions"][0]
+        assert version["status"] == "failed" and "MEDIA_MODEL_PROVIDER_MISMATCH" in version["error"]
+        assert len(test_state.http.calls) == calls_before
+
+    def test_the_queue_survives_a_mismatch(self, client, test_state):
+        """The mismatch is raised on the queue worker's thread; it must fail
+        the version, not kill the worker."""
+        client.post(
+            "/api/settings",
+            json={"replicateApiKey": FAKE_KEY, "mediaProvider": "replicate", "defaultVideoModel": "fal-ai/ltx-video-13b-distilled"},
+        )
+        scene_id, first = _scene_and_shot(client)
+        client.post(f"/api/film/projects/{PROJECT}/scenes/{scene_id}/shots/{first}/generate", json={"kind": "preview"})
+
+        # Point the project at a matching pair and render a second shot.
+        client.post("/api/settings", json={"defaultVideoModel": "owner/model"})
+        second = client.post(
+            f"/api/film/projects/{PROJECT}/scenes/{scene_id}/shots",
+            json={"title": "Second", "description": "another beat", "duration_seconds": 3},
+        ).json()["id"]
+        http = test_state.http
+        http.queue("post", FakeResponse(status_code=200, json_payload={"id": "p1", "status": "succeeded", "urls": {"get": "https://r/p1"}, "output": ["https://cdn/r.mp4"]}))
+        http.queue("get", FakeResponse(status_code=200, json_payload={"id": "p1", "status": "succeeded", "output": ["https://cdn/r.mp4"]}))
+        http.queue("get", FakeResponse(status_code=200, content=b"rep-mp4"))
+        client.post(f"/api/film/projects/{PROJECT}/scenes/{scene_id}/shots/{second}/generate", json={"kind": "preview"})
+        shots = client.get(f"/api/film/projects/{PROJECT}").json()["project"]["scenes"][0]["shots"]
+        assert next(s for s in shots if s["id"] == second)["versions"][0]["status"] == "complete"
+
+    def test_an_unrecognised_id_is_left_alone(self, client, test_state):
+        """A bare owner/name id could be any Replicate model; the check must
+        not guess and must not block it."""
+        client.post(
+            "/api/settings",
+            json={"replicateApiKey": FAKE_KEY, "mediaProvider": "replicate", "defaultVideoModel": "some-owner/some-model"},
+        )
+        scene_id, shot_id = _scene_and_shot(client)
+        http = test_state.http
+        http.queue("post", FakeResponse(status_code=200, json_payload={"id": "p1", "status": "succeeded", "urls": {"get": "https://r/p1"}}))
+        http.queue("get", FakeResponse(status_code=200, json_payload={"id": "p1", "status": "succeeded", "output": ["https://cdn/r.mp4"]}))
+        http.queue("get", FakeResponse(status_code=200, content=b"rep-mp4"))
+        client.post(f"/api/film/projects/{PROJECT}/scenes/{scene_id}/shots/{shot_id}/generate", json={"kind": "preview"})
+        version = client.get(f"/api/film/projects/{PROJECT}").json()["project"]["scenes"][0]["shots"][0]["versions"][0]
+        assert version["status"] == "complete"
+
+    def test_a_curated_replicate_id_on_fal_is_caught(self, client, test_state):
+        client.post(
+            "/api/settings",
+            json={"falApiKey": FAKE_KEY, "mediaProvider": "fal", "defaultVideoModel": "lightricks/ltx-video"},
+        )
+        scene_id, shot_id = _scene_and_shot(client)
+        calls_before = len(test_state.http.calls)
+        client.post(f"/api/film/projects/{PROJECT}/scenes/{scene_id}/shots/{shot_id}/generate", json={"kind": "preview"})
+        version = client.get(f"/api/film/projects/{PROJECT}").json()["project"]["scenes"][0]["shots"][0]["versions"][0]
+        assert version["status"] == "failed" and "MEDIA_MODEL_PROVIDER_MISMATCH" in version["error"]
+        assert len(test_state.http.calls) == calls_before

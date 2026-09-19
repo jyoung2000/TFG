@@ -127,6 +127,33 @@ def curated_models(provider: str) -> list[MediaModel]:
     return [replace(model) for model in _CURATED.get(provider, [])]
 
 
+# Id prefixes that name their provider unambiguously. Replicate ids are bare
+# "owner/name", which is not distinctive, so only these prefixes and the
+# curated lists can identify a model's vendor.
+_ID_PREFIX_OWNERS: dict[str, str] = {
+    "fal-ai/": "fal",
+    "wavespeed-ai/": "wavespeed",
+}
+
+
+def provider_for_model_id(model_id: str) -> str:
+    """The provider a model id plainly belongs to, or "" when it cannot be told.
+
+    Deliberately conservative: an id this cannot place is left alone, so any
+    model pasted from a provider's own catalog keeps working.
+    """
+    candidate = model_id.strip()
+    if not candidate:
+        return ""
+    for prefix, owner in _ID_PREFIX_OWNERS.items():
+        if candidate.startswith(prefix):
+            return owner
+    for provider, models in _CURATED.items():
+        if any(model.id == candidate for model in models):
+            return provider
+    return ""
+
+
 def _fail(provider: str, status_code: int, text: str) -> None:
     """Map a provider's HTTP status onto the app's typed errors (no key echo)."""
     if 200 <= status_code < 300:
