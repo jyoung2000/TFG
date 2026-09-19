@@ -18,7 +18,7 @@ from typing import Literal, cast
 from pydantic import BaseModel, Field, ValidationError
 
 from _routes._errors import HTTPError
-from services.interfaces import HTTPClient, HttpTimeoutError, JSONValue
+from services.interfaces import HTTPClient, HttpResponseLike, HttpTimeoutError, JSONValue
 
 MediaTask = Literal["video", "image"]
 JobState = Literal["queued", "running", "complete", "failed"]
@@ -141,6 +141,31 @@ def _payload_dict(raw: object, provider: str) -> dict[str, object]:
     return cast(dict[str, object], raw)
 
 
+def _describe_body(response: HttpResponseLike) -> str:
+    """A short, key-free hint about what arrived instead of JSON."""
+    content_type = response.headers.get("content-type", "").split(";")[0].strip()
+    if content_type:
+        return content_type
+    try:
+        snippet = response.text.strip()[:80]
+    except Exception:  # noqa: BLE001 - a body we cannot even read is still a 502
+        return "unreadable body"
+    return snippet or "empty body"
+
+
+def _decode_json(response: HttpResponseLike, provider: str) -> object:
+    """Parse a response body that the status check already accepted.
+
+    ``requests`` raises ``JSONDecodeError`` (a ``ValueError``) here, which is
+    not an ``HTTPError`` — left unguarded it escapes ``MediaRunner`` and kills
+    the queue worker, so every parse failure becomes a typed 502 instead.
+    """
+    try:
+        return response.json()
+    except Exception as exc:  # noqa: BLE001 - any decode failure is a bad gateway
+        raise HTTPError(502, f"{provider} returned a non-JSON response ({_describe_body(response)})") from exc
+
+
 def _first_url(value: object) -> str:
     """Pull a media URL out of the many shapes providers return."""
     if isinstance(value, str) and value.startswith("http"):
@@ -197,7 +222,7 @@ class MediaProvider:
         except Exception as exc:
             raise HTTPError(502, f"{self.name} unreachable: {exc}") from exc
         _fail(self.name, response.status_code, response.text)
-        return _payload_dict(response.json(), self.name)
+        return _payload_dict(_decode_json(response, self.name), self.name)
 
     def _get(self, url: str, *, timeout: int = 30) -> dict[str, object]:
         try:
@@ -207,7 +232,7 @@ class MediaProvider:
         except Exception as exc:
             raise HTTPError(502, f"{self.name} unreachable: {exc}") from exc
         _fail(self.name, response.status_code, response.text)
-        return _payload_dict(response.json(), self.name)
+        return _payload_dict(_decode_json(response, self.name), self.name)
 
     def _headers(self) -> dict[str, str]:
         return {"Content-Type": "application/json"}
@@ -223,7 +248,10 @@ class MediaProvider:
             raise HTTPError(502, f"Could not download the {self.name} result: {exc}") from exc
         if response.status_code != 200:
             raise HTTPError(502, f"{self.name} download failed ({response.status_code})")
-        content = response.content
+        try:
+            content = response.content
+        except Exception as exc:  # noqa: BLE001 - an unreadable body is a bad gateway, not a crash
+            raise HTTPError(502, f"Could not read the {self.name} result: {_describe_body(response)}") from exc
         if not content:
             raise HTTPError(502, f"{self.name} returned an empty file")
         return content

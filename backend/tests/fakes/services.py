@@ -22,9 +22,27 @@ class FakeResponse:
     headers: dict[str, str] = field(default_factory=dict)
     content: bytes = b""
     json_payload: Any = field(default_factory=dict)
+    # Set to reproduce a body that is not JSON: ``requests`` raises
+    # ``JSONDecodeError`` (a ``ValueError``) from ``.json()`` rather than
+    # returning anything, so a fake that always returns a dict cannot
+    # exercise the parse-failure paths.
+    json_error: Exception | None = None
 
     def json(self) -> Any:
+        if self.json_error is not None:
+            raise self.json_error
         return self.json_payload
+
+    @classmethod
+    def non_json(cls, *, status_code: int = 200, body: str = "<html>502 Bad Gateway</html>") -> "FakeResponse":
+        """A gateway/error page served with a 2xx status, as CDNs do."""
+        return cls(
+            status_code=status_code,
+            text=body,
+            headers={"content-type": "text/html; charset=utf-8"},
+            content=body.encode(),
+            json_error=ValueError("Expecting value: line 1 column 1 (char 0)"),
+        )
 
 
 @dataclass

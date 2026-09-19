@@ -210,6 +210,21 @@ class _QueuedShotJob:
         )
 
 
+@dataclass(slots=True)
+class _HostedOutcome:
+    """How one hosted render ended.
+
+    ``_hosted_job_body`` returns this instead of writing the version itself, so
+    ``_run_hosted_job`` owns the single ``_finish_version`` call and no failure
+    path can finish the same version twice.
+    """
+
+    status: str
+    error: str = ""
+    output_path: str = ""
+    seed_used: int | None = None
+
+
 class FilmGenerationHandler(StateHandlerBase):
     def __init__(
         self,
@@ -765,26 +780,50 @@ class FilmGenerationHandler(StateHandlerBase):
 
     def _run_hosted_job(self, job: _QueuedShotJob, provider: str, model: str) -> None:
         """Render one shot on a hosted provider, then store the file exactly
-        like a local render so versions, timeline and export behave the same."""
+        like a local render so versions, timeline and export behave the same.
+
+        Every exit leaves through the single ``_finish_version`` call below, so
+        an unexpected failure anywhere inside — a non-JSON provider reply
+        surfaces from ``requests`` as a plain ``ValueError``, not an
+        ``HTTPError`` — ends this version instead of killing the queue worker
+        and stranding the shot at ``status="generating"`` forever.
+        """
+        started = time.perf_counter()
+        try:
+            outcome = self._hosted_job_body(job, provider, model)
+        except HTTPError as exc:
+            outcome = _HostedOutcome(status="failed", error=str(exc.detail))
+        except Exception as exc:  # noqa: BLE001 - queue must survive any job failure
+            outcome = _HostedOutcome(status="failed", error=str(exc))
+        self._clear_hosted()
+        if outcome is None:
+            return
+        self._finish_version(
+            job,
+            status=outcome.status,
+            output_path=outcome.output_path,
+            error=outcome.error,
+            telemetry=self._telemetry(started, execution_mode=provider),
+            seed_used=outcome.seed_used,
+        )
+
+    def _hosted_job_body(self, job: _QueuedShotJob, provider: str, model: str) -> _HostedOutcome | None:
+        """The render itself. Returns how it ended; never finishes the version
+        itself, so no path can finish one twice."""
         prepared = self._prepare_request(job)
         if prepared is None:
-            return
+            return None
         request, seed = prepared
         with self.lock:
             settings = self.state.app_settings.model_copy(deep=True)
             self._hosted_cancel = False
             self._hosted_progress = (0, f"Preparing {provider} job")
         api_key = settings.media_api_key(provider)
-        started = time.perf_counter()
         if not api_key:
-            self._clear_hosted()
-            self._finish_version(
-                job,
+            return _HostedOutcome(
                 status="failed",
                 error=f"{provider.upper()}_KEY_MISSING: add the {provider} API key in Settings → API Keys, or switch this project back to local generation.",
-                telemetry=self._telemetry(started, execution_mode=provider),
             )
-            return
 
         spec = MediaSpec(
             model=model,
@@ -800,9 +839,7 @@ class FilmGenerationHandler(StateHandlerBase):
         )
         runner = self._media_runner
         if runner is None:  # pragma: no cover - wired in AppHandler
-            self._clear_hosted()
-            self._finish_version(job, status="failed", error="Hosted generation is not available in this build", telemetry=self._telemetry(started, execution_mode=provider))
-            return
+            return _HostedOutcome(status="failed", error="Hosted generation is not available in this build")
         result = runner.run(
             provider=provider,
             api_key=api_key,
@@ -810,15 +847,10 @@ class FilmGenerationHandler(StateHandlerBase):
             is_cancelled=self._hosted_cancelled,
             on_progress=self._report_hosted_progress,
         )
-        telemetry = self._telemetry(started, execution_mode=provider)
         if result.status == "cancelled":
-            self._clear_hosted()
-            self._finish_version(job, status="cancelled", error="Cancelled", telemetry=telemetry)
-            return
+            return _HostedOutcome(status="cancelled", error="Cancelled")
         if result.status == "failed":
-            self._clear_hosted()
-            self._finish_version(job, status="failed", error=result.error, telemetry=telemetry)
-            return
+            return _HostedOutcome(status="failed", error=result.error)
         try:
             outputs = self._config.outputs_dir
             outputs.mkdir(parents=True, exist_ok=True)
@@ -826,11 +858,8 @@ class FilmGenerationHandler(StateHandlerBase):
             target = outputs / f"film-{provider}-{job.shot_id}-v{job.version_number}-{now_ms()}{suffix}"
             target.write_bytes(result.content)
         except OSError as exc:
-            self._clear_hosted()
-            self._finish_version(job, status="failed", error=f"Could not save the {provider} result: {exc}", telemetry=telemetry)
-            return
-        self._clear_hosted()
-        self._finish_version(job, status="complete", output_path=str(target), telemetry=telemetry, seed_used=seed)
+            return _HostedOutcome(status="failed", error=f"Could not save the {provider} result: {exc}")
+        return _HostedOutcome(status="complete", output_path=str(target), seed_used=seed)
 
     def _hosted_cancelled(self) -> bool:
         with self.lock:

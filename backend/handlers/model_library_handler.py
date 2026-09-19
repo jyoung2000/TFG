@@ -245,7 +245,10 @@ class ModelLibraryHandler(StateHandlerBase):
             return None
         if response.status_code != 200:
             return None
-        payload = response.json()
+        try:
+            payload = response.json()
+        except Exception:  # noqa: BLE001 - a 200 that is not JSON is not Ollama
+            return None
         if not isinstance(payload, dict):
             return None
         rows = cast(dict[str, object], payload).get("models", [])
@@ -339,6 +342,9 @@ class ModelLibraryHandler(StateHandlerBase):
                 listed = gemini_list_models(self._http, key)
         except HTTPError as exc:
             return [], str(exc.detail)
+        except Exception as exc:  # noqa: BLE001 - one bad provider must not blank the library
+            logger.warning("Text provider %s failed to list models: %s", provider_id, exc)
+            return [], f"{provider_id} returned an unreadable response"
         models = [
             LibraryModel(
                 id=model.id,
@@ -370,6 +376,10 @@ class ModelLibraryHandler(StateHandlerBase):
                 except HTTPError as exc:
                     discovered = []
                     error = str(exc.detail)
+                except Exception as exc:  # noqa: BLE001 - one bad provider must not blank the library
+                    logger.warning("Media provider %s failed to discover models: %s", provider_id, exc)
+                    discovered = []
+                    error = f"{provider_id} returned an unreadable response"
                 known = {entry.id for entry in discovered}
                 entries = discovered + [entry for entry in entries if entry.id not in known]
                 self._store(

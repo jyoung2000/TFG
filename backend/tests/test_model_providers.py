@@ -503,3 +503,97 @@ class TestProviderConnectionTest:
 
     def test_unknown_provider_is_rejected(self, client):
         assert client.post("/api/models/library/providers/nope/test").status_code == 400
+
+
+class TestNonJsonProviderResponses:
+    """A provider (or a CDN in front of it) can answer 200 with an HTML error
+    page. ``requests`` then raises ``JSONDecodeError`` — a ``ValueError``, not
+    an ``HTTPError`` — which used to escape the runner and kill the queue
+    worker, stranding the version at ``generating`` until a backend restart.
+    """
+
+    def _runner(self, fake_services) -> MediaRunner:
+        return MediaRunner(fake_services.http, poll_interval_seconds=0, sleep=lambda _seconds: None)
+
+    def test_non_json_submit_is_a_clean_failure(self, fake_services):
+        fake_services.http.queue("post", FakeResponse.non_json())
+        result = self._runner(fake_services).run(
+            provider="fal", api_key=FAKE_KEY, spec=MediaSpec(model="m", prompt="p")
+        )
+        assert result.status == "failed"
+        assert "non-JSON response" in result.error and "text/html" in result.error
+        assert FAKE_KEY not in result.error
+
+    def test_non_json_poll_is_a_clean_failure(self, fake_services):
+        http = fake_services.http
+        http.queue("post", FakeResponse(status_code=200, json_payload={"request_id": "r", "status_url": "https://q/s"}))
+        http.queue("get", FakeResponse.non_json())
+        result = self._runner(fake_services).run(
+            provider="fal", api_key=FAKE_KEY, spec=MediaSpec(model="m", prompt="p")
+        )
+        assert result.status == "failed" and "non-JSON response" in result.error
+
+    def test_unreadable_download_body_is_a_clean_failure(self, fake_services):
+        http = fake_services.http
+        http.queue("post", FakeResponse(status_code=200, json_payload={"request_id": "r", "status_url": "https://q/s", "response_url": "https://q/r"}))
+        http.queue("get", FakeResponse(status_code=200, json_payload={"status": "COMPLETED"}))
+        http.queue("get", FakeResponse(status_code=200, json_payload={"video": {"url": "https://cdn/a.mp4"}}))
+        http.queue("get", FakeResponse(status_code=200, content=b""))
+        result = self._runner(fake_services).run(
+            provider="fal", api_key=FAKE_KEY, spec=MediaSpec(model="m", prompt="p")
+        )
+        assert result.status == "failed" and "empty file" in result.error
+
+    def test_fail_status_still_wins_over_json_parsing(self, fake_services):
+        """A 401 served as HTML must still read as a key error, not a parse error."""
+        fake_services.http.queue("post", FakeResponse.non_json(status_code=401))
+        result = self._runner(fake_services).run(
+            provider="fal", api_key=FAKE_KEY, spec=MediaSpec(model="m", prompt="p")
+        )
+        assert result.status == "failed" and "FAL_KEY_INVALID" in result.error
+
+    def test_queue_survives_and_runs_the_next_shot(self, client, test_state):
+        client.post("/api/settings", json={"falApiKey": FAKE_KEY, "mediaProvider": "fal", "defaultVideoModel": "fal-ai/ltx-video"})
+        scene_id, first_shot = _scene_and_shot(client)
+        http = test_state.http
+        http.queue("post", FakeResponse.non_json())
+        client.post(
+            f"/api/film/projects/{PROJECT}/scenes/{scene_id}/shots/{first_shot}/generate", json={"kind": "preview"}
+        )
+        shots = client.get(f"/api/film/projects/{PROJECT}").json()["project"]["scenes"][0]["shots"]
+        failed = next(s for s in shots if s["id"] == first_shot)["versions"][0]
+        assert failed["status"] == "failed", "the version must not be stranded at 'generating'"
+        assert "non-JSON response" in failed["error"]
+
+        # The worker is still alive: a second shot queued afterwards renders.
+        second_shot = client.post(
+            f"/api/film/projects/{PROJECT}/scenes/{scene_id}/shots",
+            json={"title": "Second", "description": "another beat", "duration_seconds": 3},
+        ).json()["id"]
+        http.queue("post", FakeResponse(status_code=200, json_payload={"request_id": "r2", "status_url": "https://q/s", "response_url": "https://q/r"}))
+        http.queue("get", FakeResponse(status_code=200, json_payload={"status": "COMPLETED"}))
+        http.queue("get", FakeResponse(status_code=200, json_payload={"video": {"url": "https://cdn/two.mp4"}}))
+        http.queue("get", FakeResponse(status_code=200, content=b"second-mp4"))
+        client.post(
+            f"/api/film/projects/{PROJECT}/scenes/{scene_id}/shots/{second_shot}/generate", json={"kind": "preview"}
+        )
+        shots = client.get(f"/api/film/projects/{PROJECT}").json()["project"]["scenes"][0]["shots"]
+        done = next(s for s in shots if s["id"] == second_shot)["versions"][0]
+        assert done["status"] == "complete"
+        assert Path(done["output_path"]).read_bytes() == b"second-mp4"
+
+    def test_one_unreadable_provider_does_not_blank_the_library(self, client, test_state):
+        """Replicate is the one provider that calls out to build the catalog;
+        an HTML reply there must degrade to an error row, not 500 the page."""
+        client.post("/api/settings", json={"replicateApiKey": FAKE_KEY})
+        # One per collection slug Replicate walks (text-to-video, image-to-video,
+        # text-to-image), so the fake never runs dry and masks the real path.
+        for _ in range(3):
+            test_state.http.queue("get", FakeResponse.non_json())
+        response = client.get("/api/models/library", params={"refresh": "true"})
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["total"] >= 1, "local models must still list"
+        assert any(source["id"] == "native" for source in payload["sources"])
+        # The curated Replicate examples still show even though discovery failed.
+        assert any(model["provider"] == "replicate" for model in payload["models"])
