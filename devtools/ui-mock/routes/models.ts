@@ -119,6 +119,7 @@ function capabilities(state: MockState): FilmCapabilities {
   return {
     gpu_name: GPU_NAME,
     gpu_vram_gb: GPU_VRAM,
+    vram_budget_gb: null,
     execution_mode: 'wangp',
     gpu_verdict: `${GPU_NAME} (${GPU_VRAM} GB) runs the balanced profile comfortably; 1080p finals may not fit.`,
     gpu_verdict_level: 'partial',

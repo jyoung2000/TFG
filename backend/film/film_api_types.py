@@ -385,6 +385,9 @@ class FilmModelCapability(BaseModel):
 class FilmCapabilitiesResponse(BaseModel):
     gpu_name: str | None
     gpu_vram_gb: float | None
+    # When set, fit recommendations assume at most this much VRAM (the desktop
+    # keeps the rest); the detected total is still reported in gpu_vram_gb.
+    vram_budget_gb: float | None = None
     execution_mode: str  # "wangp" | "api" | "local"
     # One-sentence compatibility verdict for the detected GPU, plus a severity
     # for the UI: "ok" (a local path fits), "partial" (only some paths fit),

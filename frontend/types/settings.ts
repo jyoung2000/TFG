@@ -56,6 +56,8 @@ export interface OpenRouterRoleModels {
 
 export interface AppSettings {
   useTorchCompile: boolean
+  /** Optional user cap on VRAM fit recommendations (GB); null = use detected. */
+  gpuVramBudgetGb?: number | null
   loadOnStartup: boolean
   hasLtxApiKey: boolean
   userPrefersLtxApiVideoGenerations: boolean

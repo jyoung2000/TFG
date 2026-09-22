@@ -96,6 +96,11 @@ class OpenRouterRoleModels(SettingsBaseModel):
 class AppSettings(SettingsBaseModel):
     use_torch_compile: bool = False
     load_on_startup: bool = False
+    # Optional cap on the VRAM the fit recommendations assume. Leave unset to
+    # use the GPU's detected total. Useful when the OS/desktop needs headroom
+    # (e.g. an integrated compositor): set what the app may use and it treats
+    # the GPU as having only that much VRAM for compatibility verdicts.
+    gpu_vram_budget_gb: float | None = None
     ltx_api_key: str = ""
     user_prefers_ltx_api_video_generations: bool = False
     use_local_text_encoder: bool = False

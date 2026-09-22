@@ -2,9 +2,29 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import electron from 'vite-plugin-electron'
 import renderer from 'vite-plugin-electron-renderer'
+import net from 'net'
 import path from 'path'
 import { isUiMockEnabled, isUiStandalone, uiMockPlugin } from './devtools/ui-mock/node-adapter'
 import { singleFilePlugin } from './devtools/ui-mock/single-file'
+
+// Find a free TCP port at or above `start`. Electron hard-crashes when
+// --inspect/--remote-debugging-port points at a port another process holds
+// (e.g. a stale Electron from a previous dev session), so dev launches probe
+// for a free port instead of hardcoding one.
+async function resolveFreePort(start: number): Promise<number> {
+  for (let port = start; port < start + 100; port++) {
+    const free = await new Promise<boolean>(resolve => {
+      const server = net.createServer()
+      server.once('error', () => resolve(false))
+      server.once('listening', () => server.close(() => resolve(true)))
+      server.listen(port, '127.0.0.1')
+    })
+    if (free) {
+      return port
+    }
+  }
+  throw new Error(`No free port found at or above ${start}`)
+}
 
 // UI-only mode (`pnpm dev:ui`): the renderer runs in a plain browser against a
 // mock backend, so no Python, Electron, GPU or model weights are needed to work
@@ -26,7 +46,23 @@ export default defineConfig({
         onstart(options) {
           if (process.env.ELECTRON_DEBUG) {
             // --inspect and --remote-debugging-port must come before '.' (the app path)
-            options.startup(['--inspect=9229', '--remote-debugging-port=9222', '.', '--no-sandbox'])
+            // A fixed --inspect port hard-crashes Electron when it is already
+            // bound (bind error 0x2740 -> devtools http server fails to start),
+            // so resolve a free port at launch unless one is pinned.
+            void (async () => {
+              const inspectorPort = await resolveFreePort(
+                Number(process.env.ELECTRON_INSPECT_PORT) || 9229
+              )
+              const chromePort = await resolveFreePort(
+                Number(process.env.ELECTRON_REMOTE_DEBUG_PORT) || 9222
+              )
+              options.startup([
+                `--inspect=${inspectorPort}`,
+                `--remote-debugging-port=${chromePort}`,
+                '.',
+                '--no-sandbox',
+              ])
+            })()
           } else {
             options.startup()
           }

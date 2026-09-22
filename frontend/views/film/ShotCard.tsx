@@ -23,6 +23,8 @@ interface ShotCardProps {
 /** Thumbnail preference: current version output (video) → capture image → placeholder. */
 function useShotThumb(film: FilmProject, shot: FilmShot) {
   const [thumb, setThumb] = useState<{ kind: 'video' | 'image'; url: string } | null>(null)
+  const [videoFallbackUrl, setVideoFallbackUrl] = useState<string | null>(null)
+  const [videoFailed, setVideoFailed] = useState(false)
   const version = shot.current_version != null ? shot.versions.find(v => v.number === shot.current_version) : undefined
   const outputPath = version?.status === 'complete' ? version.output_path : ''
   const capturePath = shot.capture_path
@@ -45,7 +47,31 @@ function useShotThumb(film: FilmProject, shot: FilmShot) {
     }
   }, [film.id, outputPath, capturePath])
 
-  return thumb
+  // When the video thumbnail errors (404, codec, interrupted download), fall
+  // back to the composition capture so the card still shows the shot's
+  // framing instead of an empty black box.
+  useEffect(() => {
+    setVideoFailed(false)
+  }, [thumb])
+
+  useEffect(() => {
+    if (thumb?.kind !== 'video') return
+    if (!capturePath) return
+    let cancelled = false
+    void filmMediaUrl(film.id, capturePath).then(url => {
+      if (!cancelled) setVideoFallbackUrl(url)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [film.id, thumb?.kind, capturePath])
+
+  return {
+    thumb: videoFailed && videoFallbackUrl
+      ? { kind: 'image' as const, url: videoFallbackUrl }
+      : thumb,
+    onThumbError: () => setVideoFailed(true),
+  }
 }
 
 export function ShotCard({
@@ -62,7 +88,7 @@ export function ShotCard({
   onDragOver,
   onDrop,
 }: ShotCardProps) {
-  const thumb = useShotThumb(film, shot)
+  const { thumb, onThumbError } = useShotThumb(film, shot)
   const { continuityLevelFor } = useFilm()
   const level = continuityLevelFor(shot.id)
   const levelMeta = level ? CONTINUITY_LEVEL_META[level] : null
@@ -99,7 +125,14 @@ export function ShotCard({
       <div className="relative aspect-video bg-zinc-950 flex items-center justify-center">
         {thumb ? (
           thumb.kind === 'video' ? (
-            <video src={thumb.url} muted playsInline preload="metadata" className="w-full h-full object-cover" />
+            <video
+              src={thumb.url}
+              muted
+              playsInline
+              preload="metadata"
+              onError={onThumbError}
+              className="w-full h-full object-cover"
+            />
           ) : (
             <img src={thumb.url} alt="" className="w-full h-full object-cover" />
           )

@@ -484,6 +484,8 @@ export type ModelState =
 export interface FilmCapabilities {
   gpu_name: string | null
   gpu_vram_gb: number | null
+  /** User-set VRAM cap (GB) used by fit verdicts; null = use detected VRAM. */
+  vram_budget_gb: number | null
   execution_mode: 'wangp' | 'api' | 'local'
   gpu_verdict: string
   gpu_verdict_level: 'ok' | 'partial' | 'none'

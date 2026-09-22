@@ -1202,18 +1202,26 @@ class FilmGenerationHandler(StateHandlerBase):
     def capabilities(self) -> FilmCapabilitiesResponse:
         gpu_name = self._gpu_info.get_device_name()
         vram_gb_int = self._gpu_info.get_vram_total_gb()
-        vram_gb = float(vram_gb_int) if vram_gb_int is not None else None
-
-        def fits(minimum: float | None) -> bool | None:
-            if minimum is None or vram_gb is None:
-                return None
-            return vram_gb >= minimum
+        detected_vram_gb = float(vram_gb_int) if vram_gb_int is not None else None
 
         with self.lock:
             settings = self.state.app_settings
             has_api_key = bool(settings.ltx_api_key.strip())
             use_local_text_encoder = settings.use_local_text_encoder
             available = dict(self.state.available_files)
+
+        # A user-set VRAM budget caps the memory fit recommendations assume
+        # (headroom for the desktop compositor etc.). The detected total is
+        # still reported alongside.
+        vram_budget_gb = settings.gpu_vram_budget_gb
+        effective_vram_gb = detected_vram_gb
+        if vram_budget_gb is not None and (detected_vram_gb is None or vram_budget_gb < detected_vram_gb):
+            effective_vram_gb = vram_budget_gb
+
+        def fits(minimum: float | None) -> bool | None:
+            if minimum is None or effective_vram_gb is None:
+                return None
+            return effective_vram_gb >= minimum
 
         total_required_download_gb: float | None = None
         text_encoder_optional = False
@@ -1322,17 +1330,24 @@ class FilmGenerationHandler(StateHandlerBase):
                 )
             )
 
-        verdict, verdict_level = self._gpu_verdict(vram_gb, execution_mode)
+        verdict, verdict_level = self._gpu_verdict(effective_vram_gb, execution_mode)
+        if (
+            vram_budget_gb is not None
+            and detected_vram_gb is not None
+            and vram_budget_gb < detected_vram_gb
+        ):
+            verdict = f"{verdict} VRAM budget {vram_budget_gb:.0f} GB is in effect "                       f"(detected {detected_vram_gb:.0f} GB); fit badges use the budget."
         return FilmCapabilitiesResponse(
             gpu_name=gpu_name,
-            gpu_vram_gb=vram_gb,
+            gpu_vram_gb=detected_vram_gb,
+            vram_budget_gb=vram_budget_gb,
             execution_mode=execution_mode,
             gpu_verdict=verdict,
             gpu_verdict_level=verdict_level,
             models=models,
             total_required_download_gb=total_required_download_gb,
             text_encoder_optional=text_encoder_optional,
-            profiles=self._quality_profiles(vram_gb, execution_mode, models),
+            profiles=self._quality_profiles(effective_vram_gb, execution_mode, models),
             models_path=self._models_path(),
             system_ram_gb=_system_ram_gb(),
             cuda_available=self._gpu_info.get_cuda_available(),

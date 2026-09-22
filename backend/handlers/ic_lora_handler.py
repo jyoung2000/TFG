@@ -120,36 +120,43 @@ class IcLoraHandler(StateHandlerBase):
             use_api = not self._text.should_use_local_encoding()
             self._text.prepare_text_encoding(req.prompt, enhance_prompt=use_api and s.prompt_enhancer_enabled_t2v)
 
-            cap = self._video_processor.open_video(str(video_path))
-            info = self._video_processor.get_video_info(cap)
-            if not cap.isOpened():
-                raise HTTPError(400, f"Cannot open video: {video_path}")
-
             control_video_path = str(self._outputs_dir / f"_control_{req.conditioning_type}_{uuid.uuid4().hex[:8]}.mp4")
-            writer = self._video_processor.create_writer(
-                control_video_path,
-                fourcc="mp4v",
-                fps=float(info["fps"]),
-                size=(int(info["width"]), int(info["height"])),
-            )
 
-            frame_idx = 0
-            max_frames = min(int(info["frame_count"]), req.num_frames * 2)
-            while frame_idx < max_frames:
-                frame = self._video_processor.read_frame(cap)
-                if frame is None:
-                    break
-                if req.conditioning_type == "canny":
-                    control_frame = self._video_processor.apply_canny(frame)
-                elif req.conditioning_type == "depth":
-                    control_frame = self._video_processor.apply_depth(frame)
-                else:
-                    control_frame = frame
-                writer.write(control_frame)
-                frame_idx += 1
+            cap = self._video_processor.open_video(str(video_path))
+            writer = None
+            try:
+                info = self._video_processor.get_video_info(cap)
+                if not cap.isOpened():
+                    raise HTTPError(400, f"Cannot open video: {video_path}")
 
-            self._video_processor.release(cap)
-            self._video_processor.release(writer)
+                writer = self._video_processor.create_writer(
+                    control_video_path,
+                    fourcc="mp4v",
+                    fps=float(info["fps"]),
+                    size=(int(info["width"]), int(info["height"])),
+                )
+
+                frame_idx = 0
+                max_frames = min(int(info["frame_count"]), req.num_frames * 2)
+                while frame_idx < max_frames:
+                    frame = self._video_processor.read_frame(cap)
+                    if frame is None:
+                        break
+                    if req.conditioning_type == "canny":
+                        control_frame = self._video_processor.apply_canny(frame)
+                    elif req.conditioning_type == "depth":
+                        control_frame = self._video_processor.apply_depth(frame)
+                    else:
+                        control_frame = frame
+                    writer.write(control_frame)
+                    frame_idx += 1
+            finally:
+                # Captures/writers hold OS-level resources: release them even
+                # when frame extraction or the pipeline load fails, otherwise
+                # every failed run leaks one capture + one writer.
+                self._video_processor.release(cap)
+                if writer is not None:
+                    self._video_processor.release(writer)
 
             images: list[ImageConditioningInput] = [
                 ImageConditioningInput(path=img.path, frame_idx=int(img.frame), strength=float(img.strength))
@@ -187,9 +194,15 @@ class IcLoraHandler(StateHandlerBase):
             self._generation.fail_generation("IC-LoRA generation failed")
             raise
         except Exception as exc:
-            self._generation.fail_generation(str(exc))
-            if "cancelled" in str(exc).lower():
+            if self._generation.is_generation_cancelled() or "cancelled" in str(exc).lower():
+                # A cancelled run must surface with a Cancelled state, not an
+                # error: align the state machine with the response so frontend
+                # polling never sees a cancelled job as failed.
+                self._generation.cancel_generation()
+                logger.info("IC-LoRA generation cancelled by user")
                 return IcLoraGenerateResponse(status="cancelled")
+
+            self._generation.fail_generation(str(exc))
             raise HTTPError(500, f"Generation error: {exc}") from exc
         finally:
             self._text.clear_api_embeddings()

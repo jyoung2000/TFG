@@ -15,6 +15,7 @@ import {
   XCircle,
 } from 'lucide-react'
 import { useFilm } from '../../contexts/FilmContext'
+import { useAppSettings } from '../../contexts/AppSettingsContext'
 import { backendFetch } from '../../lib/backend'
 import { filmApi } from '../../lib/film-api'
 import { Button } from '../../components/ui/button'
@@ -213,6 +214,8 @@ export function FilmRenderSettingsCard() {
  */
 export function InstalledModelsPanel() {
   const { capabilities, refreshCapabilities } = useFilm()
+  const { settings: appSettings, updateSettings } = useAppSettings()
+  const [budgetDraft, setBudgetDraft] = useState<string>('')
   const [progress, setProgress] = useState<DownloadProgress | null>(null)
   const [starting, setStarting] = useState(false)
   const [skipTextEncoder, setSkipTextEncoder] = useState(false)
@@ -327,6 +330,11 @@ export function InstalledModelsPanel() {
               {capabilities.gpu_vram_gb != null
                 ? `${capabilities.gpu_vram_gb.toFixed(0)} GB VRAM`
                 : 'VRAM unknown'}
+              {capabilities.vram_budget_gb != null &&
+                capabilities.gpu_vram_gb != null &&
+                capabilities.vram_budget_gb < capabilities.gpu_vram_gb
+                ? ` · budget ${capabilities.vram_budget_gb.toFixed(0)} GB`
+                : ''}
               {' · '}
               {capabilities.execution_mode === 'wangp'
                 ? 'WanGP bridge (models managed by WanGP)'
@@ -335,6 +343,56 @@ export function InstalledModelsPanel() {
                   : 'Local generation'}
             </div>
           </div>
+          {/* VRAM budget: let the desktop keep some memory, the app uses the rest. */}
+          <form
+            className="flex items-center gap-2 mt-2 pt-2 border-t border-zinc-800"
+            onSubmit={e => {
+              e.preventDefault()
+              const value = budgetDraft.trim()
+              const next = value === '' ? null : Math.max(2, Math.min(64, Number(value) || 0))
+              if (next !== appSettings.gpuVramBudgetGb) {
+                updateSettings({ gpuVramBudgetGb: next === null ? null : next })
+                setBudgetDraft('')
+                void refreshCapabilities()
+              } else {
+                setBudgetDraft('')
+              }
+            }}
+          >
+            <label htmlFor="vram-budget" className="text-[11px] text-zinc-500 whitespace-nowrap">
+              VRAM budget (GB) — desktop keeps the rest, app fit badges use this:
+            </label>
+            <input
+              id="vram-budget"
+              type="number"
+              min={2}
+              max={64}
+              step={1}
+              placeholder={appSettings.gpuVramBudgetGb != null ? String(appSettings.gpuVramBudgetGb) : 'auto'}
+              value={budgetDraft}
+              onChange={e => setBudgetDraft(e.target.value)}
+              className="w-20 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs text-zinc-200 focus:outline-none focus:border-violet-600"
+            />
+            <button
+              type="submit"
+              className="text-[11px] px-2 py-1 rounded bg-violet-600/20 text-violet-300 hover:bg-violet-600/30"
+            >
+              Apply
+            </button>
+            {appSettings.gpuVramBudgetGb != null && (
+              <button
+                type="button"
+                className="text-[11px] px-2 py-1 rounded bg-zinc-800 text-zinc-400 hover:bg-zinc-700"
+                onClick={() => {
+                  updateSettings({ gpuVramBudgetGb: null })
+                  setBudgetDraft('')
+                  void refreshCapabilities()
+                }}
+              >
+                Auto
+              </button>
+            )}
+          </form>
         </div>
 
         {/* Compatibility verdict for the detected GPU */}
