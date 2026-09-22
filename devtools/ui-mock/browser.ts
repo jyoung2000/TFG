@@ -171,7 +171,12 @@ export function installBrowserMock(): BrowserMock {
     } catch {
       return original(input as RequestInfo, init)
     }
-    if (!ours(pathname)) return original(input as RequestInfo, init)
+    // Windows file:// pages keep the drive letter in the path ("/C:/api/…"),
+    // so a relative "/api/..." request parses to "/C:/api/..." here. Strip the
+    // drive segment so the route check and the mock router see the same
+    // pathnames as they do on POSIX (and over http://).
+    const apiPath = pathname.replace(/^\/[A-Za-z]:\//, '/')
+    if (!ours(apiPath)) return original(input as RequestInfo, init)
 
     const method = (init?.method ?? request?.method ?? 'GET').toUpperCase()
     let body = ''
@@ -179,7 +184,7 @@ export function installBrowserMock(): BrowserMock {
     else if (request) body = await request.clone().text().catch(() => '')
 
     const search = rawUrl.includes('?') ? rawUrl.slice(rawUrl.indexOf('?')) : ''
-    const result = await backend.handle(method, `${pathname}${search}`, body)
+    const result = await backend.handle(method, `${apiPath}${search}`, body)
     if (!result) return new Response('Not found', { status: 404 })
     return new Response(result.body, { status: result.status, headers: result.headers })
   }

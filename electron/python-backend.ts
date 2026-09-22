@@ -249,6 +249,13 @@ export async function startPythonBackend(): Promise<void> {
       cwd: backendPath,
       env: {
         ...process.env,
+        // A polluted PYTHONPATH leaks arbitrary parent site-packages into the
+        // backend's interpreter (a conda/pyenv/virtualenv shell, an IDE, or a
+        // host app embedding Python all set it) — the backend must resolve its
+        // own venv/bundled site-packages, never the launcher's. PYTHONHOME is
+        // still set explicitly farther down for the bundled interpreters that
+        // need it.
+        PYTHONPATH: '',
         PYTHONUNBUFFERED: '1',
         PYTHONNOUSERSITE: '1',
         // Only pass LTX_PORT when the developer explicitly set it

@@ -88,10 +88,15 @@ class ImageGenerationHandler(StateHandlerBase):
             self._generation.complete_generation(output_paths)
             return GenerateImageResponse(status="complete", image_paths=output_paths)
         except Exception as e:
-            self._generation.fail_generation(str(e))
-            if "cancelled" in str(e).lower():
+            if self._generation.is_generation_cancelled() or "cancelled" in str(e).lower():
+                # A cancelled run must surface with a Cancelled state, not an error:
+                # align the state machine with the response so the frontend polling
+                # loop never sees a cancelled job as failed.
+                self._generation.cancel_generation()
                 logger.info("Image generation cancelled by user")
                 return GenerateImageResponse(status="cancelled")
+
+            self._generation.fail_generation(str(e))
             raise HTTPError(500, str(e)) from e
 
     def _generate_via_wangp(self, req: GenerateImageRequest) -> GenerateImageResponse:
@@ -121,10 +126,15 @@ class ImageGenerationHandler(StateHandlerBase):
             self._generation.complete_generation(output_paths)
             return GenerateImageResponse(status="complete", image_paths=output_paths)
         except Exception as e:
-            self._generation.fail_generation(str(e))
-            if "cancelled" in str(e).lower():
+            if self._generation.is_generation_cancelled() or "cancelled" in str(e).lower():
+                # A cancelled run must surface with a Cancelled state, not an error:
+                # align the state machine with the response so the frontend polling
+                # loop never sees a cancelled job as failed.
+                self._generation.cancel_generation()
                 logger.info("WanGP image generation cancelled by user")
                 return GenerateImageResponse(status="cancelled")
+
+            self._generation.fail_generation(str(e))
             raise HTTPError(500, str(e)) from e
 
     def generate_image(
@@ -229,10 +239,14 @@ class ImageGenerationHandler(StateHandlerBase):
             self._generation.fail_generation(e.detail)
             raise
         except Exception as e:
-            self._generation.fail_generation(str(e))
-            if "cancelled" in str(e).lower():
+            if self._generation.is_generation_cancelled() or "cancelled" in str(e).lower():
+                # A cancelled run must surface with a Cancelled state, not an error:
+                # align the state machine with the response so the frontend polling
+                # loop never sees a cancelled job as failed.
+                self._generation.cancel_generation()
                 for path in output_paths:
                     path.unlink(missing_ok=True)
                 logger.info("Image generation cancelled by user")
                 return GenerateImageResponse(status="cancelled")
+            self._generation.fail_generation(str(e))
             raise HTTPError(500, str(e)) from e

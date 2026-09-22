@@ -20,7 +20,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from threading import RLock
-from typing import cast
+from typing import Any, cast
 
 from _routes._errors import HTTPError
 from api_types import GenerateImageRequest, GenerateVideoRequest, VideoCameraMotion
@@ -155,14 +155,21 @@ def _image_data_url(path: str | None) -> str:
 
 
 def _system_ram_gb() -> float | None:
-    try:
-        if hasattr(os, "sysconf"):
-            pages = os.sysconf("SC_PHYS_PAGES")
-            page_size = os.sysconf("SC_PAGE_SIZE")
+    """Total physical RAM in GB, or None when it cannot be determined.
+
+    ``os.sysconf`` exists only on POSIX (absent from Windows typeshed), so
+    access it through an explicitly-typed Any to keep pyright strict clean
+    on every platform; the ctypes global-memory call below covers Windows.
+    """
+    sysconf: Any | None = getattr(os, "sysconf", None)
+    if sysconf is not None:
+        try:
+            pages = sysconf("SC_PHYS_PAGES")
+            page_size = sysconf("SC_PAGE_SIZE")
             if pages > 0 and page_size > 0:
                 return round(pages * page_size / 1024**3, 1)
-    except (ValueError, OSError, AttributeError):
-        pass
+        except (ValueError, OSError, AttributeError):
+            pass
     try:
         import ctypes
 

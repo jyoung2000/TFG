@@ -175,9 +175,11 @@ class RetakeHandler(StateHandlerBase):
             self._generation.fail_generation("Retake generation failed")
             raise
         except Exception as exc:
-            self._generation.fail_generation(str(exc))
-            if "cancelled" in str(exc).lower():
+            if self._generation.is_generation_cancelled() or "cancelled" in str(exc).lower():
+                # A cancelled run must not surface as an error in the state machine:
+                self._generation.cancel_generation()
                 return RetakeResponse(status="cancelled")
+            self._generation.fail_generation(str(exc))
             raise HTTPError(500, f"Generation error: {exc}") from exc
         finally:
             self._text.clear_api_embeddings()

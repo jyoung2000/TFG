@@ -155,11 +155,15 @@ class VideoGenerationHandler(StateHandlerBase):
             return GenerateVideoResponse(status="complete", video_path=output_path, seed=seed)
 
         except Exception as e:
-            self._generation.fail_generation(str(e))
-            if "cancelled" in str(e).lower():
+            if self._generation.is_generation_cancelled() or "cancelled" in str(e).lower():
+                # A cancelled run must surface with a Cancelled state, not an error:
+                # align the state machine with the response so the frontend polling
+                # loop never sees a cancelled job as failed.
+                self._generation.cancel_generation()
                 logger.info("Generation cancelled by user")
                 return GenerateVideoResponse(status="cancelled")
 
+            self._generation.fail_generation(str(e))
             raise HTTPError(500, str(e)) from e
 
     def generate_video(
@@ -337,10 +341,15 @@ class VideoGenerationHandler(StateHandlerBase):
             return GenerateVideoResponse(status="complete", video_path=str(output_path), seed=seed)
 
         except Exception as e:
-            self._generation.fail_generation(str(e))
-            if "cancelled" in str(e).lower():
+            if self._generation.is_generation_cancelled() or "cancelled" in str(e).lower():
+                # A cancelled run must surface with a Cancelled state, not an error:
+                # align the state machine with the response so the frontend polling
+                # loop never sees a cancelled job as failed.
+                self._generation.cancel_generation()
                 logger.info("Generation cancelled by user")
                 return GenerateVideoResponse(status="cancelled")
+
+            self._generation.fail_generation(str(e))
             raise HTTPError(500, str(e)) from e
         finally:
             self._text.clear_api_embeddings()
@@ -528,10 +537,15 @@ class VideoGenerationHandler(StateHandlerBase):
             self._generation.fail_generation(e.detail)
             raise
         except Exception as e:
-            self._generation.fail_generation(str(e))
-            if "cancelled" in str(e).lower():
+            if self._generation.is_generation_cancelled() or "cancelled" in str(e).lower():
+                # A cancelled run must surface with a Cancelled state, not an error:
+                # align the state machine with the response so the frontend polling
+                # loop never sees a cancelled job as failed.
+                self._generation.cancel_generation()
                 logger.info("Generation cancelled by user")
                 return GenerateVideoResponse(status="cancelled")
+
+            self._generation.fail_generation(str(e))
             raise HTTPError(500, str(e)) from e
 
     def _write_forced_api_video(self, video_bytes: bytes) -> Path:
@@ -578,10 +592,15 @@ class VideoGenerationHandler(StateHandlerBase):
             self._generation.complete_generation(output_path)
             return GenerateVideoResponse(status="complete", video_path=output_path, seed=seed)
         except Exception as e:
-            self._generation.fail_generation(str(e))
-            if "cancelled" in str(e).lower():
+            if self._generation.is_generation_cancelled() or "cancelled" in str(e).lower():
+                # A cancelled run must surface with a Cancelled state, not an error:
+                # align the state machine with the response so the frontend polling
+                # loop never sees a cancelled job as failed.
+                self._generation.cancel_generation()
                 logger.info("WanGP generation cancelled by user")
                 return GenerateVideoResponse(status="cancelled")
+
+            self._generation.fail_generation(str(e))
             raise HTTPError(500, str(e)) from e
 
     @staticmethod

@@ -322,6 +322,9 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
           const newTakes = a.takes.filter((_, i) => i !== takeIndex)
           // Adjust activeTakeIndex
           let newActiveIdx = a.activeTakeIndex ?? newTakes.length - 1
+          // Deleting a take BEFORE the active one shifts every later index down;
+          // decrement so the same take stays selected instead of jumping ahead.
+          if (takeIndex < newActiveIdx) newActiveIdx -= 1
           if (newActiveIdx >= newTakes.length) newActiveIdx = newTakes.length - 1
           if (newActiveIdx < 0) newActiveIdx = 0
           const activeTake = newTakes[newActiveIdx]

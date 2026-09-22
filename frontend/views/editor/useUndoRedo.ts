@@ -140,11 +140,24 @@ export function useUndoRedo({
     if (clipboardRef.current.length === 0) return
     pushUndo()
     const earliest = clipboardRef.current.reduce((min, c) => Math.min(min, c.startTime), Infinity)
-    const newClips = clipboardRef.current.map(c => ({
-      ...c,
-      id: `clip-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-      startTime: currentTime + (c.startTime - earliest),
-    }))
+    const idMap = new Map<string, string>()
+    const newClips = clipboardRef.current.map(c => {
+      const freshId = `clip-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+      idMap.set(c.id, freshId)
+      return {
+        ...c,
+        id: freshId,
+        startTime: currentTime + (c.startTime - earliest),
+      }
+    })
+    // Remap cross-clip links (video ↔ audio pairs, etc.) to the new ids so a
+    // pasted group stays internally linked instead of pointing at the original
+    // clips (which is both wrong and leaves dangling ids when the originals move).
+    for (const clip of newClips) {
+      if (clip.linkedClipIds?.length) {
+        clip.linkedClipIds = clip.linkedClipIds.map(id => idMap.get(id) ?? id)
+      }
+    }
     setClips(prev => [...prev, ...newClips])
     setSelectedClipIds(new Set(newClips.map(c => c.id)))
   }, [currentTime, pushUndo, setClips, setSelectedClipIds])
