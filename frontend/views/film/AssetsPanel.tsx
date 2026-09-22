@@ -65,6 +65,84 @@ function ReferenceStrip({ asset }: { asset: FilmAsset }) {
   )
 }
 
+/**
+ * The asset's first reference image, resolved to a playable URL. Null while
+ * loading or when the asset has no references — cards fall back to an icon.
+ */
+function useAssetThumb(asset: FilmAsset): string | null {
+  const { film } = useFilm()
+  const [url, setUrl] = useState<string | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    setUrl(null)
+    void (async () => {
+      const first = asset.reference_images[0]
+      if (!film || !first) return
+      try {
+        const resolved = await filmMediaUrl(film.id, first)
+        if (!cancelled) setUrl(resolved)
+      } catch {
+        // A broken reference must not break the card; the icon fallback shows.
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [film, asset.reference_images])
+  return url
+}
+
+/**
+ * A visual asset card: reference-image thumbnail on top, name below. Shows the
+ * kind icon in place of a thumbnail when no reference exists yet, so an empty
+ * project still reads as a picture wall rather than a text list.
+ */
+function AssetCard({
+  asset,
+  selected,
+  onSelect,
+  onRemove,
+}: {
+  asset: FilmAsset
+  selected: boolean
+  onSelect: () => void
+  onRemove: () => void
+}) {
+  const thumb = useAssetThumb(asset)
+  return (
+    <div
+      onClick={onSelect}
+      className={`group relative rounded-lg overflow-hidden border cursor-pointer transition-colors ${
+        selected
+          ? 'border-violet-500 ring-1 ring-violet-500/50'
+          : 'border-zinc-800 hover:border-zinc-600'
+      }`}
+      title={asset.name}
+    >
+      <div className="aspect-video bg-zinc-950 flex items-center justify-center">
+        {thumb ? (
+          <img src={thumb} alt="" className="w-full h-full object-cover" />
+        ) : (
+          <span className="text-zinc-700">{KIND_META[asset.kind].icon}</span>
+        )}
+      </div>
+      <div className="px-1.5 py-1 bg-zinc-900/90">
+        <span className="block text-[11px] font-medium text-zinc-200 truncate">{asset.name}</span>
+      </div>
+      <button
+        onClick={e => {
+          e.stopPropagation()
+          onRemove()
+        }}
+        className="absolute top-1 right-1 p-1 rounded bg-zinc-950/70 text-zinc-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
+        aria-label={`Delete ${asset.name}`}
+      >
+        <Trash2 className="h-3 w-3" />
+      </button>
+    </div>
+  )
+}
+
 export function AssetsPanel() {
   const { film, refresh } = useFilm()
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -157,8 +235,8 @@ export function AssetsPanel() {
 
   return (
     <div className="flex h-full min-h-0">
-      {/* Asset list by kind */}
-      <div className="w-64 border-r border-zinc-800 overflow-y-auto p-2 space-y-3">
+      {/* Asset cards by kind */}
+      <div className="w-80 shrink-0 border-r border-zinc-800 overflow-y-auto p-2 space-y-4">
         {(Object.keys(KIND_META) as FilmAssetKind[]).map(kind => (
           <div key={kind}>
             <div className="flex items-center gap-1.5 px-1 pb-1">
@@ -174,30 +252,17 @@ export function AssetsPanel() {
                 <Plus className="h-3.5 w-3.5" />
               </button>
             </div>
-            <div className="space-y-0.5">
+            <div className="grid grid-cols-2 gap-1.5">
               {film.assets
                 .filter(a => a.kind === kind)
                 .map(asset => (
-                  <div
+                  <AssetCard
                     key={asset.id}
-                    onClick={() => setSelectedId(asset.id)}
-                    className={`group flex items-center gap-1.5 px-2 py-1.5 rounded text-xs cursor-pointer ${
-                      selectedId === asset.id
-                        ? 'bg-violet-600/25 text-white'
-                        : 'text-zinc-300 hover:bg-zinc-800'
-                    }`}
-                  >
-                    <span className="flex-1 truncate">{asset.name}</span>
-                    <button
-                      onClick={e => {
-                        e.stopPropagation()
-                        void remove(asset)
-                      }}
-                      className="opacity-0 group-hover:opacity-100 text-zinc-600 hover:text-red-400"
-                    >
-                      <Trash2 className="h-3 w-3" />
-                    </button>
-                  </div>
+                    asset={asset}
+                    selected={selectedId === asset.id}
+                    onSelect={() => setSelectedId(asset.id)}
+                    onRemove={() => void remove(asset)}
+                  />
                 ))}
               {film.assets.filter(a => a.kind === kind).length === 0 && (
                 <p className="px-2 text-[11px] text-zinc-700">None yet</p>
