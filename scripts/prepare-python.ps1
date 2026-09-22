@@ -8,7 +8,10 @@
 #   - uv must be installed (https://docs.astral.sh/uv/)
 
 param(
-    [string]$PythonVersion = (Get-Content "$PSScriptRoot\..\backend\.python-version" -Raw).Trim(),
+    # Pinned to an embeddable build that python.org still serves. The dev
+    # venv runs 3.12.12, but that patch was security-only and its embeddable
+    # zip was never published — 3.12.10 is the newest with one.
+    [string]$PythonVersion = "3.12.10",
     [string]$OutputDir = "python-embed"
 )
 
@@ -52,7 +55,9 @@ Write-Host "uv: $UvExe" -ForegroundColor Green
 
 Write-Host "`nEnsuring Wan2GP checkout..." -ForegroundColor Yellow
 & "$ScriptDir\ensure-wan2gp.ps1"
-if ($LASTEXITCODE -ne 0) {
+# A .ps1 invoked with & does not set $LASTEXITCODE (only native executables
+# do), so it stays $null/'' here. Treat any *nonzero* value as failure.
+if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) {
     Write-Host "ERROR: Wan2GP checkout setup failed!" -ForegroundColor Red
     exit 1
 }
@@ -159,7 +164,8 @@ Write-Host "All dependencies installed" -ForegroundColor Green
 
 Write-Host "`nInstalling Wan2GP dependencies..." -ForegroundColor Yellow
 & "$ScriptDir\ensure-wan2gp.ps1" -InstallPythonDeps -PythonExe $PythonExe
-if ($LASTEXITCODE -ne 0) {
+# Same $LASTEXITCODE quirk as above — .ps1 callees leave it empty.
+if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) {
     Write-Host "ERROR: Wan2GP dependency install failed!" -ForegroundColor Red
     exit 1
 }
