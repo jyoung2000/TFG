@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from state.app_settings import AppSettings
+from state.app_settings import AppSettings, OPENROUTER_API_KEY_ENV
 from app_factory import create_app
 from state import RuntimeConfig, build_initial_state, set_state_service_for_tests
 from app_handler import ServiceBundle
@@ -37,6 +37,18 @@ DEFAULT_APP_SETTINGS = AppSettings()
 @pytest.fixture
 def fake_services() -> FakeServices:
     return FakeServices()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_provider_env(monkeypatch: pytest.MonkeyPatch):
+    """Drop host-shell provider keys so 'no key configured' tests hold anywhere.
+
+    resolved_openrouter_api_key() falls back to OPENROUTER_API_KEY in the real
+    environment; when a developer or CI runner exports one, every test that
+    asserts an unconfigured-provider path (AI_DIRECTOR_KEY_MISSING etc.) would
+    fail. Tests that need a key set it explicitly via monkeypatch.setenv.
+    """
+    monkeypatch.delenv(OPENROUTER_API_KEY_ENV, raising=False)
 
 
 @pytest.fixture(autouse=True)
