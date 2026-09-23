@@ -343,6 +343,13 @@ export const filmApi = {
       `/api/film/director/models/${enc(provider)}${refresh ? '?refresh=true' : ''}`,
     ),
 
+  /** Analyse the asset's first reference image with a vision model to build a structured style guide. */
+  generateAssetStyleGuide: (projectId: string, assetId: string) =>
+    request<FilmAsset>(
+      `/api/film/projects/${enc(projectId)}/assets/${enc(assetId)}/style-guide`,
+      { method: 'POST', body: JSON.stringify({}) },
+    ),
+
   /** Render a reference image for an asset with the project's image model. */
   generateAssetReference: (projectId: string, assetId: string, prompt = '') =>
     request<{ asset: FilmAsset; prompt: string; provider: string; model: string; reference_path: string }>(

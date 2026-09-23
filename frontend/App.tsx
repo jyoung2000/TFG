@@ -17,6 +17,7 @@ import { AnalyzeVideo } from './views/AnalyzeVideo'
 import { AnalyzeImage } from './views/AnalyzeImage'
 import { LaunchGate } from './components/FirstRunSetup'
 import { PythonSetup } from './components/PythonSetup'
+import { ProcessingDashboard } from './components/ProcessingDashboard'
 import { SettingsModal, type SettingsTabId } from './components/SettingsModal'
 import { LogViewer } from './components/LogViewer'
 import { ApiGatewayModal, type ApiGatewaySection } from './components/ApiGatewayModal'
@@ -451,6 +452,7 @@ function AppContent() {
     <div className="relative h-screen w-screen">
       {renderView()}
 
+      <ProcessingDashboard />
       {showGlobalControls && (
         <div className="fixed top-[18px] right-3 z-50 flex items-center gap-1">
           <button

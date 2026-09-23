@@ -120,8 +120,16 @@ export interface FilmAsset {
   style_prompt: string
   continuity_notes: string
   reference_images: string[]
+  style_guide?: AssetStyleGuide
   created_at: number
   updated_at: number
+}
+
+export interface AssetStyleGuide {
+  key_traits: string[]
+  color_palette: string[]
+  mood: string
+  recommended_prompt: string
 }
 
 // ---- Composition scene (Shot Composer state) ----
