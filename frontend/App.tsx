@@ -14,6 +14,7 @@ import { Project } from './views/Project'
 import { Playground } from './views/Playground'
 import { QuickMode } from './views/QuickMode'
 import { AnalyzeVideo } from './views/AnalyzeVideo'
+import { AnalyzeImage } from './views/AnalyzeImage'
 import { LaunchGate } from './components/FirstRunSetup'
 import { PythonSetup } from './components/PythonSetup'
 import { SettingsModal, type SettingsTabId } from './components/SettingsModal'
@@ -439,6 +440,8 @@ function AppContent() {
         return <QuickMode />
       case 'analyze':
         return <AnalyzeVideo />
+      case 'analyze-image':
+        return <AnalyzeImage />
       default:
         return <Home />
     }

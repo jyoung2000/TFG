@@ -30,6 +30,7 @@ import { registerProjectOpsRoutes } from './routes/project-ops'
 import { registerQueueRoutes, tickQueue } from './routes/queue'
 import { registerSettingsRoutes } from './routes/settings'
 import { registerVideoAnalysisRoutes } from './routes/video-analysis'
+import { registerImageAnalysisRoutes } from './routes/image-analysis'
 import { NO_PERSISTENCE, Store, type Persistence } from './state'
 
 export interface MockBackendOptions {
@@ -61,6 +62,7 @@ export function createMockBackend(options: MockBackendOptions = {}): MockBackend
   registerProjectOpsRoutes(router, store)
   registerGenerationRoutes(router, store)
   registerVideoAnalysisRoutes(router, store)
+  registerImageAnalysisRoutes(router)
   registerKnowledgeRoutes(router, store)
   registerPromptRoutes(router, store)
   registerShotLibraryRoutes(router, store, options.clipUrl ?? '')

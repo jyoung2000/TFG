@@ -31,6 +31,7 @@ from handlers import (
     VideoGenerationHandler,
 )
 from film.media_runner import MediaRunner
+from film.image_recreation import ImageRecreation
 from runtime_config.runtime_config import RuntimeConfig
 from services.wangp_bridge import WanGPBridge
 from services.media_probe import MediaProbe
@@ -322,6 +323,11 @@ class AppHandler:
             timeline_handler=self.timeline,
             http=http,
             video_processor=video_processor,
+        )
+        self.image_recreation = ImageRecreation(
+            root=config.outputs_dir / "image_analyses",
+            image_generation=self.image_generation,
+            image_model=config.wangp_image_model_type if config.wangp_enabled else "Z-Image",
         )
 
         self.downloads.cleanup_downloading_dir()

@@ -201,6 +201,9 @@ class FilmHandler(StateHandlerBase):
     def __init__(self, state: AppState, lock: RLock, film_root: Path) -> None:
         super().__init__(state, lock)
         self._store = FilmStore(film_root)
+        # The preview route serves only files under the app outputs root
+        # (film_root's parent); external imports are copied in so they play.
+        self._app_outputs = film_root.parent
         self._knowledge: KnowledgeHandler | None = None
 
     @property
@@ -749,6 +752,28 @@ class FilmHandler(StateHandlerBase):
 
     # ---- Quick Mode → Film conversion ------------------------------------
 
+    def _previewable_copy(self, project_id: str, source: Path) -> Path:
+        """Return a path the /api/film/output preview route can serve.
+
+        Files already under the outputs root are used in place. Anything else
+        (a clip from the user's Videos folder) is copied into the project's
+        outputs so shot cards, the drawer and the composer can play it. The
+        user's original is never moved or modified.
+        """
+        if is_within(self._app_outputs, source):
+            return source
+        import shutil
+        import uuid
+
+        destination_dir = self._store.outputs_dir(project_id)
+        destination_dir.mkdir(parents=True, exist_ok=True)
+        destination = destination_dir / f"imported-{uuid.uuid4().hex[:10]}{source.suffix.lower()}"
+        try:
+            shutil.copy2(source, destination)
+        except OSError as exc:
+            raise HTTPError(500, f"Could not copy the imported clip for preview: {exc}") from exc
+        return destination
+
     def import_generation(self, project_id: str, req: ImportGenerationRequest) -> ImportGenerationResponse:
         """Wrap an already-rendered clip as a new scene/shot whose version 1 is
         that clip, so a Quick Mode result can be edited in the Film Maker with
@@ -767,6 +792,7 @@ class FilmHandler(StateHandlerBase):
         aspect: str = req.aspect_ratio if req.aspect_ratio in ("16:9", "9:16") else "16:9"
         with self.lock:
             project = self._load(project_id)
+            output = self._previewable_copy(project_id, output)
             if req.project_name and not project.name:
                 project.name = req.project_name
             scene = FilmScene(order=len(project.scenes), title=f"Scene {len(project.scenes) + 1}", description=prompt[:200])

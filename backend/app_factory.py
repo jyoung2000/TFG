@@ -26,6 +26,7 @@ from _routes.generation import router as generation_router
 from _routes.health import router as health_router
 from _routes.ic_lora import router as ic_lora_router
 from _routes.image_gen import router as image_gen_router
+from _routes.image_analysis import router as image_analysis_router
 from _routes.model_library import router as model_library_router
 from _routes.models import router as models_router
 from _routes.suggest_gap_prompt import router as suggest_gap_prompt_router
@@ -57,6 +58,8 @@ def _is_media_path(path: str) -> bool:
         return True
     # Frame thumbnails from video analysis — img tags can't send Bearer.
     if path.startswith("/api/video-analysis/") and path.endswith("/frame"):
+        return True
+    if path.startswith("/api/image-analysis/") and path.endswith("/media"):
         return True
     return path.startswith("/api/film/projects/") and path.endswith("/media")
 
@@ -139,6 +142,7 @@ def create_app(
     app.include_router(model_library_router)
     app.include_router(settings_router)
     app.include_router(image_gen_router)
+    app.include_router(image_analysis_router)
     app.include_router(suggest_gap_prompt_router)
     app.include_router(retake_router)
     app.include_router(ic_lora_router)

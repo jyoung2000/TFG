@@ -13,6 +13,9 @@ import {
 } from 'lucide-react'
 import { useProjects } from '../contexts/ProjectContext'
 import { useFilm } from '../contexts/FilmContext'
+import { useAppSettings } from '../contexts/AppSettingsContext'
+import { filmApi } from '../lib/film-api'
+import type { FilmModelCapability } from '../types/film'
 import { analysisFrameUrl, videoAnalysisApi } from '../lib/video-analysis-api'
 import { logger } from '../lib/logger'
 import {
@@ -38,6 +41,13 @@ export function AnalyzeVideo() {
   const { setCurrentView, openProject } = useProjects()
   const { setCurrentProjectId } = useProjects()
   const { refresh } = useFilm()
+  const { settings } = useAppSettings()
+  const [videoModels, setVideoModels] = useState<FilmModelCapability[]>([])
+  useEffect(() => {
+    void filmApi.capabilities()
+      .then(result => setVideoModels(result.models.filter(m => m.modes.includes('video') && m.downloaded)))
+      .catch(() => undefined)
+  }, [])
 
   const [analyses, setAnalyses] = useState<VideoAnalysis[]>([])
   const [current, setCurrent] = useState<VideoAnalysis | null>(null)
@@ -269,8 +279,9 @@ export function AnalyzeVideo() {
                   {busy === 'reconstruct' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Clapperboard className="h-3.5 w-3.5" />}
                   Create storyboard
                 </button>
-                <span className="text-[11px] text-zinc-500">
-                  Detection runs on this machine. Analysing uses your AI Director model when one is connected.
+                <span className="text-[11px] text-zinc-400" data-testid="video-model-recommendation">
+                  Vision: {settings.directorProvider === 'openai_compatible' && settings.openaiCompatibleModel ? settings.openaiCompatibleModel : 'connect qwen2.5vl:7b (recommended) in Settings'}
+                  {' · '}Recommended render model: {videoModels.find(m => m.is_active)?.label || videoModels[0]?.label || 'no local video model detected'}
                 </span>
               </div>
 

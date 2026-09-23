@@ -140,3 +140,22 @@ class TestSeedReporting:
         payload = response.json()
         assert payload["status"] == "complete"
         assert payload["seed"] == 4242
+
+
+class TestExternalClipPreview:
+    def test_clip_outside_outputs_is_copied_so_preview_route_serves_it(self, client, tmp_path: Path):
+        external = tmp_path / "Videos" / "my clip.mp4"
+        external.parent.mkdir(parents=True)
+        external.write_bytes(b"external-video")
+        response = client.post(
+            f"/api/film/projects/{PROJECT}/import-generation",
+            json={"prompt": "imported", "output_path": str(external)},
+        )
+        assert response.status_code == 200, response.text
+        version = response.json()["project"]["scenes"][0]["shots"][0]["versions"][0]
+        stored = Path(version["output_path"])
+        assert stored != external and stored.read_bytes() == b"external-video"
+        assert external.is_file()  # user's own file untouched
+        preview = client.get("/api/film/output", params={"path": str(stored)})
+        assert preview.status_code == 200
+        assert preview.content == b"external-video"
