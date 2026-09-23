@@ -243,7 +243,8 @@ export async function startPythonBackend(): Promise<void> {
     }
 
     // Generate auth token for this backend session
-    authToken = crypto.randomBytes(32).toString('base64url')
+    const isWanGP = fs.existsSync(path.join(process.resourcesPath ?? '', 'Wan2GP', 'wgp.py'))
+authToken = isWanGP ? '' : crypto.randomBytes(32).toString('base64url')
 
     pythonProcess = spawn(pythonPath, pythonArgs, {
       cwd: backendPath,
