@@ -16,11 +16,47 @@ Two rules run through the schema:
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal, cast
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, BeforeValidator, Field
 
 from film.film_models import now_ms
+
+
+def _flatten_shape(v: object) -> object:
+    """Collapse single-item lists to the bare string; join longer ones.
+
+    Small local models emit 'background': ['dark space'] where a string
+    belongs. Runs before _coerce_list_shape so both shapes are accepted.
+    """
+    if isinstance(v, list):
+        strings: list[str] = [item for item in cast(list[object], v) if isinstance(item, str)]
+        if len(strings) == 1:
+            return strings[0]
+        if len(strings) > 1:
+            return "; ".join(item for item in strings if item.strip())
+        return ""
+    return v
+
+
+def _coerce_list_shape(v: object) -> object:
+    """Coerce a bare string (or None) into a single-item list; drop junk items."""
+    if v is None or (isinstance(v, str) and not v.strip()):
+        return []
+    if isinstance(v, str):
+        return [v]
+    if isinstance(v, list):
+        cleaned: list[str] = [item for item in cast(list[object], v) if isinstance(item, str) and item.strip()]
+        return cleaned
+    return v
+
+
+#: A list[str] field that accepts every shape the small models emit:
+#: 'astronaut', ['astronaut'], ['a', 'b'], '', None.
+FlexibleStrList = Annotated[list[str], BeforeValidator(_coerce_list_shape), BeforeValidator(_flatten_shape)]
+
+#: A str field that accepts a list of strings too ('globe' / ['globe']).
+FlexibleStr = Annotated[str, BeforeValidator(_flatten_shape)]
 
 AnalysisDepth = Literal["fast", "standard", "detailed"]
 AnalysisStage = Literal["idle", "probing", "detecting", "extracting", "analyzing", "complete", "failed", "cancelled"]
@@ -61,92 +97,66 @@ class FrameEvidence(BaseModel):
 
 
 class VisualAnalysis(BaseModel):
-    description: str = ""
-    subjects: list[str] = Field(default_factory=list[str])
-    character_estimates: list[str] = Field(default_factory=list[str])
-    objects: list[str] = Field(default_factory=list[str])
-    location: str = ""
-    environment: str = ""
-    foreground: str = ""
-    midground: str = ""
-    background: str = ""
-    composition: str = ""
-    framing: str = ""
-    shot_size: str = ""
-    angle: str = ""
-    camera_height: str = ""
-    perspective: str = ""
-    lens_estimate: str = ""
-    depth_of_field: str = ""
-    focus: str = ""
-    lighting: str = ""
-    palette: list[str] = Field(default_factory=list[str])
-    contrast: str = ""
-    visual_style: str = ""
-    production_design: str = ""
-    wardrobe: str = ""
-    props: list[str] = Field(default_factory=list[str])
-    confidence: float = 0.0
+    """What the frames show — produced by the AI director or the offline pass.
 
-    @field_validator("subjects", "objects", "palette", "props", mode="before")
-    @classmethod
-    def _coerce_string_to_list(cls, v: object) -> object:
-        if v is None or (isinstance(v, str) and not v.strip()):
-            return []
-        if isinstance(v, str):
-            return [v]
-        return v
+    All fields use the flexible shapes so small local models' type flips
+    (list where a string belongs and vice versa) cannot fail the analysis.
+    """
+
+    description: FlexibleStr = ""
+    subjects: FlexibleStrList = Field(default_factory=list[str])
+    character_estimates: FlexibleStrList = Field(default_factory=list[str])
+    objects: FlexibleStrList = Field(default_factory=list[str])
+    location: FlexibleStr = ""
+    environment: FlexibleStr = ""
+    foreground: FlexibleStr = ""
+    midground: FlexibleStr = ""
+    background: FlexibleStr = ""
+    composition: FlexibleStr = ""
+    framing: FlexibleStr = ""
+    shot_size: FlexibleStr = ""
+    angle: FlexibleStr = ""
+    camera_height: FlexibleStr = ""
+    perspective: FlexibleStr = ""
+    lens_estimate: FlexibleStr = ""
+    depth_of_field: FlexibleStr = ""
+    focus: FlexibleStr = ""
+    lighting: FlexibleStr = ""
+    palette: FlexibleStrList = Field(default_factory=list[str])
+    contrast: FlexibleStr = ""
+    visual_style: FlexibleStr = ""
+    production_design: FlexibleStr = ""
+    wardrobe: FlexibleStr = ""
+    props: FlexibleStrList = Field(default_factory=list[str])
+    confidence: float = 0.0
 
 
 class CinematographyAnalysis(BaseModel):
-    camera_position: str = ""
-    camera_movement: str = ""
-    movement_types: list[str] = Field(default_factory=list[str])
+    camera_position: FlexibleStr = ""
+    camera_movement: FlexibleStr = ""
+    movement_types: FlexibleStrList = Field(default_factory=list[str])
     is_static: bool = True
-    screen_direction: str = ""
-    eyeline: str = ""
-    ots_relationship: str = ""
-    blocking: str = ""
-    composition_rules: list[str] = Field(default_factory=list[str])
+    screen_direction: FlexibleStr = ""
+    eyeline: FlexibleStr = ""
+    ots_relationship: FlexibleStr = ""
+    blocking: FlexibleStr = ""
+    composition_rules: FlexibleStrList = Field(default_factory=list[str])
     confidence: float = 0.0
-
-    @field_validator("movement_types", "composition_rules", mode="before")
-    @classmethod
-    def _coerce_string_to_list(cls, v: object) -> object:
-        # Small local models sometimes emit "" or a plain word where a JSON
-        # array was requested. Coerce instead of failing the whole analysis.
-        if v is None or (isinstance(v, str) and not v.strip()):
-            return []
-        if isinstance(v, str):
-            return [v]
-        return v
 
 
 class NarrativeAnalysis(BaseModel):
     """What the shot means in the story — produced by the AI director."""
 
-    what_happens: str = ""
-    who_acts: list[str] = Field(default_factory=list[str])
-    narrative_purpose: str = ""
-    emotional_purpose: str = ""
-    story_beat: str = ""
-    setup_or_payoff: str = ""
-    continuity_implications: list[str] = Field(default_factory=list[str])
-    pacing: str = ""
-    transition_role: str = ""
+    what_happens: FlexibleStr = ""
+    who_acts: FlexibleStrList = Field(default_factory=list[str])
+    narrative_purpose: FlexibleStr = ""
+    emotional_purpose: FlexibleStr = ""
+    story_beat: FlexibleStr = ""
+    setup_or_payoff: FlexibleStr = ""
+    continuity_implications: FlexibleStrList = Field(default_factory=list[str])
+    pacing: FlexibleStr = ""
+    transition_role: FlexibleStr = ""
     confidence: float = 0.0
-
-    @field_validator("who_acts", "continuity_implications", mode="before")
-    @classmethod
-    def _coerce_string_to_list(cls, v: object) -> object:
-        # Small local models (e.g. qwen2.5vl via Ollama) sometimes emit a
-        # plain sentence where a JSON array was requested. Coerce instead of
-        # failing the whole analysis.
-        if v is None:
-            return []
-        if isinstance(v, str):
-            return [v] if v.strip() else []
-        return v
 
 
 class EditorialAnalysis(BaseModel):
