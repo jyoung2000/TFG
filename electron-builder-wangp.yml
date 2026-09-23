@@ -1,0 +1,23 @@
+# Local/derivative build identity — "LTX Desktop WanGP" (TFG fork).
+#
+# Distinct from the upstream Lightricks app so both can be installed
+# side by side: different appId (Windows sees a different app), different
+# productName (install dir, shortcuts, taskbar label), different icons
+# (icon-wangp.*). Build with:
+#   pnpm exec electron-builder --win --config electron-builder-wangp.yml
+#
+# Everything else inherits from the base config.
+extends: electron-builder.yml
+appId: com.tfg.ltx-desktop-wangp
+productName: LTX Desktop WanGP
+copyright: Copyright © 2026 TFG
+
+win:
+  icon: resources/icon-wangp.ico
+  artifactName: ${productName}-Setup.${ext}
+
+nsis:
+  installerIcon: resources/icon-wangp.ico
+  uninstallerIcon: resources/icon-wangp.ico
+  installerHeaderIcon: resources/icon-wangp.ico
+  shortcutName: LTX Desktop WanGP

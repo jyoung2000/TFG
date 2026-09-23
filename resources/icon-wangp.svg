@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#062b21"/>
+      <stop offset="100%" stop-color="#031a14"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#34d399"/>
+      <stop offset="100%" stop-color="#0d9488"/>
+    </linearGradient>
+  </defs>
+  <rect width="1024" height="1024" rx="220" ry="220" fill="url(#bg)"/>
+  <!-- film-frame corners (teal accent) -->
+  <g stroke="url(#accent)" stroke-width="28" stroke-linecap="round" fill="none" opacity="0.9">
+    <path d="M 210 320 L 210 210 L 320 210"/>
+    <path d="M 704 210 L 814 210 L 814 320"/>
+    <path d="M 814 704 L 814 814 L 704 814"/>
+    <path d="M 320 814 L 210 814 L 210 704"/>
+  </g>
+  <!-- stylized "W" monogram with a play-triangle cut -->
+  <g transform="translate(512, 528)">
+    <g fill="#ecfdf5">
+      <path d="M -250 -120 L -160 -120 L -95 60 L -30 -120 L 30 -120 L 95 60 L 160 -120 L 250 -120 L 135 180 L 45 180 L 0 50 L -45 180 L -135 180 Z"/>
+    </g>
+    <path d="M -40 -40 L 110 20 L -40 80 Z" fill="url(#accent)"/>
+  </g>
+  <!-- WanGP badge -->
+  <g transform="translate(512, 822)">
+    <rect x="-190" y="-46" width="380" height="92" rx="46" fill="url(#accent)"/>
+    <text x="0" y="18" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-weight="700" font-size="58" fill="#03211a">WanGP</text>
+  </g>
+</svg>

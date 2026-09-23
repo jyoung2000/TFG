@@ -8,7 +8,9 @@
 param(
     [switch]$Unpack,
     [switch]$Signed,
-    [string]$Publish = ""
+    [string]$Publish = "",
+    # Optional electron-builder config override (e.g. electron-builder-wangp.yml).
+    [string]$Config = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -37,6 +39,12 @@ $ConfigArgs = @()
 if ($Signed -or $env:AZURE_TENANT_ID) {
     $ConfigArgs = @("--config", "electron-builder-signed.yml")
     Write-Host "Using signed release configuration." -ForegroundColor Yellow
+}
+if ($Config -ne "") {
+    # Explicit config wins — it lets a derivative build (WanGP identity)
+    # stay unsigned while overriding name/icons/appId.
+    $ConfigArgs = @("--config", $Config)
+    Write-Host "Using custom configuration: $Config" -ForegroundColor Yellow
 }
 
 # Build with electron-builder

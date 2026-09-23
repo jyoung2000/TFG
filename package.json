@@ -22,6 +22,7 @@
     "backend:test": "cross-env PYTHONPATH= VIRTUAL_ENV= PYTHONHOME= sh -c \"cd backend && uv sync --frozen --extra test --extra dev && uv run pytest -v --tb=short\"",
     "build:mac": "bash scripts/local-build.sh --platform mac",
     "build:win": "powershell -ExecutionPolicy Bypass -File scripts/local-build.ps1",
+    "build:win:wangp": "powershell -ExecutionPolicy Bypass -File scripts/local-build.ps1 -Config electron-builder-wangp.yml",
     "build:mac:skip-python": "bash scripts/local-build.sh --platform mac --skip-python",
     "build:win:skip-python": "powershell -ExecutionPolicy Bypass -File scripts/local-build.ps1 -SkipPython",
     "build:fast:mac": "bash scripts/local-build.sh --platform mac --unpack --skip-python",
