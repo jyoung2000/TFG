@@ -4,9 +4,8 @@
 # side by side: different appId (Windows sees a different app), different
 # productName (install dir, shortcuts, taskbar label), different icons
 # (icon-wangp.*). Build with:
-#   pnpm exec electron-builder --win --config electron-builder-wangp.yml
-#
-# Everything else inherits from the base config.
+#   VITE_APP_BRAND=wangp node scripts/build-win-retry.mjs --win --config electron-builder-wangp.yml
+
 extends: electron-builder.yml
 appId: com.tfg.ltx-desktop-wangp
 productName: LTX Desktop WanGP
@@ -15,6 +14,10 @@ copyright: Copyright © 2026 TFG
 win:
   icon: resources/icon-wangp.ico
   artifactName: ${productName}-Setup.${ext}
+
+extraResources:
+  - from: resources/icon-wangp.ico
+    to: icon-wangp.ico
 
 nsis:
   installerIcon: resources/icon-wangp.ico
