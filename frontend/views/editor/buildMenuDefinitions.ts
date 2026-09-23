@@ -1,3 +1,4 @@
+import { APP_NAME } from "../../lib/brand";
 import { type MenuDefinition } from '../../components/MenuBar'
 import type { TimelineClip } from '../../types/project'
 import { TEXT_PRESETS } from '../../types/project'
@@ -211,7 +212,7 @@ export function buildMenuDefinitions(p: MenuDepsParams): MenuDefinition[] {
       label: 'Help',
       items: [
         { id: 'shortcuts', label: 'Keyboard Shortcuts...', action: () => p.setKbEditorOpen(true) },
-        { id: 'about', label: 'About LTX Desktop', action: () => window.dispatchEvent(new CustomEvent('open-settings', { detail: { tab: 'about' } })) },
+        { id: 'about', label: `About ${APP_NAME}`, action: () => window.dispatchEvent(new CustomEvent('open-settings', { detail: { tab: 'about' } })) },
       ],
     },
   ]
