@@ -492,6 +492,22 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
   }, [projects])
   
   const openProject = useCallback((id: string, tab: ProjectTab = 'gen-space') => {
+    // Backend-born projects (e.g. storyboard reconstructed from a video
+    // analysis) are not in the localStorage-backed list. Register a stub so
+    // Home lists them and FilmSpace can resolve the id; FilmSpace itself
+    // loads the real data from the backend via FilmContext.
+    setProjects(prev => {
+      if (prev.some(p => p.id === id)) return prev
+      const stub: Project = {
+        id,
+        name: id.startsWith('film-') ? `Imported film (${id.slice(5, 13)})` : id,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        assets: [],
+        timelines: [createDefaultTimeline('Timeline 1')],
+      }
+      return [stub, ...prev]
+    })
     setCurrentProjectId(id)
     setCurrentView('project')
     setCurrentTab(tab)

@@ -124,7 +124,9 @@ export function AnalyzeVideo() {
     setBusy('reconstruct')
     setError('')
     try {
-      const project = await videoAnalysisApi.reconstruct(current.id)
+      const project = await videoAnalysisApi.reconstruct(current.id, {
+        name: current.title ? `${current.title} (from video)` : '',
+      })
       setCurrentProjectId(project.id)
       await refresh()
       openProject(project.id, 'storyboard')

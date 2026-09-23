@@ -1,8 +1,10 @@
-import { AlertCircle, Boxes, Brain, Check, Library, Download, Film, Folder, Info, KeyRound, Settings, Sliders, Sparkles, X, Zap } from 'lucide-react'
+import { AlertCircle, Boxes, Brain, Check, Cpu, Library, Download, Film, Folder, Info, KeyRound, RefreshCw, Settings, Sliders, Sparkles, X, Zap } from 'lucide-react'
 import React, { useEffect, useRef, useState } from 'react'
 import { Button } from './ui/button'
 import { useAppSettings, type AppSettings } from '../contexts/AppSettingsContext'
 import { backendFetch } from '../lib/backend'
+import { filmApi } from '../lib/film-api'
+import type { FilmCapabilities } from '../types/film'
 import { logger } from '../lib/logger'
 import { ApiKeyHelperRow, LtxApiKeyInput, LtxApiKeyHelperRow } from './LtxApiKeyInput'
 import { AiModelsSettings } from './AiModelsSettings'
@@ -44,6 +46,27 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
   const [showModelLicense, setShowModelLicense] = useState(false)
   const [analyticsEnabled, setAnalyticsEnabled] = useState(false)
   const [projectAssetsPath, setProjectAssetsPath] = useState('')
+  const [gpuCaps, setGpuCaps] = useState<FilmCapabilities | null>(null)
+  const [gpuLoading, setGpuLoading] = useState(false)
+  const [gpuError, setGpuError] = useState<string | null>(null)
+
+  const refreshGpu = React.useCallback(async () => {
+    setGpuLoading(true)
+    setGpuError(null)
+    try {
+      setGpuCaps(await filmApi.capabilities())
+    } catch (e) {
+      setGpuError(e instanceof Error ? e.message : 'Could not reach the backend')
+      logger.error(`GPU detection failed: ${e}`)
+    } finally {
+      setGpuLoading(false)
+    }
+  }, [])
+
+  // Detect GPU when the modal opens (general tab shows the panel).
+  useEffect(() => {
+    if (isOpen) void refreshGpu()
+  }, [isOpen, refreshGpu])
 
   useEffect(() => {
     if (!isOpen) return
@@ -337,6 +360,65 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
         <div className="px-6 py-5 space-y-6 h-[60vh] overflow-y-auto">
           {activeTab === 'general' && (
             <>
+              {/* GPU Detection */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Cpu className="h-4 w-4 text-green-400" />
+                    <h3 className="text-sm font-semibold text-white">GPU &amp; Runtime</h3>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => void refreshGpu()}
+                    disabled={gpuLoading}
+                    className="h-7 px-2 text-xs text-zinc-400 hover:text-white hover:bg-zinc-800"
+                  >
+                    <RefreshCw className={`h-3.5 w-3.5 mr-1 ${gpuLoading ? 'animate-spin' : ''}`} />
+                    {gpuLoading ? 'Detecting…' : 'Refresh'}
+                  </Button>
+                </div>
+                {gpuError && (
+                  <div className="flex items-start gap-2 bg-red-500/10 border border-red-500/30 rounded-lg p-3">
+                    <AlertCircle className="h-4 w-4 text-red-400 mt-0.5 flex-shrink-0" />
+                    <p className="text-xs text-red-300">{gpuError}</p>
+                  </div>
+                )}
+                {gpuCaps && (
+                  <div className="bg-zinc-800/50 rounded-lg p-4 space-y-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <p className="text-sm text-white font-medium">{gpuCaps.gpu_name ?? 'No GPU detected'}</p>
+                        <p className="text-xs text-zinc-500">
+                          {gpuCaps.gpu_vram_gb != null ? `${gpuCaps.gpu_vram_gb} GB VRAM` : 'VRAM unknown'}
+                          {gpuCaps.execution_mode === 'wangp' && ' · WanGP local mode'}
+                        </p>
+                      </div>
+                      <span
+                        className={`px-2 py-1 rounded-md text-xs font-medium flex-shrink-0 ${
+                          gpuCaps.gpu_verdict_level === 'ok'
+                            ? 'bg-green-500/15 text-green-400'
+                            : gpuCaps.gpu_verdict_level === 'partial'
+                              ? 'bg-yellow-500/15 text-yellow-400'
+                              : 'bg-red-500/15 text-red-400'
+                        }`}
+                      >
+                        {gpuCaps.gpu_verdict_level === 'ok' ? 'Ready' : gpuCaps.gpu_verdict_level === 'partial' ? 'Usable' : 'Insufficient'}
+                      </span>
+                    </div>
+                    {gpuCaps.gpu_verdict && (
+                      <p className="text-xs text-zinc-400 leading-relaxed">{gpuCaps.gpu_verdict}</p>
+                    )}
+                    {gpuCaps.vram_note && (
+                      <p className="text-xs text-zinc-500 leading-relaxed">{gpuCaps.vram_note}</p>
+                    )}
+                  </div>
+                )}
+                {!gpuCaps && !gpuError && gpuLoading && (
+                  <div className="bg-zinc-800/50 rounded-lg p-4 text-xs text-zinc-500">Detecting GPU…</div>
+                )}
+              </div>
+
               {/* Project Assets Path */}
               <div className="space-y-3">
                 <div className="flex items-center gap-2">

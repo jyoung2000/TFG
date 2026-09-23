@@ -38,6 +38,15 @@ const uiOnly = isUiMockEnabled() || standalone
 export default defineConfig({
   plugins: [
     react(),
+    {
+      // WanGP identity build: VITE_APP_BRAND=wangp swaps the document title
+      // so the derivative app is visually distinct from upstream LTX Desktop.
+      name: 'html-title-brand',
+      transformIndexHtml(html: string) {
+        if (process.env.VITE_APP_BRAND !== 'wangp') return html
+        return html.replace('<title>LTX Desktop</title>', '<title>LTX Desktop WanGP</title>')
+      },
+    },
     ...(uiOnly && !standalone ? [uiMockPlugin(path.resolve(__dirname, 'node_modules/.cache/ui-mock/state.json'))] : []),
     ...(standalone ? [singleFilePlugin()] : []),
     ...(uiOnly ? [] : electron([
