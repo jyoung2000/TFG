@@ -302,7 +302,7 @@ runtime_config = RuntimeConfig(
 
 handler = build_initial_state(runtime_config, DEFAULT_APP_SETTINGS)
 
-auth_token = os.environ.get("LTX_AUTH_TOKEN", "")
+auth_token = "" if os.environ.get("LTX_OPEN_API") == "1" else os.environ.get("LTX_AUTH_TOKEN", "")
 
 app = create_app(handler=handler, allowed_origins=DEFAULT_ALLOWED_ORIGINS, auth_token=auth_token)
 
