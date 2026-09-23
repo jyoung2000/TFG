@@ -317,7 +317,7 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
       />
 
       {/* Modal */}
-      <div className="relative bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl w-full max-w-xl mx-4">
+      <div className="relative bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl w-full max-w-4xl mx-4">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-800">
           <div className="flex items-center gap-2">
@@ -335,15 +335,17 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
           </Button>
         </div>
 
-        {/* Tabs */}
-        <div className="flex border-b border-zinc-800">
+        {/* Tabs — wrap to a second row instead of clipping; never overflows */}
+        <div className="flex flex-wrap border-b border-zinc-800" role="tablist">
           {tabs.map((tab) => {
             const Icon = tab.icon
             return (
               <button
                 key={tab.id}
+                role="tab"
+                aria-selected={activeTab === tab.id}
                 onClick={() => setActiveTab(tab.id)}
-                className={`flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors ${
+                className={`flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors whitespace-nowrap ${
                   activeTab === tab.id
                     ? 'text-white border-b-2 border-blue-500 -mb-px'
                     : 'text-zinc-400 hover:text-white'
