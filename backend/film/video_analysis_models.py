@@ -18,7 +18,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from film.film_models import now_ms
 
@@ -88,6 +88,15 @@ class VisualAnalysis(BaseModel):
     props: list[str] = Field(default_factory=list[str])
     confidence: float = 0.0
 
+    @field_validator("subjects", "objects", "palette", "props", mode="before")
+    @classmethod
+    def _coerce_string_to_list(cls, v: object) -> object:
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return []
+        if isinstance(v, str):
+            return [v]
+        return v
+
 
 class CinematographyAnalysis(BaseModel):
     camera_position: str = ""
@@ -101,8 +110,21 @@ class CinematographyAnalysis(BaseModel):
     composition_rules: list[str] = Field(default_factory=list[str])
     confidence: float = 0.0
 
+    @field_validator("movement_types", "composition_rules", mode="before")
+    @classmethod
+    def _coerce_string_to_list(cls, v: object) -> object:
+        # Small local models sometimes emit "" or a plain word where a JSON
+        # array was requested. Coerce instead of failing the whole analysis.
+        if v is None or (isinstance(v, str) and not v.strip()):
+            return []
+        if isinstance(v, str):
+            return [v]
+        return v
+
 
 class NarrativeAnalysis(BaseModel):
+    """What the shot means in the story — produced by the AI director."""
+
     what_happens: str = ""
     who_acts: list[str] = Field(default_factory=list[str])
     narrative_purpose: str = ""
@@ -113,6 +135,18 @@ class NarrativeAnalysis(BaseModel):
     pacing: str = ""
     transition_role: str = ""
     confidence: float = 0.0
+
+    @field_validator("who_acts", "continuity_implications", mode="before")
+    @classmethod
+    def _coerce_string_to_list(cls, v: object) -> object:
+        # Small local models (e.g. qwen2.5vl via Ollama) sometimes emit a
+        # plain sentence where a JSON array was requested. Coerce instead of
+        # failing the whole analysis.
+        if v is None:
+            return []
+        if isinstance(v, str):
+            return [v] if v.strip() else []
+        return v
 
 
 class EditorialAnalysis(BaseModel):

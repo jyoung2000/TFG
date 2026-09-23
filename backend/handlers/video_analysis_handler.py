@@ -332,12 +332,18 @@ class VideoAnalysisHandler(StateHandlerBase):
 
             self._describe_deterministically(analysis, shot, position, total)
             if provider is not None:
-                try:
-                    used_model = self._describe_with_model(analysis, shot, provider) or used_model
-                except HTTPError as exc:
+                last_error: str = ""
+                for attempt in range(2):  # one retry: local models occasionally OOM/queue-stall
+                    try:
+                        used_model = self._describe_with_model(analysis, shot, provider) or used_model
+                        last_error = ""
+                        break
+                    except HTTPError as exc:
+                        last_error = exc.detail
+                        logger.warning("Shot %s analysis attempt %s failed: %s", shot.id, attempt + 1, exc.detail)
+                if last_error:
                     # One shot failing must not lose the shots already done.
-                    shot.evidence_note = f"Model call failed: {exc.detail}"
-                    logger.warning("Shot %s analysis failed: %s", shot.id, exc.detail)
+                    shot.evidence_note = f"Model call failed: {last_error}"
 
             shot.prompts = self._compose_prompts(analysis, shot)
             shot.analyzed_at = now_ms()
@@ -787,9 +793,27 @@ def _as_dict(value: object) -> dict[str, object]:
 
 
 def _clean(payload: dict[str, object], model: type[object]) -> dict[str, object]:
-    """Keep only keys the model declares, so an extra field cannot break parsing."""
+    """Keep only keys the model declares, so an extra field cannot break parsing.
+
+    Also drops placeholder junk ("None", "Unknown", "N/A") that small local
+    models emit for fields they could not read — leaving it in would leak
+    straight into composed prompts.
+    """
     fields = getattr(model, "model_fields", {})
-    return {key: value for key, value in payload.items() if key in fields}
+    return {key: _strip_placeholders(value) for key, value in payload.items() if key in fields}
+
+
+_PLACEHOLDER_WORDS = {"none", "unknown", "n/a", "na", "null", "not visible", "unclear", "unspecified"}
+
+
+def _strip_placeholders(value: object) -> object:
+    """Map a model's 'I don't know' words to empty so `or` fallbacks work."""
+    if isinstance(value, str):
+        return "" if value.strip().lower().strip(".,") in _PLACEHOLDER_WORDS else value
+    if isinstance(value, list):
+        cleaned: list[object] = [_strip_placeholders(item) for item in cast(list[object], value)]
+        return cleaned
+    return value
 
 
 def _script_from(analysis: VideoAnalysis) -> str:
