@@ -261,6 +261,7 @@ export async function startPythonBackend(): Promise<void> {
         // Only pass LTX_PORT when the developer explicitly set it
         ...(process.env.LTX_PORT ? { LTX_PORT: process.env.LTX_PORT } : {}),
         LTX_AUTH_TOKEN: authToken,
+        LTX_OPEN_API: process.env.LTX_OPEN_API === '1' ? '1' : '0',
         LTX_LOG_FILE: getCurrentLogFilename(),
         LTX_APP_DATA_DIR: getAppDataDir(),
         PYTORCH_ENABLE_MPS_FALLBACK: '1',
