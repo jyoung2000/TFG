@@ -11,9 +11,25 @@ from __future__ import annotations
 
 import time
 import uuid
-from typing import Literal
+from typing import Annotated, Literal, cast
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, BeforeValidator, Field
+
+
+def _flatten_shape(v: object) -> object:
+    """Collapse single-item lists to the bare string; join longer ones."""
+    if isinstance(v, list):
+        strings: list[str] = [item for item in cast(list[object], v) if isinstance(item, str)]
+        if len(strings) == 1:
+            return strings[0]
+        if len(strings) > 1:
+            return "; ".join(item for item in strings if item.strip())
+        return ""
+    return v
+
+
+#: A str field that accepts a list of strings too ('globe' / ['globe']).
+FlexibleStr = Annotated[str, BeforeValidator(_flatten_shape)]
 
 FILM_SCHEMA_VERSION = 1
 
@@ -125,6 +141,15 @@ CAMERA_MOVE_LABELS: dict[str, str] = {
 FilmAssetKind = Literal["character", "location", "prop", "style"]
 
 
+class FilmAssetStyleGuide(BaseModel):
+    """AI-generated style guide for an asset from its reference image."""
+
+    key_traits: list[str] = Field(default_factory=list[str])
+    color_palette: list[str] = Field(default_factory=list[str])
+    mood: str = ""
+    recommended_prompt: str = ""
+
+
 class FilmAsset(BaseModel):
     id: str = Field(default_factory=lambda: new_id("asset"))
     kind: FilmAssetKind
@@ -145,6 +170,8 @@ class FilmAsset(BaseModel):
     style_prompt: str = ""
     continuity_notes: str = ""
     reference_images: list[str] = Field(default_factory=list[str])  # relative paths
+    # AI-powered style guide filled from a reference image.
+    style_guide: FilmAssetStyleGuide | None = None
     created_at: int = Field(default_factory=now_ms)
     updated_at: int = Field(default_factory=now_ms)
 

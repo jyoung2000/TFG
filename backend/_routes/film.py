@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import FileResponse
 
+from _routes._errors import HTTPError
 from api_types import StatusResponse
 from film.film_api_types import (
     AddAssetReferenceRequest,
@@ -392,3 +393,24 @@ def route_film_media(
     handler: AppHandler = Depends(get_state_service),
 ) -> FileResponse:
     return FileResponse(handler.film.media_path(project_id, path))
+
+
+# ---- Style guide ---------------------------------------------------------
+
+
+@router.post(
+    "/projects/{project_id}/assets/{asset_id}/style-guide",
+    response_model=AssetResponse,
+)
+def route_generate_style_guide(
+    project_id: str,
+    asset_id: str,
+    handler: AppHandler = Depends(get_state_service),
+) -> AssetResponse:
+    """Analyze an asset's first reference image with the configured vision
+    provider and fill in its style guide (key traits, color palette, mood,
+    recommended prompt, appearance, wardrobe)."""
+    provider = handler.film_director.optional_provider("storyboard")
+    if provider is None:
+        raise HTTPError(400, "No AI provider configured — open Settings → AI Director to set one up")
+    return AssetResponse(asset=handler.film.generate_asset_style_guide(project_id, asset_id, provider))

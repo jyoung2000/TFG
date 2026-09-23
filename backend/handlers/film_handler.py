@@ -52,6 +52,7 @@ from film.film_models import (
     CompositionObject,
     CompositionTransform,
     FilmAsset,
+    FilmAssetStyleGuide,
     FilmPose,
     FilmProject,
     FilmScene,
@@ -79,6 +80,7 @@ from server_utils.path_policy import (
     require_destination,
 )
 from film.knowledge_models import KnowledgeEvent
+from film.llm_providers import LLMMessage, LLMProvider
 from handlers.base import StateHandlerBase
 from handlers.knowledge_handler import KnowledgeHandler
 from state.app_state_types import AppState
@@ -1024,3 +1026,101 @@ class FilmHandler(StateHandlerBase):
             shot.status = status
             shot.updated_at = now_ms()
             self._save(project)
+
+    # ---- Style guide generation -------------------------------------------
+
+    def generate_asset_style_guide(
+        self, project_id: str, asset_id: str, provider: LLMProvider
+    ) -> FilmAsset:
+        """Analyze an asset's first reference image with the vision provider
+        and fill in its style guide and derived appearance/wardrobe fields."""
+        import json
+        import re
+
+        with self.lock:
+            project = self._load(project_id)
+            asset = project.asset(asset_id)
+            if asset is None:
+                raise HTTPError(404, f"Asset not found: {asset_id}")
+            if not asset.reference_images:
+                raise HTTPError(400, "Asset has no reference image to analyze")
+            ref_relative = asset.reference_images[0]
+        try:
+            ref_path = self._store.resolve_media_path(project_id, ref_relative)
+        except FilmStoreError as exc:
+            raise HTTPError(400, str(exc)) from exc
+        if not ref_path.is_file():
+            raise HTTPError(400, f"Reference image not found: {ref_relative}")
+
+        raw = ref_path.read_bytes()
+        encoded = base64.b64encode(raw).decode("ascii")
+        mime = "image/png" if ref_path.suffix.lower() == ".png" else "image/jpeg"
+        data_url = f"data:{mime};base64,{encoded}"
+
+        messages = [
+            LLMMessage(
+                role="system",
+                content=(
+                    "You are a character designer. Analyze this reference image and return JSON ONLY: "
+                    "{key_traits: [...], color_palette: [...], mood: '...', "
+                    "recommended_prompt: '...', appearance: '...', wardrobe: '...', "
+                    "description: '...'}. Only describe what you can see. Mark uncertain details."
+                ),
+            ),
+            LLMMessage(
+                role="user",
+                content="Analyze this reference image.",
+                images=[data_url],
+            ),
+        ]
+
+        reply = provider.chat(messages, json_mode=True)
+        text = reply.text.strip()
+
+        # Tolerate small-model quirks — extract the first JSON object.
+        match = re.search(r"\{.*\}", text, re.DOTALL)
+        try:
+            parsed = json.loads(match.group(0) if match else text)
+        except (json.JSONDecodeError, AttributeError) as exc:
+            raise HTTPError(502, f"Style guide generation returned unparseable JSON: {text[:200]}") from exc
+
+        key_traits: list[str] = []
+        raw_traits = parsed.get("key_traits", [])
+        if isinstance(raw_traits, list):
+            key_traits = [str(item).strip() for item in raw_traits if item is not None]  # type: ignore[reportUnknownVariableType]
+        elif isinstance(raw_traits, str) and raw_traits.strip():
+            key_traits = [raw_traits.strip()]
+
+        color_palette: list[str] = []
+        raw_palette = parsed.get("color_palette", [])
+        if isinstance(raw_palette, list):
+            color_palette = [str(item).strip() for item in raw_palette if item is not None]  # type: ignore[reportUnknownVariableType]
+        elif isinstance(raw_palette, str) and raw_palette.strip():
+            color_palette = [raw_palette.strip()]
+
+        mood = str(parsed.get("mood", "") or "").strip()
+        recommended_prompt = str(parsed.get("recommended_prompt", "") or "").strip()
+        appearance = str(parsed.get("appearance", "") or "").strip()
+        wardrobe = str(parsed.get("wardrobe", "") or "").strip()
+        description = str(parsed.get("description", "") or "").strip()
+
+        with self.lock:
+            project = self._load(project_id)
+            asset = project.asset(asset_id)
+            if asset is None:
+                raise HTTPError(404, f"Asset not found: {asset_id}")
+            asset.style_guide = FilmAssetStyleGuide(
+                key_traits=key_traits,
+                color_palette=color_palette,
+                mood=mood,
+                recommended_prompt=recommended_prompt,
+            )
+            if appearance:
+                asset.appearance = appearance
+            if wardrobe:
+                asset.wardrobe = wardrobe
+            if description:
+                asset.description = description
+            asset.updated_at = now_ms()
+            self._save(project)
+            return asset

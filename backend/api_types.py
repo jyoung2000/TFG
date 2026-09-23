@@ -110,6 +110,17 @@ class GenerationProgressResponse(BaseModel):
     totalSteps: int | None
 
 
+class GenerationQueueItem(BaseModel):
+    path: str
+    prompt: str = ""
+    completed_at: int = 0
+
+
+class GenerationQueueResponse(BaseModel):
+    active: GenerationProgressResponse
+    recent: list[GenerationQueueItem]
+
+
 class ModelInfo(BaseModel):
     id: str
     name: str
