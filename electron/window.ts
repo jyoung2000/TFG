@@ -13,7 +13,9 @@ export function createWindow(): BrowserWindow {
     : path.join(app.getAppPath(), 'dist-electron', 'preload.js')
 
   // App icon — use .ico on Windows, .png elsewhere
-  const iconExt = process.platform === 'win32' ? 'icon.ico' : 'icon.png'
+  const isWanGP = fs.existsSync(path.join(process.resourcesPath ?? '', 'Wan2GP', 'wgp.py'))
+  const iconBase = isWanGP ? 'icon-wangp' : 'icon'
+  const iconExt = process.platform === 'win32' ? iconBase + '.ico' : iconBase + '.png'
   const iconPath = path.join(getCurrentDir(), 'resources', iconExt)
   logger.info(`[icon] Loading app icon from: ${iconPath} | exists: ${fs.existsSync(iconPath)}`)
   const appIcon = fs.existsSync(iconPath) ? nativeImage.createFromPath(iconPath) : undefined
