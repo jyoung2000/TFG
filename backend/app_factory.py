@@ -55,6 +55,9 @@ def _is_media_path(path: str) -> bool:
         return True
     if path.startswith("/api/shot-library/") and path.endswith("/preview"):
         return True
+    # Frame thumbnails from video analysis — img tags can't send Bearer.
+    if path.startswith("/api/video-analysis/") and path.endswith("/frame"):
+        return True
     return path.startswith("/api/film/projects/") and path.endswith("/media")
 
 
