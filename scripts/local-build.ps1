@@ -35,6 +35,7 @@ Write-Host @"
 Set-Location $ProjectDir
 
 Write-Host "[0/4] Ensuring Wan2GP checkout..." -ForegroundColor Yellow
+$global:LASTEXITCODE = 0
 & "$ScriptDir\ensure-wan2gp.ps1"
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Failed to prepare Wan2GP checkout!" -ForegroundColor Red
