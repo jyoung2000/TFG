@@ -58,6 +58,7 @@ from film.video_analysis_models import (
     EditorialAnalysis,
     FrameEvidence,
     NarrativeAnalysis,
+    PromptLensAnalysis,
     ReversePrompts,
     TextAnalysis,
     VideoAnalysis,
@@ -397,22 +398,33 @@ class VideoAnalysisHandler(StateHandlerBase):
             return ""
 
         instruction = (
-            "You are a cinematographer describing ONE shot from a film. "
-            "Reply with JSON only, matching this shape:\n"
-            '{"visual":{"description":"","subjects":[],"objects":[],"location":"","environment":"",'
-            '"foreground":"","midground":"","background":"","composition":"","framing":"","shot_size":"",'
-            '"angle":"","camera_height":"","perspective":"","lens_estimate":"","depth_of_field":"","focus":"",'
-            '"lighting":"","palette":[],"contrast":"","visual_style":"","production_design":"","wardrobe":"",'
-            '"props":[],"confidence":0.0},'
-            '"cinematography":{"camera_position":"","camera_movement":"","movement_types":[],"is_static":true,'
-            '"screen_direction":"","eyeline":"","ots_relationship":"","blocking":"","composition_rules":[],'
-            '"confidence":0.0},'
-            '"narrative":{"what_happens":"","who_acts":[],"narrative_purpose":"","emotional_purpose":"",'
-            '"story_beat":"","setup_or_payoff":"","continuity_implications":[],"confidence":0.0}}\n'
-            "shot_size must be one of: xwide, wide, full, medium, mcu, closeup, xcu. "
-            "Every confidence is 0..1 and must reflect how much the frames actually show — "
-            "use a low number when you are guessing. Describe only what is visible; do not invent a story."
-        )
+                    "You are a cinematographer describing ONE shot from a film. "
+                    "Reply with JSON only, matching this shape:\n"
+                    '{"visual":{"description":"","subjects":[],"objects":[],"location":"","environment":"",'
+                    '"foreground":"","midground":"","background":"","composition":"","framing":"","shot_size":"",'
+                    '"angle":"","camera_height":"","perspective":"","lens_estimate":"","depth_of_field":"","focus":"",'
+                    '"lighting":"","palette":[],"contrast":"","visual_style":"","production_design":"","wardrobe":"",'
+                    '"props":[],"confidence":0.0},'
+                    '"cinematography":{"camera_position":"","camera_movement":"","movement_types":[],"is_static":true,'
+                    '"screen_direction":"","eyeline":"","ots_relationship":"","blocking":"","composition_rules":[],'
+                    '"confidence":0.0},'
+                    '"narrative":{"what_happens":"","who_acts":[],"narrative_purpose":"","emotional_purpose":"",'
+                    '"story_beat":"","setup_or_payoff":"","continuity_implications":[],"confidence":0.0},'
+                    '"visual_description":"",'
+                    '"prompt_lens":{"core_prompt":"","deep_description":"","subject":"","environment":"","camera":"",'
+                    '"lighting":"","style":"","mood":"","confidence":0.0}}\n'
+                    "shot_size must be one of: xwide, wide, full, medium, mcu, closeup, xcu. "
+                    "Every confidence is 0..1 and must reflect how much the frames actually show — "
+                    "use a low number when you are guessing. Describe only what is visible; do not invent a story.\n"
+                    "In prompt_lens: core_prompt is ONE concise sentence, directly usable as an AI video generation "
+                    "prompt that would reproduce this exact shot. deep_description is a vivid 150-200 word paragraph "
+                    "of the whole frame. subject covers who/what is in frame, appearance, action, clothing. "
+                    "environment covers scene type, location, time of day, weather, background, depth layers. "
+                    "camera covers angle, shot scale, movement, focus, composition. lighting covers source, direction, "
+                    "color temperature, mood of light. style covers visual style, palette, texture, post-processing. "
+                    "mood covers emotional tone, narrative implication, rhythm. "
+                    "Do not invent details that are not in the frame — for anything unseen, leave the field empty."
+                )
         context = (
             f"Shot {shot.index + 1} of {len(analysis.shots)}. "
             f"Runs {shot.start:.2f}s to {shot.end:.2f}s ({shot.duration:.2f}s) "
@@ -434,6 +446,7 @@ class VideoAnalysisHandler(StateHandlerBase):
         visual = _as_dict(parsed.get("visual"))
         cinematography = _as_dict(parsed.get("cinematography"))
         narrative = _as_dict(parsed.get("narrative"))
+        lens = _as_dict(parsed.get("prompt_lens"))
         if visual:
             shot.visual = VisualAnalysis.model_validate(_clean(visual, VisualAnalysis))
         if cinematography:
@@ -443,6 +456,8 @@ class VideoAnalysisHandler(StateHandlerBase):
             # Keep the measured pacing; the model does not time the shot.
             merged.setdefault("pacing", shot.narrative.pacing)
             shot.narrative = NarrativeAnalysis.model_validate(merged)
+        if lens:
+            shot.prompt_lens = PromptLensAnalysis.model_validate(_clean(lens, PromptLensAnalysis))
 
         shot.analysis_provider = provider.name
         shot.analysis_model = provider.model

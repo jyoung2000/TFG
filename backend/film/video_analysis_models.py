@@ -216,6 +216,26 @@ class ReversePrompts(BaseModel):
     edited: bool = False
 
 
+class PromptLensAnalysis(BaseModel):
+    """PromptLens reverse-engineered 1:1 prompt, one per shot.
+
+    Recreates the prompt that could regenerate this exact shot: a single
+    usable "core prompt", a deep 150-200-word description, and the six
+    dimensions prompt-lens analyses (subject / environment / camera /
+    lighting / style / mood).
+    """
+
+    core_prompt: FlexibleStr = ""
+    deep_description: FlexibleStr = ""
+    subject: FlexibleStr = ""
+    environment: FlexibleStr = ""
+    camera: FlexibleStr = ""
+    lighting: FlexibleStr = ""
+    style: FlexibleStr = ""
+    mood: FlexibleStr = ""
+    confidence: float = 0.0
+
+
 class AnalyzedShot(BaseModel):
     """One detected shot and everything derived from it."""
 
@@ -237,6 +257,7 @@ class AnalyzedShot(BaseModel):
     audio: AudioAnalysis = Field(default_factory=AudioAnalysis)
     text: TextAnalysis = Field(default_factory=TextAnalysis)
     prompts: ReversePrompts = Field(default_factory=ReversePrompts)
+    prompt_lens: PromptLensAnalysis = Field(default_factory=PromptLensAnalysis)
 
     #: Where the content came from: a model, or the deterministic fallback.
     analysis_provider: str = ""

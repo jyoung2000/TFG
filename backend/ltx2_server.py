@@ -198,9 +198,17 @@ def _resolve_wangp_python(wangp_root: Path | None) -> str | None:
 
 def _resolve_wangp_extra_args() -> tuple[str, ...]:
     raw_args = os.environ.get("WANGP_EXTRA_ARGS", "").strip()
-    if not raw_args:
-        return ()
-    return tuple(shlex.split(raw_args))
+    args = tuple(shlex.split(raw_args)) if raw_args else ()
+    # SageAttention kernels are JIT-compiled by Triton at generation time.
+    # The embedded python-embed interpreter ships without development headers
+    # (Include/Python.h), so Triton's tcc cannot build cuda_utils.c and every
+    # generation dies with 'include file Python.h not found'. sdpa is the
+    # pure-torch fallback (built-in scaled_dot_product_attention) and works
+    # with the embedded interpreter. Only force it when the caller did not
+    # already pick an attention mode explicitly.
+    if "--attention" not in args and not any(a.startswith("--attention=") for a in args):
+        args = args + ("--attention", "sdpa")
+    return args
 
 # ============================================================
 # Settings

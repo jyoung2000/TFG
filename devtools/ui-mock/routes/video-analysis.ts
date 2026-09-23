@@ -58,6 +58,7 @@ function emptyShot(index: number, start: number, end: number): AnalyzedShot {
     audio: { analyzed: false, dialogue: '', transcription: '', voiceover: '', ambience: '', music: '', sfx: [], silence: false, emphasis: '', rhythm: '', confidence: 0 },
     text: { analyzed: false, visible_text: [], subtitles: [], signs: [], ui_text: [], typography: '', confidence: 0 },
     prompts: { storyboard: '', video: '', cinematography: '', environment: '', character: '', motion: '', negative: '', model_specific: {}, edited: false },
+    prompt_lens: { core_prompt: '', deep_description: '', subject: '', environment: '', camera: '', lighting: '', style: '', mood: '', confidence: 0 },
     analysis_provider: '',
     analysis_model: '',
     provenance: 'measured',

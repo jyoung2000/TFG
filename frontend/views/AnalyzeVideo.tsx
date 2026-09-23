@@ -609,6 +609,7 @@ function ShotInspector({
           ['Screen direction', shot.cinematography.screen_direction],
         ]}
       />
+      <PromptLensPanel lens={shot.prompt_lens} />
       <AnalysisGroup
         title="Editorial (measured)"
         confidence={shot.editorial.confidence}
@@ -706,6 +707,50 @@ function AnalysisGroup({
     </section>
   )
 }
+
+/** PromptLens 1:1 reverse-engineered prompt for this shot. */
+function PromptLensPanel({ lens }: { lens: unknown }) {
+  const l = (lens || {}) as {
+    core_prompt?: string
+    deep_description?: string
+    subject?: string
+    environment?: string
+    camera?: string
+    lighting?: string
+    style?: string
+    mood?: string
+    confidence?: number
+  }
+  if (!l.core_prompt && !l.deep_description) return null
+  return (
+    <section className="space-y-1.5 rounded border border-amber-500/30 bg-amber-500/5 p-2">
+      <h3 className="text-[11px] uppercase tracking-wide text-amber-300 flex items-center gap-2">
+        PromptLens 1:1 prompt
+        {l.confidence ? (
+          <span className="text-[9px] normal-case text-amber-300/80">{confidenceLabel(l.confidence)}</span>
+        ) : null}
+      </h3>
+      {l.core_prompt ? (
+        <p className="text-[12px] text-amber-100 leading-snug">
+          <span className="text-amber-500/70">Core: </span>{l.core_prompt}
+        </p>
+      ) : null}
+      {l.deep_description ? (
+        <p className="text-[11px] text-zinc-300 leading-snug">{l.deep_description}</p>
+      ) : null}
+      {([['Subject', l.subject], ['Environment', l.environment], ['Camera', l.camera],
+         ['Lighting', l.lighting], ['Style', l.style], ['Mood', l.mood]] as [string, string | undefined][])
+        .filter(([, v]) => v)
+        .map(([label, value]) => (
+          <div key={label} className="flex gap-2 text-[11px]">
+            <dt className="w-24 shrink-0 text-amber-500/70">{label}</dt>
+            <dd className="text-zinc-300">{value}</dd>
+          </div>
+        ))}
+    </section>
+  )
+}
+
 
 function PromptEditor({
   shot,

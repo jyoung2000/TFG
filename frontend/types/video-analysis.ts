@@ -149,6 +149,19 @@ export interface ReversePrompts {
   edited: boolean
 }
 
+/** PromptLens 1:1 reverse-engineered prompt for one shot. */
+export interface PromptLensAnalysis {
+  core_prompt: string
+  deep_description: string
+  subject: string
+  environment: string
+  camera: string
+  lighting: string
+  style: string
+  mood: string
+  confidence: number
+}
+
 export interface AnalyzedShot {
   id: string
   index: number
@@ -166,6 +179,7 @@ export interface AnalyzedShot {
   audio: AudioAnalysis
   text: TextAnalysis
   prompts: ReversePrompts
+  prompt_lens: PromptLensAnalysis
   analysis_provider: string
   analysis_model: string
   provenance: Provenance
