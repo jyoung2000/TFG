@@ -118,6 +118,25 @@ export function registerGenerationRoutes(router: Router, store: Store): void {
     }
   })
 
+  router.get('/api/generation/queue', () => {
+    const generation = store.data.generation
+    const active = generation ? {
+      status: generation.status,
+      phase: generation.status === 'running' ? phaseAt(progressOf(store.data)) : generation.phase,
+      progress: generation.status === 'running' ? progressOf(store.data) : generation.progress,
+      prompt: generation.prompt,
+      id: generation.id,
+    } : { status: 'idle', phase: '', progress: 0, prompt: '' }
+    const recent = generation?.status === 'complete' ? [{
+      path: generation.output_path,
+      prompt: generation.prompt,
+      completed_at: generation.started_at + generation.duration_ms,
+      type: /\\.(mp4|webm|mov|mkv)$/i.test(generation.output_path) ? 'video' : 'image',
+      size_mb: 2.4,
+    }] : []
+    return { active, recent }
+  })
+
   router.post('/api/generate/cancel', () =>
     store.mutate(state => {
       if (state.generation?.status === 'running') state.generation.status = 'cancelled'

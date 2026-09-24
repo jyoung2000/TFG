@@ -1036,6 +1036,7 @@ class FilmHandler(StateHandlerBase):
         and fill in its style guide and derived appearance/wardrobe fields."""
         import json
         import re
+        from typing import cast
 
         with self.lock:
             project = self._load(project_id)
@@ -1061,7 +1062,7 @@ class FilmHandler(StateHandlerBase):
             LLMMessage(
                 role="system",
                 content=(
-                    "You are a character designer. Analyze this reference image and return JSON ONLY: "
+                    f"You are a visual development designer specializing in {asset.kind} assets. Analyze this reference image and return JSON ONLY: "
                     "{key_traits: [...], color_palette: [...], mood: '...', "
                     "recommended_prompt: '...', appearance: '...', wardrobe: '...', "
                     "description: '...'}. Only describe what you can see. Mark uncertain details."
@@ -1084,25 +1085,40 @@ class FilmHandler(StateHandlerBase):
         except (json.JSONDecodeError, AttributeError) as exc:
             raise HTTPError(502, f"Style guide generation returned unparseable JSON: {text[:200]}") from exc
 
+        if not isinstance(parsed, dict):
+            raise HTTPError(502, "Style guide response must be a JSON object")
+        parsed = cast(dict[str, object], parsed)
+
+        def clean_text(value: object) -> str:
+            if isinstance(value, str):
+                return value.strip()
+            if isinstance(value, list):
+                return "; ".join(
+                    item.strip() for item in cast(list[object], value)
+                    if isinstance(item, str) and item.strip()
+                )
+            return ""
+
+        def clean_list(value: object) -> list[str]:
+            if isinstance(value, str):
+                return [value.strip()] if value.strip() else []
+            if isinstance(value, list):
+                return [item.strip() for item in cast(list[object], value) if isinstance(item, str) and item.strip()]
+            return []
+
         key_traits: list[str] = []
         raw_traits = parsed.get("key_traits", [])
-        if isinstance(raw_traits, list):
-            key_traits = [str(item).strip() for item in raw_traits if item is not None]  # type: ignore[reportUnknownVariableType]
-        elif isinstance(raw_traits, str) and raw_traits.strip():
-            key_traits = [raw_traits.strip()]
+        key_traits = clean_list(raw_traits)
 
         color_palette: list[str] = []
         raw_palette = parsed.get("color_palette", [])
-        if isinstance(raw_palette, list):
-            color_palette = [str(item).strip() for item in raw_palette if item is not None]  # type: ignore[reportUnknownVariableType]
-        elif isinstance(raw_palette, str) and raw_palette.strip():
-            color_palette = [raw_palette.strip()]
+        color_palette = clean_list(raw_palette)
 
-        mood = str(parsed.get("mood", "") or "").strip()
-        recommended_prompt = str(parsed.get("recommended_prompt", "") or "").strip()
-        appearance = str(parsed.get("appearance", "") or "").strip()
-        wardrobe = str(parsed.get("wardrobe", "") or "").strip()
-        description = str(parsed.get("description", "") or "").strip()
+        mood = clean_text(parsed.get("mood", ""))
+        recommended_prompt = clean_text(parsed.get("recommended_prompt", ""))
+        appearance = clean_text(parsed.get("appearance", ""))
+        wardrobe = clean_text(parsed.get("wardrobe", ""))
+        description = clean_text(parsed.get("description", ""))
 
         with self.lock:
             project = self._load(project_id)
@@ -1121,6 +1137,8 @@ class FilmHandler(StateHandlerBase):
                 asset.wardrobe = wardrobe
             if description:
                 asset.description = description
+            if asset.kind == "style" and recommended_prompt:
+                asset.style_prompt = recommended_prompt
             asset.updated_at = now_ms()
             self._save(project)
             return asset

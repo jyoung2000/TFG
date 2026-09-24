@@ -13,6 +13,21 @@ const KIND_META: Record<FilmAssetKind, { label: string; plural: string; icon: Re
 
 const inputClass = 'w-full bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-xs text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-violet-600'
 
+function paletteSwatch(label: string): string {
+  const value = label.trim().toLowerCase()
+  if (/^#[0-9a-f]{3,8}$/i.test(value) || /^rgba?\(/i.test(value)) return value
+  if (value.includes('brass') || value.includes('gold') || value.includes('amber')) return '#b88a42'
+  if (value.includes('cream') || value.includes('ivory')) return '#eee2bd'
+  if (value.includes('charcoal') || value.includes('black')) return '#383838'
+  if (value.includes('white')) return '#efefef'
+  if (value.includes('blue') || value.includes('navy')) return '#4779a8'
+  if (value.includes('green') || value.includes('olive')) return '#668056'
+  if (value.includes('red') || value.includes('rust')) return '#a94d3d'
+  if (value.includes('brown') || value.includes('tan')) return '#94704f'
+  if (value.includes('gray') || value.includes('grey') || value.includes('silver')) return '#92969a'
+  return '#777777'
+}
+
 const KIND_FIELDS: Record<FilmAssetKind, { key: keyof FilmAsset; label: string }[]> = {
   character: [
     { key: 'description', label: 'Identity / role' }, { key: 'appearance', label: 'Appearance' },
@@ -38,7 +53,7 @@ function ReferenceThumb({ path }: { path: string }) {
   const [url, setUrl] = useState<string | null>(null)
   useEffect(() => { if (film) filmMediaUrl(film.id, path).then(setUrl).catch(() => {}) }, [film, path])
   if (!url) return null
-  return <img src={url} alt="" className="h-16 w-16 object-cover rounded border border-zinc-800" />
+  return <img src={url} alt="Asset visual reference" className="h-32 w-44 object-contain rounded border border-zinc-800 bg-black/40" />
 }
 
 function useAssetThumb(asset: FilmAsset): string | null {
@@ -82,7 +97,7 @@ function StyleGuidePanel({ asset }: { asset: FilmAsset }) {
   return (
     <div className="space-y-2.5">
       {sg.key_traits.length > 0 && <div><span className="text-[10px] text-zinc-500 uppercase tracking-wide font-semibold">Key traits</span><div className="flex flex-wrap gap-1 mt-1">{sg.key_traits.map((t, i) => <span key={i} className="px-2 py-0.5 rounded-full bg-zinc-800 text-[10px] text-zinc-300">{t}</span>)}</div></div>}
-      {sg.color_palette.length > 0 && <div><span className="text-[10px] text-zinc-500 uppercase tracking-wide font-semibold">Color palette</span><div className="flex gap-1.5 mt-1 flex-wrap">{sg.color_palette.map((c, i) => <span key={i} className="flex items-center gap-1.5 text-[10px] text-zinc-400 bg-zinc-800 px-2 py-0.5 rounded"><span className="w-3 h-3 rounded-sm border border-zinc-700" style={{background: c}} />{c}</span>)}</div></div>}
+      {sg.color_palette.length > 0 && <div><span className="text-[10px] text-zinc-500 uppercase tracking-wide font-semibold">Color palette</span><div className="flex gap-1.5 mt-1 flex-wrap">{sg.color_palette.map((c, i) => <span key={i} className="flex items-center gap-1.5 text-[10px] text-zinc-400 bg-zinc-800 px-2 py-0.5 rounded"><span className="w-3 h-3 rounded-sm border border-zinc-700" style={{background: paletteSwatch(c)}} />{c}</span>)}</div></div>}
       {sg.mood && <div><span className="text-[10px] text-zinc-500 uppercase tracking-wide font-semibold">Mood</span><p className="text-xs text-zinc-300 mt-0.5">{sg.mood}</p></div>}
       {sg.recommended_prompt && <div><span className="text-[10px] text-zinc-500 uppercase tracking-wide font-semibold">Generation prompt</span><p className="text-xs text-zinc-400 mt-0.5 bg-zinc-800/50 rounded p-2 border border-zinc-700/50">{sg.recommended_prompt}</p></div>}
     </div>
@@ -179,7 +194,7 @@ export function AssetsPanel() {
       </div>
       <div className="flex-1 overflow-y-auto p-5">
         {selected ? (
-          <div className="max-w-xl space-y-4">
+          <div className="max-w-4xl space-y-4">
             <div className="flex items-center gap-2">
               <span className="text-zinc-500">{KIND_META[selected.kind].icon}</span>
               <input className="flex-1 bg-transparent text-lg font-semibold text-white focus:outline-none border-b border-transparent focus:border-violet-600" value={(draft.name as string) ?? ''} onChange={e => setDraft(d => ({ ...d, name: e.target.value }))} />

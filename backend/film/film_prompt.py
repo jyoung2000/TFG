@@ -30,7 +30,8 @@ from film.shot_vocabulary import (
 
 def _describe_character(asset: FilmAsset, emotion: str, pose_name: str) -> str:
     parts = [asset.name]
-    details = ", ".join(p for p in (asset.description, asset.appearance, asset.wardrobe) if p)
+    details = ", ".join(p for p in (asset.description, asset.appearance, asset.wardrobe,
+        asset.style_guide.recommended_prompt if asset.style_guide else "") if p)
     if details:
         parts.append(f"({details})")
     if emotion:
@@ -41,7 +42,8 @@ def _describe_character(asset: FilmAsset, emotion: str, pose_name: str) -> str:
 
 
 def _describe_location(asset: FilmAsset, scene: FilmScene) -> str:
-    parts = [p for p in (asset.name, asset.description, asset.environment, asset.atmosphere) if p]
+    parts = [p for p in (asset.name, asset.description, asset.environment, asset.atmosphere,
+        asset.style_guide.recommended_prompt if asset.style_guide else "") if p]
     lighting = scene.lighting or asset.lighting
     if lighting:
         parts.append(f"{lighting} lighting")
@@ -101,7 +103,8 @@ def synthesize_prompt(project: FilmProject, scene: FilmScene, shot: FilmShot) ->
         prop = project.asset(prop_id)
         if prop is not None:
             detail = f" ({prop.prop_details})" if prop.prop_details else ""
-            fragments.append(f"featuring {prop.name}{detail}")
+            guide_prompt = prop.style_guide.recommended_prompt if prop.style_guide else ""
+            fragments.append(f"featuring {prop.name}{detail}" + (f", {guide_prompt}" if guide_prompt else ""))
 
     if scene.mood:
         fragments.append(f"{scene.mood} mood")

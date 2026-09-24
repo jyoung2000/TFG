@@ -692,6 +692,8 @@ class FilmGenerationHandler(StateHandlerBase):
             parts.insert(1, asset.description.strip())
         if style_prompt.strip():
             parts.append(style_prompt.strip())
+        if asset.style_guide and asset.style_guide.recommended_prompt.strip():
+            parts.append(asset.style_guide.recommended_prompt.strip())
         return ", ".join(part for part in parts if part)
 
     def generate_asset_reference(

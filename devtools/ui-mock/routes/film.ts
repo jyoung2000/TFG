@@ -201,6 +201,24 @@ export function registerFilmRoutes(router: Router, store: Store, clipUrl: string
     }),
   )
 
+  router.post('/api/film/projects/:projectId/assets/:assetId/style-guide', req =>
+    store.mutate(() => {
+      const p = project(req.params.projectId)
+      const asset = p.assets.find(a => a.id === req.params.assetId)
+      if (!asset) throw new MockHttpError(404, `Asset not found: ${req.params.assetId}`)
+      if (!asset.reference_images.length) throw new MockHttpError(400, 'Asset has no reference image to analyze')
+      asset.style_guide = {
+        key_traits: ['distinct silhouette', 'consistent materials', 'recognizable detail'],
+        color_palette: ['warm brass', 'charcoal', 'soft cream'],
+        mood: 'cinematic, tactile and grounded',
+        recommended_prompt: `${asset.name}: ${asset.appearance || asset.description || 'preserve the visible shape, materials and color palette'}`,
+      }
+      asset.updated_at = now()
+      touched(p)
+      return { asset }
+    }),
+  )
+
   // ---- Scenes ----
 
   router.post('/api/film/projects/:projectId/scenes', req =>

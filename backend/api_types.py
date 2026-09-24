@@ -114,10 +114,12 @@ class GenerationQueueItem(BaseModel):
     path: str
     prompt: str = ""
     completed_at: int = 0
+    type: Literal["video", "image"]
+    size_mb: float = 0.0
 
 
 class GenerationQueueResponse(BaseModel):
-    active: GenerationProgressResponse
+    active: dict[str, object] | None
     recent: list[GenerationQueueItem]
 
 

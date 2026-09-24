@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { Activity, Loader2, Clock, Film, ImageIcon, ChevronDown, ChevronUp } from 'lucide-react'
 import { backendFetch } from '../lib/backend'
+import { filmOutputUrl } from '../lib/film-api'
 
 interface ActiveJob {
   status: string
@@ -23,6 +24,15 @@ interface RecentOutput {
 interface QueueState {
   active: ActiveJob | null
   recent: RecentOutput[]
+}
+
+function RecentPreview({ item }: { item: RecentOutput }) {
+  const [url, setUrl] = useState('')
+  useEffect(() => { let live = true; void filmOutputUrl(item.path).then(u => { if (live) setUrl(u) }).catch(() => {}); return () => { live = false } }, [item.path])
+  if (!url) return <div className="h-12 w-16 rounded bg-zinc-800 flex items-center justify-center shrink-0">{item.type === 'video' ? <Film className="h-4 w-4 text-zinc-500" /> : <ImageIcon className="h-4 w-4 text-zinc-500" />}</div>
+  return item.type === 'video'
+    ? <video src={url} muted preload="metadata" controls className="h-12 w-16 rounded bg-black object-cover shrink-0" aria-label={`Recent video ${formatPath(item.path)}`} />
+    : <a href={url} target="_blank" rel="noreferrer" title="Open full image"><img src={url} alt={formatPath(item.path)} className="h-12 w-16 rounded bg-black object-cover shrink-0" /></a>
 }
 
 function formatTime(ts: number): string {
@@ -61,7 +71,8 @@ export function ProcessingDashboard() {
     return () => clearInterval(id)
   }, [poll])
 
-  const hasActivity = state.active !== null || state.recent.length > 0
+  const isProcessing = !!state.active && ['running', 'queued'].includes(state.active.status)
+  const hasActivity = isProcessing || state.recent.length > 0
 
   if (!hasActivity && !error) return null
 
@@ -72,16 +83,16 @@ export function ProcessingDashboard() {
           onClick={() => setExpanded(true)}
           className="flex items-center gap-2 px-3 py-2 rounded-xl bg-zinc-900 border border-zinc-700 shadow-2xl hover:border-zinc-600 transition-colors"
         >
-          {state.active ? (
+          {isProcessing ? (
             <>
               <Loader2 className="h-3.5 w-3.5 animate-spin text-violet-400" />
-              <span className="text-xs text-zinc-300">{state.active.progress}%</span>
+              <span className="text-xs text-zinc-300">{state.active?.progress ?? 0}%</span>
             </>
           ) : (
             <Activity className="h-3.5 w-3.5 text-zinc-500" />
           )}
           <span className="text-[10px] text-zinc-400">
-            {state.active ? 'Generating...' : state.recent.length + ' recent'}
+            {isProcessing ? 'In progress' : state.recent.length + ' recent'}
           </span>
           <ChevronUp className="h-3 w-3 text-zinc-600" />
         </button>
@@ -101,7 +112,7 @@ export function ProcessingDashboard() {
 
           {error && <p className="px-3 py-2 text-[10px] text-red-400">{error}</p>}
 
-          {state.active && (
+          {state.active && isProcessing && (
             <div className="px-3 py-2 border-b border-zinc-800">
               <div className="flex items-center justify-between mb-1">
                 <span className="text-[10px] text-zinc-400 capitalize">{state.active.status}</span>
@@ -119,7 +130,7 @@ export function ProcessingDashboard() {
             <div className="max-h-48 overflow-y-auto">
               {state.recent.map((item, i) => (
                 <div key={i} className="flex items-center gap-2 px-3 py-2 border-b border-zinc-800/50 last:border-0 hover:bg-zinc-800/30">
-                  {item.type === 'video' ? <Film className="h-3.5 w-3.5 text-zinc-500 shrink-0" /> : <ImageIcon className="h-3.5 w-3.5 text-zinc-500 shrink-0" />}
+                  <RecentPreview item={item} />
                   <div className="min-w-0 flex-1">
                     <p className="text-[10px] text-zinc-400 truncate">{formatPath(item.path)}</p>
                     <p className="text-[9px] text-zinc-600 truncate">{item.prompt?.slice(0, 60) || 'No prompt'}</p>
@@ -133,7 +144,7 @@ export function ProcessingDashboard() {
             </div>
           )}
 
-          {!state.active && !state.recent.length && <p className="px-3 py-3 text-[10px] text-zinc-600 text-center">Nothing processing right now</p>}
+          {!isProcessing && !state.recent.length && <p className="px-3 py-3 text-[10px] text-zinc-600 text-center">Nothing processing right now</p>}
         </div>
       )}
     </div>
