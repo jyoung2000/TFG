@@ -36,6 +36,7 @@ export function createWindow(): BrowserWindow {
       webSecurity: isDev ? false : true,
     },
     backgroundColor: '#1a1a1a',
+    title: isWanGP ? 'LTX Desktop WanGP' : 'LTX Desktop',
     titleBarStyle: 'default',
     show: false,
   })

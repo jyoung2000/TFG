@@ -8,6 +8,7 @@ import {
   Scissors,
   Sparkles,
   Trash2,
+  Video,
   Wand2,
   X,
 } from 'lucide-react'
@@ -16,7 +17,7 @@ import { useFilm } from '../contexts/FilmContext'
 import { useAppSettings } from '../contexts/AppSettingsContext'
 import { filmApi } from '../lib/film-api'
 import type { FilmModelCapability } from '../types/film'
-import { analysisFrameUrl, videoAnalysisApi } from '../lib/video-analysis-api'
+import { analysisFrameUrl, videoAnalysisApi, type VideoRecreationRequest, type VideoRecreationResponse } from '../lib/video-analysis-api'
 import { logger } from '../lib/logger'
 import {
   DETECTION_METHOD_META,
@@ -50,12 +51,18 @@ export function AnalyzeVideo() {
   }, [])
 
   const [analyses, setAnalyses] = useState<VideoAnalysis[]>([])
-  const [current, setCurrent] = useState<VideoAnalysis | null>(null)
-  const [selectedShotId, setSelectedShotId] = useState<string | null>(null)
-  const [busy, setBusy] = useState<string>('')
-  const [error, setError] = useState('')
+    const [current, setCurrent] = useState<VideoAnalysis | null>(null)
+    const [selectedShotId, setSelectedShotId] = useState<string | null>(null)
+    const [busy, setBusy] = useState<string>('')
+    const [error, setError] = useState('')
+  
+    // Video recreation state
+        const [recreating, setRecreating] = useState(false)
+        const [recreationResult, setRecreationResult] = useState<VideoRecreationResponse | null>(null)
+        const [recreationCandidates] = useState(4)
+        const [recreationRounds] = useState(1)
 
-  const [depth, setDepth] = useState<AnalysisDepth>('standard')
+    const [depth, setDepth] = useState<AnalysisDepth>('standard')
   const [sensitivity, setSensitivity] = useState(0.5)
   const [minShot, setMinShot] = useState(0.6)
   const [analyzeAudio, setAnalyzeAudio] = useState(false)
@@ -130,24 +137,44 @@ export function AnalyzeVideo() {
   }, [analyzeAudio, analyzeText, depth, minShot, run, sensitivity])
 
   const createStoryboard = useCallback(async () => {
-    if (!current) return
-    setBusy('reconstruct')
-    setError('')
-    try {
-      const project = await videoAnalysisApi.reconstruct(current.id, {
-        name: current.title ? `${current.title} (from video)` : '',
-      })
-      setCurrentProjectId(project.id)
-      await refresh()
-      openProject(project.id, 'storyboard')
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setBusy('')
-    }
-  }, [current, openProject, refresh, setCurrentProjectId])
+      if (!current) return
+      setBusy('reconstruct')
+      setError('')
+      try {
+        const project = await videoAnalysisApi.reconstruct(current.id, {
+          name: current.title ? `${current.title} (from video)` : '',
+        })
+        setCurrentProjectId(project.id)
+        await refresh()
+        openProject(project.id, 'storyboard')
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e))
+      } finally {
+        setBusy('')
+      }
+    }, [current, openProject, refresh, setCurrentProjectId])
 
-  const selected = useMemo(
+    const recreateVideo = useCallback(async () => {
+      if (!current) return
+      setRecreating(true)
+      setError('')
+      setRecreationResult(null)
+      try {
+        const req: VideoRecreationRequest = {
+          candidates: recreationCandidates,
+          rounds: recreationRounds,
+          shot_ids: [], // Empty means all shots
+        }
+        const result = await videoAnalysisApi.recreateVideo(current.id, req)
+        setRecreationResult(result)
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e))
+      } finally {
+        setRecreating(false)
+      }
+    }, [current, recreationCandidates, recreationRounds])
+
+    const selected = useMemo(
     () => current?.shots.find(shot => shot.id === selectedShotId) ?? current?.shots[0] ?? null,
     [current, selectedShotId],
   )
@@ -255,35 +282,43 @@ export function AnalyzeVideo() {
             <section className="flex-1 min-w-0 overflow-y-auto p-4 space-y-4">
               <SourceSummary analysis={current} />
               <div className="flex flex-wrap items-center gap-2">
-                <button
-                  onClick={() => void run('detect', () => videoAnalysisApi.detect(current.id))}
-                  disabled={busy !== '' || stage?.busy}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 border border-zinc-700 text-xs hover:bg-zinc-700 disabled:opacity-40"
-                >
-                  {busy === 'detect' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Scissors className="h-3.5 w-3.5" />}
-                  {current.shots.length ? 'Detect again' : 'Detect shots'}
-                </button>
-                <button
-                  onClick={() => void run('analyze', () => videoAnalysisApi.analyze(current.id))}
-                  disabled={busy !== '' || stage?.busy || current.shots.length === 0}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-violet-600 text-white text-xs hover:bg-violet-500 disabled:bg-zinc-700 disabled:text-zinc-500"
-                >
-                  {busy === 'analyze' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-                  Analyse shots
-                </button>
-                <button
-                  onClick={() => void createStoryboard()}
-                  disabled={busy !== '' || current.shots.length === 0}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 border border-zinc-700 text-xs hover:bg-zinc-700 disabled:opacity-40"
-                >
-                  {busy === 'reconstruct' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Clapperboard className="h-3.5 w-3.5" />}
-                  Create storyboard
-                </button>
-                <span className="text-[11px] text-zinc-400" data-testid="video-model-recommendation">
-                  Vision: {settings.directorProvider === 'openai_compatible' && settings.openaiCompatibleModel ? settings.openaiCompatibleModel : 'connect qwen2.5vl:7b (recommended) in Settings'}
-                  {' · '}Recommended render model: {videoModels.find(m => m.is_active)?.label || videoModels[0]?.label || 'no local video model detected'}
-                </span>
-              </div>
+                              <button
+                                onClick={() => void run('detect', () => videoAnalysisApi.detect(current.id))}
+                                disabled={busy !== '' || stage?.busy}
+                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 border border-zinc-700 text-xs hover:bg-zinc-700 disabled:opacity-40"
+                              >
+                                {busy === 'detect' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Scissors className="h-3.5 w-3.5" />}
+                                {current.shots.length ? 'Detect again' : 'Detect shots'}
+                              </button>
+                              <button
+                                onClick={() => void run('analyze', () => videoAnalysisApi.analyze(current.id))}
+                                disabled={busy !== '' || stage?.busy || current.shots.length === 0}
+                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-violet-600 text-white text-xs hover:bg-violet-500 disabled:bg-zinc-700 disabled:text-zinc-500"
+                              >
+                                {busy === 'analyze' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                                Analyse shots
+                              </button>
+                              <button
+                                onClick={() => void recreateVideo()}
+                                disabled={busy !== '' || recreating || current.shots.length === 0}
+                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs hover:bg-emerald-500 disabled:bg-zinc-700 disabled:text-zinc-500"
+                              >
+                                {recreating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Video className="h-3.5 w-3.5" />}
+                                Recreate video
+                              </button>
+                              <button
+                                onClick={() => void createStoryboard()}
+                                disabled={busy !== '' || current.shots.length === 0}
+                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 border border-zinc-700 text-xs hover:bg-zinc-700 disabled:opacity-40"
+                              >
+                                {busy === 'reconstruct' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Clapperboard className="h-3.5 w-3.5" />}
+                                Create storyboard
+                              </button>
+                              <span className="text-[11px] text-zinc-400" data-testid="video-model-recommendation">
+                                Vision: {settings.directorProvider === 'openai_compatible' && settings.openaiCompatibleModel ? settings.openaiCompatibleModel : 'connect qwen2.5vl:7b (recommended) in Settings'}
+                                {' · '}Recommended render model: {videoModels.find(m => m.is_active)?.label || videoModels[0]?.label || 'no local video model detected'}
+                              </span>
+                            </div>
 
               <ShotStrip
                 analysis={current}
@@ -293,17 +328,25 @@ export function AnalyzeVideo() {
             </section>
 
             {selected && (
-              <ShotInspector
-                analysis={current}
-                shot={selected}
-                busy={busy}
-                onSplit={at => void run('split', () => videoAnalysisApi.split(current.id, selected.id, at))}
-                onMerge={() => void run('merge', () => videoAnalysisApi.merge(current.id, selected.id))}
-                onEditPrompts={prompts => void run('prompts', () => videoAnalysisApi.editPrompts(current.id, selected.id, prompts))}
-              />
-            )}
-          </>
-        )}
+                          <ShotInspector
+                            analysis={current}
+                            shot={selected}
+                            busy={busy}
+                            onSplit={at => void run('split', () => videoAnalysisApi.split(current.id, selected.id, at))}
+                            onMerge={() => void run('merge', () => videoAnalysisApi.merge(current.id, selected.id))}
+                            onEditPrompts={prompts => void run('prompts', () => videoAnalysisApi.editPrompts(current.id, selected.id, prompts))}
+                          />
+                        )}
+            
+                        {recreationResult && (
+                          <RecreationResultsPanel
+                            result={recreationResult}
+                            analysis={current}
+                            onClose={() => setRecreationResult(null)}
+                          />
+                        )}
+                      </>
+                    )}
       </div>
     </div>
   )
@@ -809,5 +852,84 @@ function PromptEditor({
         <Wand2 className="h-3 w-3" /> Save prompt
       </button>
     </section>
+  )
+}
+
+/** Panel showing video recreation results with comparison to reference. */
+function RecreationResultsPanel({
+  result,
+  analysis,
+  onClose,
+}: {
+  result: VideoRecreationResponse
+  analysis: VideoAnalysis
+  onClose: () => void
+}) {
+  return (
+    <aside className="w-96 shrink-0 border-l border-zinc-800 overflow-y-auto p-3 space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-semibold text-white">Video recreation</h2>
+        <button
+          onClick={onClose}
+          aria-label="Close recreation results"
+          className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-white"
+        >
+          <X className="h-4 w-4" />
+        </button>
+      </div>
+      
+      <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-3">
+        <p className="text-xs text-zinc-400">
+          Status: <span className="text-{result.status === 'complete' ? 'emerald' : 'amber'}-300">{result.status}</span>
+        </p>
+        <p className="text-xs text-zinc-400">
+          Shots generated: {result.shots_generated}
+        </p>
+      </div>
+      
+      {result.video_paths && result.video_paths.length > 0 && (
+        <section className="space-y-3">
+          <h3 className="text-[11px] uppercase tracking-wide text-zinc-500">
+            Generated candidates ({result.video_paths.length})
+          </h3>
+          {result.video_paths.map((path, index) => (
+            <div key={path} className="rounded-lg border border-zinc-800 overflow-hidden">
+              <div className="relative aspect-video bg-zinc-950">
+                <video
+                  src={`media://${path}`}
+                  controls
+                  className="w-full h-full object-contain"
+                >
+                  <p className="text-xs text-zinc-400 p-4">
+                    Candidate {index + 1}: {path}
+                  </p>
+                </video>
+              </div>
+              <div className="p-2 bg-zinc-900">
+                <p className="text-xs text-zinc-400 truncate">Candidate {index + 1}</p>
+              </div>
+            </div>
+          ))}
+        </section>
+      )}
+      
+      <section className="space-y-2">
+        <h3 className="text-[11px] uppercase tracking-wide text-zinc-500">Reference shots</h3>
+        <div className="flex gap-1.5 flex-wrap">
+          {analysis.shots.slice(0, 10).map(shot => (
+            shot.frames[0] && (
+              <div key={shot.id} className="w-[5.5rem]">
+                <FrameThumb
+                  analysisId={analysis.id}
+                  path={shot.frames[0].path}
+                  timestamp={shot.frames[0].timestamp}
+                  role={shot.frames[0].role}
+                />
+              </div>
+            )
+          ))}
+        </div>
+      </section>
+    </aside>
   )
 }

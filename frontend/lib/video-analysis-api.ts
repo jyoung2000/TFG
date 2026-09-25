@@ -34,6 +34,19 @@ export interface ImportVideoOptions {
   analyze_text?: boolean
 }
 
+export interface VideoRecreationRequest {
+  candidates: number
+  rounds: number
+  shot_ids: string[]
+}
+
+export interface VideoRecreationResponse {
+  status: string
+  video_paths: string[] | null
+  shots_generated: number
+  analysis_id: string
+}
+
 export const videoAnalysisApi = {
   list: () => request<{ analyses: VideoAnalysis[] }>('/api/video-analysis').then(r => r.analyses),
 
@@ -79,6 +92,12 @@ export const videoAnalysisApi = {
     request<FilmProject>(`/api/video-analysis/${enc(id)}/reconstruct`, {
       method: 'POST',
       body: JSON.stringify(options),
+    }),
+
+  recreateVideo: (id: string, req: VideoRecreationRequest) =>
+    request<VideoRecreationResponse>(`/api/video-analysis/${enc(id)}/recreate`, {
+      method: 'POST',
+      body: JSON.stringify(req),
     }),
 }
 

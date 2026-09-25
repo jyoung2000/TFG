@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react'
+import { APP_NAME } from '../lib/brand'
 
 interface PythonSetupProps {
   onReady: () => void
@@ -107,7 +108,7 @@ export function PythonSetup({ onReady }: PythonSetupProps) {
         // @ts-expect-error - Electron-specific CSS property
         WebkitAppRegion: 'drag'
       }}>
-        <span style={{ fontSize: 13, color: '#a0a0a0' }}>LTX Desktop</span>
+        <span style={{ fontSize: 13, color: '#a0a0a0' }}>{APP_NAME}</span>
       </div>
 
       {/* Main Container */}

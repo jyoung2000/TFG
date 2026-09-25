@@ -7,6 +7,8 @@ them. Nothing here needs a video file, a decoder or a model.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from film.shot_detection import (
@@ -258,3 +260,33 @@ class TestReconstruction:
     def test_reconstructing_before_detection_is_refused(self, client, video):
         analysis = _import(client, video)
         assert client.post(f"/api/video-analysis/{analysis['id']}/reconstruct", json={}).status_code == 400
+
+
+class TestRecreation:
+    """Video recreation: combining shot prompts into generated candidates."""
+
+    def test_recreating_before_analysis_is_refused(self, client, video):
+        analysis = _import(client, video)
+        client.post(f"/api/video-analysis/{analysis['id']}/detect")
+        response = client.post(f"/api/video-analysis/{analysis['id']}/recreate", json={"candidates": 1})
+        assert response.status_code == 400
+
+    def test_recreation_generates_candidates_from_analyzed_shots(
+        self, client, video, test_state, create_fake_model_files
+    ):
+        from tests.test_generation import _enable_local_text_encoding
+
+        create_fake_model_files()
+        _enable_local_text_encoding(test_state)
+
+        analysis = _import(client, video)
+        client.post(f"/api/video-analysis/{analysis['id']}/detect")
+        client.post(f"/api/video-analysis/{analysis['id']}/analyze", json={})
+
+        response = client.post(f"/api/video-analysis/{analysis['id']}/recreate", json={"candidates": 2})
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["status"] in ("complete", "failed")
+        assert payload["shots_generated"] == 6
+        if payload["video_paths"]:
+            assert all(Path(p).exists() for p in payload["video_paths"])

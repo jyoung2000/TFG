@@ -56,6 +56,32 @@ function ReferenceThumb({ path }: { path: string }) {
   return <img src={url} alt="Asset visual reference" className="h-32 w-44 object-contain rounded border border-zinc-800 bg-black/40" />
 }
 
+function ReferenceGallery({ asset }: { asset: FilmAsset }) {
+  if (!asset.reference_images.length) return null
+  return (
+    <div className="flex gap-1.5 flex-wrap">
+      {asset.reference_images.map((path, i) => (
+        <GalleryThumb key={i} path={path} />
+      ))}
+    </div>
+  )
+}
+
+function GalleryThumb({ path }: { path: string }) {
+  const { film } = useFilm()
+  const [url, setUrl] = useState<string | null>(null)
+  useEffect(() => { if (film) filmMediaUrl(film.id, path).then(setUrl).catch(() => {}) }, [film, path])
+  if (!url) return <div className="w-16 h-16 rounded border border-zinc-800 bg-zinc-900 animate-pulse" />
+  return (
+    <img
+      src={url}
+      alt=""
+      className="w-16 h-16 object-cover rounded border border-zinc-800 hover:scale-150 hover:z-10 transition-transform cursor-zoom-in"
+      title={`Reference image ${path.split('/').pop() ?? ''}`}
+    />
+  )
+}
+
 function useAssetThumb(asset: FilmAsset): string | null {
   const { film } = useFilm()
   const [url, setUrl] = useState<string | null>(null)
@@ -99,7 +125,15 @@ function StyleGuidePanel({ asset }: { asset: FilmAsset }) {
       {sg.key_traits.length > 0 && <div><span className="text-[10px] text-zinc-500 uppercase tracking-wide font-semibold">Key traits</span><div className="flex flex-wrap gap-1 mt-1">{sg.key_traits.map((t, i) => <span key={i} className="px-2 py-0.5 rounded-full bg-zinc-800 text-[10px] text-zinc-300">{t}</span>)}</div></div>}
       {sg.color_palette.length > 0 && <div><span className="text-[10px] text-zinc-500 uppercase tracking-wide font-semibold">Color palette</span><div className="flex gap-1.5 mt-1 flex-wrap">{sg.color_palette.map((c, i) => <span key={i} className="flex items-center gap-1.5 text-[10px] text-zinc-400 bg-zinc-800 px-2 py-0.5 rounded"><span className="w-3 h-3 rounded-sm border border-zinc-700" style={{background: paletteSwatch(c)}} />{c}</span>)}</div></div>}
       {sg.mood && <div><span className="text-[10px] text-zinc-500 uppercase tracking-wide font-semibold">Mood</span><p className="text-xs text-zinc-300 mt-0.5">{sg.mood}</p></div>}
-      {sg.recommended_prompt && <div><span className="text-[10px] text-zinc-500 uppercase tracking-wide font-semibold">Generation prompt</span><p className="text-xs text-zinc-400 mt-0.5 bg-zinc-800/50 rounded p-2 border border-zinc-700/50">{sg.recommended_prompt}</p></div>}
+      {sg.recommended_prompt && (
+        <div>
+          <span className="text-[10px] text-zinc-500 uppercase tracking-wide font-semibold">Generation prompt</span>
+          <div className="mt-1 flex gap-3 items-start">
+            <p className="flex-1 text-xs text-zinc-400 bg-zinc-800/50 rounded p-2 border border-zinc-700/50">{sg.recommended_prompt}</p>
+            <ReferenceGallery asset={asset} />
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -208,13 +242,20 @@ export function AssetsPanel() {
             {selected.reference_images.length > 0 && <div className="flex gap-1.5 overflow-x-auto pb-1">{selected.reference_images.map((p, i) => <ReferenceThumb key={i} path={p} />)}</div>}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               <div className="space-y-3">
-                <span className="text-[10px] text-zinc-500 uppercase tracking-wide font-semibold">Details</span>
-                {KIND_FIELDS[selected.kind].map(field => (
-                  <label key={String(field.key)} className="block">
-                    <span className="text-[10px] text-zinc-500 uppercase tracking-wide">{field.label}</span>
-                    <textarea className={inputClass + ' mt-0.5 resize-none h-14'} value={String(draft[field.key] ?? '')} onChange={e => setDraft(d => ({ ...d, [field.key]: e.target.value }))} />
-                  </label>
-                ))}
+                              <span className="text-[10px] text-zinc-500 uppercase tracking-wide font-semibold">Details</span>
+                              {KIND_FIELDS[selected.kind].map(field => (
+                                <label key={String(field.key)} className="block">
+                                  <span className="text-[10px] text-zinc-500 uppercase tracking-wide">{field.label}</span>
+                                  {field.key === 'style_prompt' && selected.reference_images.length > 0 ? (
+                                    <div className="flex gap-2 items-start mt-0.5">
+                                      <textarea className={inputClass + ' flex-1 resize-none h-14'} value={String(draft[field.key] ?? '')} onChange={e => setDraft(d => ({ ...d, [field.key]: e.target.value }))} />
+                                      <ReferenceGallery asset={selected} />
+                                    </div>
+                                  ) : (
+                                    <textarea className={inputClass + ' mt-0.5 resize-none h-14'} value={String(draft[field.key] ?? '')} onChange={e => setDraft(d => ({ ...d, [field.key]: e.target.value }))} />
+                                  )}
+                                </label>
+                              ))}
               </div>
               <div className="space-y-3">
                 <span className="text-[10px] text-zinc-500 uppercase tracking-wide font-semibold">Style Guide</span>

@@ -57,3 +57,18 @@ class ReconstructRequest(BaseModel):
 
 class VideoAnalysisListResponse(BaseModel):
     analyses: list[VideoAnalysis] = Field(default_factory=list[VideoAnalysis])
+
+
+class VideoRecreationRequest(BaseModel):
+    """Request to recreate a video from analyzed shots."""
+    candidates: int = Field(default=4, ge=1, le=4)
+    rounds: int = Field(default=1, ge=1, le=2)
+    shot_ids: list[str] = Field(default_factory=list)  # Empty means all shots
+
+
+class VideoRecreationResponse(BaseModel):
+    """Response containing generated video candidates."""
+    status: str
+    video_paths: list[str] | None = None
+    shots_generated: int = 0
+    analysis_id: str

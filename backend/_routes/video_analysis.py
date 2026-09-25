@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import logging
 from fastapi import APIRouter, Depends
 from fastapi.responses import FileResponse
 
 from _routes._errors import HTTPError
-from api_types import StatusResponse
+from api_types import GenerateVideoRequest, StatusResponse
 from app_handler import AppHandler
 from film.video_analysis_api_types import (
     AnalyzeRequest,
@@ -16,11 +17,15 @@ from film.video_analysis_api_types import (
     ReconstructRequest,
     SplitRequest,
     VideoAnalysisListResponse,
+    VideoRecreationRequest,
+    VideoRecreationResponse,
 )
 from film.film_models import FilmProject
 from film.video_analysis_models import VideoAnalysis
 from server_utils.path_policy import PathPolicyError, resolve_within
 from state import get_state_service
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/video-analysis", tags=["video-analysis"])
 
@@ -132,6 +137,56 @@ def route_reconstruct(
 ) -> FilmProject:
     """Build an editable film project from the analysis."""
     return handler.video_analysis.reconstruct(analysis_id, project_id=req.project_id, name=req.name)
+
+
+@router.post("/{analysis_id}/recreate", response_model=VideoRecreationResponse)
+def route_recreate_video(
+    analysis_id: str,
+    req: VideoRecreationRequest,
+    handler: AppHandler = Depends(get_state_service),
+) -> VideoRecreationResponse:
+    """Recreate video from analyzed shots to verify prompts produce similar results."""
+    recreation_info = handler.video_analysis.recreate_video(analysis_id, req)
+    if recreation_info.status != "ready_to_generate":
+        return recreation_info
+
+    analysis = handler.video_analysis.get(analysis_id)
+    shots_to_recreate = analysis.shots
+    if req.shot_ids:
+        shots_to_recreate = [s for s in analysis.shots if s.id in req.shot_ids]
+
+    combined_prompt = "\n\n".join(
+        f"Shot {shot.index + 1}: {shot.prompts.video.strip()}"
+        for shot in shots_to_recreate
+        if shot.prompts.video and shot.prompts.video.strip()
+    )
+    if not combined_prompt.strip():
+        raise HTTPError(400, "No valid prompts available for recreation. Analyze shots first.")
+
+    video_paths: list[str] = []
+    for _ in range(req.candidates):
+        try:
+            gen_req = GenerateVideoRequest(
+                prompt=combined_prompt,
+                resolution="512p",
+                model="fast",
+                duration=str(int(sum(s.duration for s in shots_to_recreate))),
+                fps="24",
+                negativePrompt=shots_to_recreate[0].prompts.negative if shots_to_recreate else "",
+            )
+            result = handler.video_generation.generate(gen_req)
+            if result.status == "complete" and result.video_path:
+                video_paths.append(result.video_path)
+        except Exception as e:
+            logger.warning("Failed to generate candidate %s: %s", _ + 1, e)
+            continue
+
+    return VideoRecreationResponse(
+        status="complete" if video_paths else "failed",
+        video_paths=video_paths if video_paths else None,
+        shots_generated=len(shots_to_recreate),
+        analysis_id=analysis_id,
+    )
 
 
 @router.get("/{analysis_id}/frame")

@@ -104,6 +104,12 @@ if ($LASTEXITCODE -ne 0) {
 # ============================================================
 Write-Host "`n[3/3] Building frontend and Electron app..." -ForegroundColor Yellow
 
+# Set WanGP branding if using the WanGP config
+if ($Config -like "*wangp*") {
+    $env:VITE_APP_BRAND = "wangp"
+    Write-Host "Setting VITE_APP_BRAND=wangp for WanGP build" -ForegroundColor Cyan
+}
+
 pnpm run build:frontend
 if ($LASTEXITCODE -ne 0) {
     Write-Host "Failed to build frontend!" -ForegroundColor Red
