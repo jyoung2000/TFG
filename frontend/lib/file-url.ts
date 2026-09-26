@@ -8,6 +8,7 @@
  * flags are undefined.
  */
 
+import { cachedBackendCredentials, isRemoteBackend } from './backend'
 import { mediaResolver } from './media-resolver'
 
 const UI_MOCK_FILE_ROUTE = import.meta.env.VITE_UI_MOCK === '1' ? '/api/__ui_mock/file' : ''
@@ -19,5 +20,24 @@ export function toFileUrl(path: string): string {
   if (UI_MOCK_FILE_ROUTE) {
     return `${UI_MOCK_FILE_ROUTE}?path=${encodeURIComponent(normalized)}`
   }
-  return normalized.startsWith('/') ? `file://${normalized}` : `file:///${normalized}`
+  // A remote backend's files are not on this disk: fetch them through the
+  // authenticated output route (outputs only — the backend enforces that).
+  const remote = isRemoteBackend() ? cachedBackendCredentials() : null
+  if (remote) {
+    return `${remote.url}/api/film/output?path=${encodeURIComponent(normalized)}&token=${encodeURIComponent(remote.token)}`
+  }
+  const encoded = encodeFilePath(normalized)
+  return encoded.startsWith('/') ? `file://${encoded}` : `file:///${encoded}`
+}
+
+/**
+ * Percent-encode the characters that break a `file://` URL (spaces, `#`, `%`,
+ * `?`) while leaving `/` and a Windows drive colon intact. Chromium decodes
+ * these back when it opens the file, so `C:/My Videos/#1 take.mp4` loads.
+ */
+export function encodeFilePath(path: string): string {
+  return path
+    .split('/')
+    .map(segment => encodeURIComponent(segment).replace(/%3A/gi, ':'))
+    .join('/')
 }

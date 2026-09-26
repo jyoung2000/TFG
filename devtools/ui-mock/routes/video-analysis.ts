@@ -8,12 +8,16 @@
  */
 
 import type { FilmProject } from '../../../frontend/types/film'
-import type { AnalyzedShot, VideoAnalysis } from '../../../frontend/types/video-analysis'
+import { EMPTY_MOTION, type AnalyzedShot, type VideoAnalysis } from '../../../frontend/types/video-analysis'
+import { emptySpec } from '../../../frontend/lib/shotspec/schema'
+import { compositionFromLayout, layoutFromComposition } from '../../../frontend/views/film/composer/sceneFromAnalysis'
+import type { SpecLayout3D } from '../../../frontend/types/shotspec'
+import type { CompositionScene } from '../../../frontend/types/film'
 import { EMPTY_BRIEF } from '../../../frontend/types/prompts'
 import { MockHttpError, type Router } from '../http'
 import { compilePrompt } from './prompts'
 import { placeholderFrame } from '../media'
-import { seedProject } from '../seed'
+import { emptyProject, seedProject } from '../seed'
 import type { MockState, Store } from '../state'
 
 /** What this user could render with: their configured models plus the local host. */
@@ -59,11 +63,59 @@ function emptyShot(index: number, start: number, end: number): AnalyzedShot {
     text: { analyzed: false, visible_text: [], subtitles: [], signs: [], ui_text: [], typography: '', confidence: 0 },
     prompts: { storyboard: '', video: '', cinematography: '', environment: '', character: '', motion: '', negative: '', model_specific: {}, edited: false },
     prompt_lens: { core_prompt: '', deep_description: '', subject: '', environment: '', camera: '', lighting: '', style: '', mood: '', confidence: 0 },
+    motion: { ...EMPTY_MOTION },
+    spec: emptySpec('video_shot'),
     analysis_provider: '',
     analysis_model: '',
     provenance: 'measured',
     evidence_note: '',
     analyzed_at: 0,
+  }
+}
+
+const MOTION_WORDS = ['static camera', 'pan left', 'push in']
+
+/** A solved layout per shot index: one or two figures and a prop in front of the camera. */
+export function mockLayout(index: number): SpecLayout3D {
+  const kind = index % 3
+  return {
+    camera: { pos: [0, 0.9 + kind * 0.3, 0], rot: [kind === 2 ? -0.1 : 0.03, 0, 0], fov: 40 },
+    objects: [
+      { id: 'fig-1', kind: 'figure', pos: [-0.6 + kind * 0.4, 0, -3.9 - kind], rot: [0, 0.2, 0], scale: [1, 1, 1], pose: 'stand', label: 'person' },
+      ...(kind === 1 ? [{ id: 'fig-2', kind: 'figure', pos: [1.1, 0, -5.8], rot: [0, -0.4, 0], scale: [0.7, 0.7, 0.7], pose: 'stand', label: 'child' }] : []),
+      { id: 'prop-3', kind: 'prop', pos: [-1.8, 0, -4.1], rot: [0, 0, 0], scale: [0.6, 0.9, 0.6], pose: '', label: 'chair' },
+    ],
+    depth_map_path: `frames/shot-${index}-depth.png`,
+  }
+}
+
+export function mockCameraWords(layout: SpecLayout3D): { camera_words: Record<string, string>; camera_sentence: string } {
+  const cam = layout.camera
+  const subject = layout.objects.find(o => o.kind === 'figure') ?? layout.objects[0]
+  const distance = subject ? Math.hypot(subject.pos[0] - cam.pos[0], subject.pos[2] - cam.pos[2]) : 4
+  const frame = 2 * distance * Math.tan((cam.fov * Math.PI) / 360)
+  const fraction = (1.7 * (subject?.scale[1] ?? 1)) / Math.max(0.01, frame)
+  const shot_size = fraction < 0.25 ? 'xwide' : fraction < 0.5 ? 'wide' : fraction < 0.9 ? 'full' : fraction < 1.6 ? 'medium' : 'closeup'
+  const height = cam.pos[1] > 3 ? 'high' : cam.pos[1] < 0.5 ? 'low' : 'eye'
+  const words = { shot_size, angle: 'front', height, lens_estimate: '40mm lens' }
+  const phrase = { xwide: 'extreme wide shot', wide: 'wide shot', full: 'full shot', medium: 'medium shot', closeup: 'close-up' }[shot_size] ?? shot_size
+  return { camera_words: words, camera_sentence: `${phrase}, front angle, ${height === 'eye' ? 'eye-level camera' : height === 'high' ? 'high-angle camera looking down' : 'low-angle camera looking up'}, 40mm lens` }
+}
+
+/** Deterministic "measured" flow per shot index, so the strip shows variety. */
+function mockMotion(index: number) {
+  const kind = index % 3
+  return {
+    ...EMPTY_MOTION,
+    analyzed: true,
+    model: 'ui-mock-flow',
+    pan: kind === 1 ? 0.008 : 0,
+    zoom: kind === 2 ? 0.006 : 0,
+    magnitude: kind === 0 ? 0.001 : 0.012,
+    subject_motion: 0.003,
+    pacing: kind === 0 ? 'still' : 'slow',
+    frames_sampled: 12,
+    confidence: 0.8,
   }
 }
 
@@ -159,10 +211,15 @@ export function registerVideoAnalysisRoutes(router: Router, store: Store): void 
           approximate_beat: `${duration.toFixed(1)}s`,
           confidence: 0.9,
         }
-        if (offline) return { ...shot, editorial, analysis_provider: 'deterministic', provenance: 'measured' as const }
+        const motion = mockMotion(shot.index)
+        const spec = { ...emptySpec('video_shot'), motion: { dominant: { pan: motion.pan, tilt: motion.tilt, zoom: motion.zoom, roll: motion.roll }, magnitude: motion.magnitude, subject_motion: motion.subject_motion, pacing: motion.pacing }, layout3d: mockLayout(shot.index), subjects: mockLayout(shot.index).objects.filter(o => o.kind === 'figure').map(o => ({ label: o.label, bbox: [0.3, 0.2, 0.15, 0.6], depth_median: 0.7, count: 1, attributes: [] })), provenance: { motion: 'flow', measured: 'measured', layout3d: 'depth', subjects: 'florence' }, confidence: { motion: 0.8, layout3d: 0.6 } }
+        const cinematography = { ...shot.cinematography, camera_movement: MOTION_WORDS[shot.index % MOTION_WORDS.length], is_static: shot.index % 3 === 0, confidence: 0.8 }
+        if (offline) return { ...shot, editorial, motion, spec, cinematography, analysis_provider: 'deterministic', provenance: 'measured' as const }
         return {
           ...shot,
           editorial,
+          motion,
+          spec,
           visual: {
             ...shot.visual,
             description: `Shot ${shot.index + 1} of the imported clip`,
@@ -171,7 +228,7 @@ export function registerVideoAnalysisRoutes(router: Router, store: Store): void 
             lighting: 'available light',
             confidence: 0.55,
           },
-          cinematography: { ...shot.cinematography, camera_movement: 'static camera', confidence: 0.5 },
+          cinematography,
           prompts: shot.prompts.edited
             ? shot.prompts
             : {
@@ -296,13 +353,85 @@ export function registerVideoAnalysisRoutes(router: Router, store: Store): void 
     }),
   )
 
+  router.post('/api/video-analysis/:id/storyboard3d', req =>
+    store.mutate(state => {
+      const analysis = find(state, req.params.id)
+      if (analysis.shots.length === 0) throw new MockHttpError(400, 'Detect shots before building a 3D storyboard.')
+      const projectId = String(req.body.project_id ?? '') || analysis.reconstructed_project_id || `film-${Date.now().toString(36)}`
+      const existing = state.projects[projectId]
+      const project = existing && existing.scenes.some(sc => sc.shots.some(sh => sh.source_ref?.analysis_id === analysis.id))
+        ? existing
+        : reconstruct(state, analysis, projectId, String(req.body.name ?? ''))
+      for (const scene of project.scenes) {
+        for (const shot of scene.shots) {
+          const analysed = analysis.shots.find(s => s.id === shot.source_ref?.analysis_shot_id)
+          if (!analysed) continue
+          const layout = analysed.spec.layout3d.objects.length ? analysed.spec.layout3d : mockLayout(analysed.index)
+          const words = mockCameraWords(layout).camera_words
+          const composition = compositionFromLayout(layout, { duration: Math.max(0.5, analysed.duration), move: analysed.index % 3 === 2 ? 'push_in' : 'static', motion: analysed.spec.motion, framing: shot.framing, words })
+          shot.composition = composition
+          shot.framing = composition.framing
+          shot.camera_move = composition.camera_move
+          shot.blockout_path = `captures/${shot.id}-blockout.svg`
+          if (shot.status === 'draft') shot.status = 'composed'
+        }
+      }
+      analysis.reconstructed_project_id = project.id
+      state.historyJobs.unshift({
+        id: `job_scene_build_${Date.now().toString(36)}`, kind: 'scene_build', status: 'complete', progress: 100, phase: 'complete', title: analysis.title,
+        created_at: Date.now() - 2000, updated_at: Date.now(), started_at: Date.now() - 2000, finished_at: Date.now(), model: '', provider: 'local', seed: null, prompt: '', negative_prompt: '',
+        spec: {}, params: { shots: analysis.shots.length }, inputs: { analysis_id: analysis.id, project_id: project.id }, outputs: [], metrics: { shots_built: analysis.shots.length }, parent_job_id: '', project_id: project.id, shot_id: '', error: '',
+      })
+      return project as FilmProject
+    }),
+  )
+
+  router.put('/api/video-analysis/:id/shots/:shotId/spec', req =>
+    store.mutate(state => {
+      const analysis = find(state, req.params.id)
+      const shot = analysis.shots.find(item => item.id === req.params.shotId)
+      if (!shot) throw new MockHttpError(404, 'No such shot')
+      const sections = (req.body.sections as Record<string, unknown> | undefined) ?? {}
+      const locks = (req.body.locks as Record<string, boolean> | undefined) ?? {}
+      const composition = req.body.composition as CompositionScene | null | undefined
+      if (composition) {
+        shot.spec.layout3d = layoutFromComposition(composition, shot.spec.layout3d)
+        shot.spec.provenance.layout3d = 'user'
+        shot.spec.locks.layout3d = true
+        const words = mockCameraWords(shot.spec.layout3d).camera_words
+        shot.spec.camera = { ...shot.spec.camera, shot_size: words.shot_size, angle: words.angle, height: words.height, lens_estimate: words.lens_estimate }
+        shot.spec.provenance.camera = 'user'
+        shot.visual = { ...shot.visual, shot_size: words.shot_size, angle: words.angle, camera_height: words.height }
+      }
+      for (const [section, value] of Object.entries(sections)) {
+        ;(shot.spec as unknown as Record<string, unknown>)[section] = value
+        shot.spec.provenance[section] = 'user'
+        shot.spec.locks[section] = true
+      }
+      for (const [section, locked] of Object.entries(locks)) shot.spec.locks[section] = locked
+      shot.provenance = 'user'
+      if (!shot.prompts.edited) shot.prompts = { ...shot.prompts, storyboard: `${shot.visual.shot_size || 'medium'} shot, ${shot.visual.angle || 'front'}`, video: `${shot.visual.description || `Shot ${shot.index + 1}`}, ${shot.visual.shot_size || 'medium'} shot, ${shot.cinematography.camera_movement || 'static camera'}` }
+      return analysis
+    }),
+  )
+
   router.post('/api/video-analysis/:id/reconstruct', req =>
     store.mutate(state => {
       const analysis = find(state, req.params.id)
       if (analysis.shots.length === 0) throw new MockHttpError(400, 'Detect shots before building a project.')
       const projectId = String(req.body.project_id ?? '') || `film-${Date.now().toString(36)}`
-      const project = store.ensureProject(projectId, String(req.body.name ?? '') || analysis.title)
-      project.name = String(req.body.name ?? '') || analysis.title
+      return reconstruct(state, analysis, projectId, String(req.body.name ?? '')) as FilmProject
+    }),
+  )
+
+  registerFrameRoute(router, store)
+}
+
+function reconstruct(state: MockState, analysis: VideoAnalysis, projectId: string, name: string): FilmProject {
+  {
+    {
+      const project = (state.projects[projectId] ??= emptyProject(projectId, name || analysis.title))
+      project.name = name || analysis.title
       project.scenes = [
         {
           id: `scene-${Date.now().toString(36)}`,
@@ -339,10 +468,12 @@ export function registerVideoAnalysisRoutes(router: Router, store: Store): void 
         },
       ]
       analysis.reconstructed_project_id = project.id
-      return project as FilmProject
-    }),
-  )
+      return project
+    }
+  }
+}
 
+function registerFrameRoute(router: Router, store: Store): void {
   // Evidence frames: labelled placeholders, same as the rest of the mock media.
   router.get('/api/video-analysis/:id/frame', req => {
     const path = req.query.get('path') ?? ''

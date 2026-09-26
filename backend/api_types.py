@@ -258,6 +258,13 @@ class ErrorResponse(BaseModel):
 # ============================================================
 
 
+class LoraUse(BaseModel):
+    """One LoRA to apply: the registry entry's file (absolute path) and a strength."""
+
+    name: str
+    multiplier: float = 1.0
+
+
 class GenerateVideoRequest(BaseModel):
     prompt: NonEmptyPrompt
     resolution: str = "512p"
@@ -270,6 +277,16 @@ class GenerateVideoRequest(BaseModel):
     imagePath: str | None = None
     audioPath: str | None = None
     aspectRatio: Literal["16:9", "9:16"] = "16:9"
+    #: Control signals from a Deliver export (absolute paths). The local LTX
+    #: pipeline has no control input and ignores them with a log line; WanGP
+    #: receives them as its guide video (key per docs/VIDEO_REPRODUCE.md, VF-011).
+    controlVideoPath: str | None = None
+    depthVideoPath: str | None = None
+    #: LoRAs from the registry (WanGP `activated_loras` / `loras_multipliers`).
+    loras: list[LoraUse] = Field(default_factory=list[LoraUse])
+    #: Reference images (WanGP `image_refs`) and an end frame (`image_end`).
+    referenceImagePaths: list[str] = Field(default_factory=list[str])
+    endFramePath: str | None = None
 
 
 class GenerateImageRequest(BaseModel):
@@ -278,6 +295,7 @@ class GenerateImageRequest(BaseModel):
     height: int = 1024
     numSteps: int = 4
     numImages: int = 1
+    loras: list[LoraUse] = Field(default_factory=list[LoraUse])
 
 
 class ModelDownloadRequest(BaseModel):
@@ -288,7 +306,7 @@ class ModelDownloadRequest(BaseModel):
 # Model library: one searchable catalog over local weights and hosted models
 # ---------------------------------------------------------------------------
 
-LibraryTask = Literal["video", "image", "text"]
+LibraryTask = Literal["video", "image", "text", "vision"]
 LibrarySource = Literal["local", "hosted"]
 
 
@@ -431,3 +449,28 @@ class IcLoraGenerateRequest(BaseModel):
     cfg_guidance_scale: float = 1.0
     negative_prompt: str = ""
     images: list[IcLoraImageInput] = Field(default_factory=_default_ic_lora_images)
+
+
+# ============================================================
+# Jobs / History
+# ============================================================
+
+
+class LegacyQuickEntry(BaseModel):
+    """One entry of the pre-1.0 Quick-mode history that lived in localStorage."""
+
+    prompt: str
+    negative_prompt: str = ""
+    seed: int | None = None
+    video_path: str
+    created_at: int = 0
+    params: dict[str, object] = Field(default_factory=dict)
+
+
+class ImportJobsRequest(BaseModel):
+    entries: list[LegacyQuickEntry]
+
+
+class ImportJobsResponse(BaseModel):
+    imported: int
+    skipped: int

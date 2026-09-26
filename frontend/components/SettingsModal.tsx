@@ -1,5 +1,7 @@
 import { APP_NAME } from "../lib/brand";
-import { AlertCircle, Boxes, Brain, Check, Cpu, Library, Download, Film, Folder, Info, KeyRound, RefreshCw, Settings, Sliders, Sparkles, X, Zap } from 'lucide-react'
+import { HardwarePresetCard } from './settings/HardwarePresetCard'
+import { RemoteBackendCard } from './settings/RemoteBackendCard'
+import { AlertCircle, Boxes, Brain, Check, Cpu, Eye, Library, Download, Film, Folder, Info, KeyRound, RefreshCw, Settings, Sliders, Sparkles, X, Zap } from 'lucide-react'
 import React, { useEffect, useRef, useState } from 'react'
 import { Button } from './ui/button'
 import { useAppSettings, type AppSettings } from '../contexts/AppSettingsContext'
@@ -10,6 +12,7 @@ import { logger } from '../lib/logger'
 import { ApiKeyHelperRow, LtxApiKeyInput, LtxApiKeyHelperRow } from './LtxApiKeyInput'
 import { AiModelsSettings } from './AiModelsSettings'
 import { KnowledgeSettings } from './KnowledgeSettings'
+import { VisionSettings } from './VisionSettings'
 import { ShotLibraryPanel } from '../views/film/ShotLibraryPanel'
 
 interface TextEncoderStatus {
@@ -24,7 +27,7 @@ interface SettingsModalProps {
   initialTab?: TabId
 }
 
-type TabId = 'general' | 'aiModels' | 'knowledge' | 'shotLibrary' | 'apiKeys' | 'inference' | 'promptEnhancer' | 'about'
+type TabId = 'general' | 'aiModels' | 'vision' | 'knowledge' | 'shotLibrary' | 'apiKeys' | 'inference' | 'promptEnhancer' | 'about'
 
 export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProps) {
   const { settings, updateSettings, saveLtxApiKey, saveFalApiKey, forceApiGenerations } = useAppSettings()
@@ -301,6 +304,7 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
   const tabs = [
     { id: 'general' as TabId, label: 'General', icon: Settings },
     { id: 'aiModels' as TabId, label: 'AI Models', icon: Boxes },
+    { id: 'vision' as TabId, label: 'Vision', icon: Eye },
     { id: 'knowledge' as TabId, label: 'Knowledge', icon: Brain },
     { id: 'shotLibrary' as TabId, label: 'Shot Library', icon: Library },
     { id: 'apiKeys' as TabId, label: 'API Keys', icon: KeyRound },
@@ -363,6 +367,8 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
         <div className="px-6 py-5 space-y-6 h-[60vh] overflow-y-auto">
           {activeTab === 'general' && (
             <>
+              <HardwarePresetCard />
+              <RemoteBackendCard />
               {/* GPU Detection */}
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
@@ -984,6 +990,8 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
           )}
 
           {activeTab === 'aiModels' && <AiModelsSettings />}
+
+          {activeTab === 'vision' && <VisionSettings />}
 
           {activeTab === 'knowledge' && <KnowledgeSettings />}
 

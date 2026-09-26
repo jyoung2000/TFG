@@ -4,6 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+
+from services.vision.fake_vision import FakeVision
+from services.vram.vram_manager import FakeNvml
+from services.motion.fake_motion import FakeMotion
+from services.stitcher.video_stitcher import FakeStitcher
+from services.lora_fetcher.fake_lora_fetcher import FakeLoraFetcher
+from services.trainer.fake_trainer import FakeTrainer
+from tests.fakes.fake_wangp_bridge import FakeWanGPBridge
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -762,6 +770,14 @@ class FakeServices:
     a2v_pipeline: FakeA2VPipeline = field(default_factory=FakeA2VPipeline)
     retake_pipeline: FakeRetakePipeline = field(default_factory=FakeRetakePipeline)
     ic_lora_model_downloader: FakeIcLoraModelDownloader = field(default_factory=FakeIcLoraModelDownloader)
+    vision: FakeVision = field(default_factory=FakeVision)
+    nvml: FakeNvml = field(default_factory=FakeNvml)
+    motion: FakeMotion = field(default_factory=FakeMotion)
+    stitcher: FakeStitcher = field(default_factory=FakeStitcher)
+    trainer: FakeTrainer = field(default_factory=FakeTrainer)
+    lora_fetcher: FakeLoraFetcher = field(default_factory=FakeLoraFetcher)
+    #: Injected into the bundle by conftest (needs the outputs dir); None until then.
+    wangp_bridge: FakeWanGPBridge | None = None
 
     def __post_init__(self) -> None:
         FakeFastVideoPipeline.bind_singleton(self.fast_video_pipeline)

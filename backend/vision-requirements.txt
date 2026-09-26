@@ -1,0 +1,14 @@
+# Vision sidecar environment (backend/vision_worker.py).
+# Kept separate from the backend's own env so the WanGP checkout's pins never
+# fight the vision models' needs. CPU wheels work; CUDA wheels come from the
+# same index the backend uses (see pyproject [tool.uv.index] pytorch-cu128).
+fastapi>=0.115.0
+uvicorn[standard]>=0.30.0
+pydantic>=2.7.0
+pillow>=10.3.0
+numpy>=1.26
+torch>=2.3.0
+transformers>=4.56,<5
+huggingface-hub>=0.23.0
+pynvml>=11.5.0; sys_platform != 'darwin'
+opencv-python-headless>=4.8.0

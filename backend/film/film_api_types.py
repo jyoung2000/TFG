@@ -17,6 +17,7 @@ from film.film_models import (
     CompositionScene,
     FilmAsset,
     FilmAssetKind,
+    FilmAssetStyleGuide,
     FilmPose,
     FilmProject,
     FilmProjectSettings,
@@ -65,6 +66,11 @@ class CreateAssetRequest(BaseModel):
 
 class UpdateAssetRequest(BaseModel):
     name: str | None = None
+    lora_id: str | None = None
+    lora_trigger: str | None = None
+    lora_multiplier: float | None = None
+    seed_lock: int | None = None
+    clear_seed_lock: bool = False
     description: str | None = None
     appearance: str | None = None
     wardrobe: str | None = None
@@ -76,6 +82,8 @@ class UpdateAssetRequest(BaseModel):
     prop_details: str | None = None
     style_prompt: str | None = None
     continuity_notes: str | None = None
+    #: Manual style-guide edits (traits/palette/mood/prompt) persist too.
+    style_guide: FilmAssetStyleGuide | None = None
 
 
 class AssetResponse(BaseModel):
@@ -95,6 +103,20 @@ class GenerateAssetReferenceResponse(BaseModel):
     provider: str
     model: str
     reference_path: str
+
+
+class ReferenceSheetRequest(BaseModel):
+    """Multi-angle reference sheet: one image per view, same seed, the asset's LoRA."""
+
+    views: list[str] = Field(default_factory=lambda: ["front view", "three-quarter view", "profile view", "back view"])
+    seed: int | None = None
+
+
+class ReferenceSheetResponse(BaseModel):
+    asset: FilmAsset
+    prompts: list[str]
+    seed: int | None
+    reference_paths: list[str]
 
 
 class AddAssetReferenceRequest(BaseModel):
@@ -231,6 +253,32 @@ class ShotCaptureRequest(BaseModel):
     composition: CompositionScene
 
 
+class DeliverRequest(BaseModel):
+    """A Deliver export from the Shot Composer: rendered PNG frames per pass
+    (base64, in order, all the same size) plus the prompt and metadata the
+    composer wrote. Passes without frames are skipped."""
+
+    fps: int = 24
+    width: int = 0
+    height: int = 0
+    clean: list[str] = Field(default_factory=list[str])
+    depth: list[str] = Field(default_factory=list[str])
+    normal: list[str] = Field(default_factory=list[str])
+    stills: list[str] = Field(default_factory=list[str])
+    prompt: str = ""
+    metadata: dict[str, object] = Field(default_factory=dict[str, object])
+    composition: CompositionScene | None = None
+
+
+class DeliverResponse(BaseModel):
+    package_dir: str
+    #: Project-relative paths of what was written.
+    files: list[str] = Field(default_factory=list[str])
+    control_video: str = ""
+    depth_video: str = ""
+    shot: FilmShot
+
+
 class SavePoseRequest(BaseModel):
     name: str
     category: str = "custom"
@@ -243,6 +291,12 @@ class PoseResponse(BaseModel):
 
 class GenerateShotRequest(BaseModel):
     kind: VersionKind = "preview"
+    #: Explicit render length (already snapped by the caller); None = derive from the shot.
+    duration_seconds: float | None = None
+    #: Project-relative start frame for image-to-video; "" = the shot's own capture rule.
+    capture_path: str = ""
+    #: Pin the seed for this version; None = the shot's generation setting.
+    seed: int | None = None
 
 
 class BatchGenerateRequest(BaseModel):

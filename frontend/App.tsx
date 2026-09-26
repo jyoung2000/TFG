@@ -1,7 +1,8 @@
 import { APP_NAME } from "./lib/brand";
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Loader2, AlertCircle, Settings, FileText } from 'lucide-react'
 import { backendFetch } from './lib/backend'
+import { applyRecommendedPreset } from './lib/presets-api'
 import { ProjectProvider, useProjects } from './contexts/ProjectContext'
 import { FilmProvider } from './contexts/FilmContext'
 import { KeyboardShortcutsProvider } from './contexts/KeyboardShortcutsContext'
@@ -10,11 +11,25 @@ import { KeyboardShortcutsModal } from './components/KeyboardShortcutsModal'
 import { useBackend } from './hooks/use-backend'
 import { logger } from './lib/logger'
 import { Home } from './views/Home'
-import { Project } from './views/Project'
-import { Playground } from './views/Playground'
-import { QuickMode } from './views/QuickMode'
-import { AnalyzeVideo } from './views/AnalyzeVideo'
-import { AnalyzeImage } from './views/AnalyzeImage'
+import { useGlobalShortcuts } from './hooks/use-global-shortcuts'
+
+// Route-level code splitting: Home is in the main chunk; every other view
+// loads on first visit so the shell stays small.
+const Project = lazy(() => import('./views/Project').then(m => ({ default: m.Project })))
+const Playground = lazy(() => import('./views/Playground').then(m => ({ default: m.Playground })))
+const QuickMode = lazy(() => import('./views/QuickMode').then(m => ({ default: m.QuickMode })))
+const AnalyzeVideo = lazy(() => import('./views/AnalyzeVideo').then(m => ({ default: m.AnalyzeVideo })))
+const ImageReproduce = lazy(() => import('./views/reproduce/ImageReproduce').then(m => ({ default: m.ImageReproduce })))
+const TrainView = lazy(() => import('./views/train/TrainView').then(m => ({ default: m.TrainView })))
+const HistoryView = lazy(() => import('./views/history/HistoryView').then(m => ({ default: m.HistoryView })))
+
+function ViewFallback() {
+  return (
+    <div className="h-screen w-screen flex items-center justify-center bg-background text-zinc-500 text-sm" role="status" aria-live="polite">
+      <Loader2 className="h-4 w-4 animate-spin mr-2" /> Loading…
+    </div>
+  )
+}
 import { LaunchGate } from './components/FirstRunSetup'
 import { PythonSetup } from './components/PythonSetup'
 import { ProcessingDashboard } from './components/ProcessingDashboard'
@@ -28,8 +43,9 @@ type RequiredModelsGateState = 'checking' | 'missing' | 'ready'
 
 function AppContent() {
   const { currentView } = useProjects()
+  useGlobalShortcuts()
   const { status, processStatus, isLoading: backendLoading, error: backendError } = useBackend()
-  const { settings, saveLtxApiKey, saveFalApiKey, forceApiGenerations, isLoaded, runtimePolicyLoaded } = useAppSettings()
+  const { settings, saveLtxApiKey, saveFalApiKey, forceApiGenerations, isLoaded, runtimePolicyLoaded, refreshSettings } = useAppSettings()
 
   const [pythonReady, setPythonReady] = useState<boolean | null>(null)
   const [backendStarted, setBackendStarted] = useState(false)
@@ -136,6 +152,16 @@ function AppContent() {
       if (!ok) {
         throw new Error('Failed to complete setup.')
       }
+      // First run: size every default to this card (RTX 4070 12 GB preset when it matches).
+      try {
+        const preset = await applyRecommendedPreset()
+        if (preset) {
+          logger.info(`Applied hardware preset ${preset} on first run`)
+          await refreshSettings()
+        }
+      } catch (e) {
+        logger.warn(`Hardware preset not applied on first run: ${e instanceof Error ? e.message : String(e)}`)
+      }
       setSetupState({ needsSetup: false, needsLicense: false })
     })()
 
@@ -151,7 +177,7 @@ function AppContent() {
       setupCompletionInFlightRef.current = null
       setIsFinalizingFirstRun(false)
     }
-  }, [])
+  }, [refreshSettings])
 
   const handleAcceptLicense = useCallback(async () => {
     const ok = await window.electronAPI.acceptLicense()
@@ -442,7 +468,11 @@ function AppContent() {
       case 'analyze':
         return <AnalyzeVideo />
       case 'analyze-image':
-        return <AnalyzeImage />
+        return <ImageReproduce />
+      case 'history':
+        return <HistoryView />
+      case 'train':
+        return <TrainView />
       default:
         return <Home />
     }
@@ -450,7 +480,7 @@ function AppContent() {
 
   return (
     <div className="relative h-screen w-screen">
-      {renderView()}
+      <Suspense fallback={<ViewFallback />}>{renderView()}</Suspense>
 
       <ProcessingDashboard />
       {showGlobalControls && (

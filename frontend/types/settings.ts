@@ -54,6 +54,48 @@ export interface OpenRouterRoleModels {
   prompt_refinement: string
 }
 
+/** Settings → Vision: the local vision stack, independent of the AI Director. */
+export type VisionMode = 'auto' | 'local' | 'sidecar'
+export type VlmProvider = 'off' | 'ollama' | 'openai_compatible' | 'director'
+
+export interface VisionSettings {
+  enabled: boolean
+  mode: VisionMode
+  sidecarUrl: string
+  florenceEnabled: boolean
+  florenceModel: string
+  clipEnabled: boolean
+  clipModel: string
+  depthEnabled: boolean
+  depthModel: string
+  dinoEnabled: boolean
+  dinoModel: string
+  vlmProvider: VlmProvider
+  vlmModel: string
+  vlmBaseUrl: string
+  vlmKeepAlive: string
+  cacheDir: string
+}
+
+export const DEFAULT_VISION_SETTINGS: VisionSettings = {
+  enabled: true,
+  mode: 'auto',
+  sidecarUrl: 'http://127.0.0.1:8765',
+  florenceEnabled: true,
+  florenceModel: 'florence-2-large',
+  clipEnabled: true,
+  clipModel: 'openai/clip-vit-large-patch14',
+  depthEnabled: true,
+  depthModel: 'depth-anything-v2-small',
+  dinoEnabled: true,
+  dinoModel: 'dinov2-small',
+  vlmProvider: 'director',
+  vlmModel: '',
+  vlmBaseUrl: 'http://127.0.0.1:11434',
+  vlmKeepAlive: '0',
+  cacheDir: '',
+}
+
 export interface AppSettings {
   useTorchCompile: boolean
   /** Optional user cap on VRAM fit recommendations (GB); null = use detected. */
@@ -78,6 +120,8 @@ export interface AppSettings {
   geminiModel: string
   /** Where image/video generation runs; "local" keeps everything offline. */
   mediaProvider: 'local' | 'fal' | 'wavespeed' | 'replicate'
+  /** Tiered fallback per task (t2i/i2i/t2v/i2v/edit): the order providers are tried. */
+  mediaTiers: Record<string, string[]>
   hasWavespeedApiKey: boolean
   hasReplicateApiKey: boolean
   defaultVideoModel: string
@@ -89,8 +133,16 @@ export interface AppSettings {
   promptCacheSize: number
   promptEnhancerEnabledT2V: boolean
   promptEnhancerEnabledI2V: boolean
+  /** Local vision stack (Settings → Vision). */
+  vision: VisionSettings
   seedLocked: boolean
   lockedSeed: number
+  /** Hardware preset last applied ('' until one is). */
+  hardwarePreset: string
+  /** Quick video / Film default quality profile on the local video model. */
+  videoProfile: 'fast' | 'balanced'
+  /** Steps for the local image model. */
+  imageSteps: number
 }
 
 export const DEFAULT_OPENROUTER_ROLE_MODELS: OpenRouterRoleModels = {
@@ -122,6 +174,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   xaiModel: '',
   geminiModel: '',
   mediaProvider: 'local',
+  mediaTiers: {},
   hasWavespeedApiKey: false,
   hasReplicateApiKey: false,
   defaultVideoModel: '',
@@ -133,6 +186,10 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   promptCacheSize: 1,
   promptEnhancerEnabledT2V: false,
   promptEnhancerEnabledI2V: false,
+  vision: DEFAULT_VISION_SETTINGS,
   seedLocked: false,
   lockedSeed: 42,
+  hardwarePreset: '',
+  videoProfile: 'fast',
+  imageSteps: 8,
 }

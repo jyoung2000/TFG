@@ -22,12 +22,13 @@ interface ShotCardProps {
 
 /** Thumbnail preference: current version output (video) → capture image → placeholder. */
 function useShotThumb(film: FilmProject, shot: FilmShot) {
-  const [thumb, setThumb] = useState<{ kind: 'video' | 'image'; url: string } | null>(null)
+  const [thumb, setThumb] = useState<{ kind: 'video' | 'image' | 'blockout'; url: string } | null>(null)
   const [videoFallbackUrl, setVideoFallbackUrl] = useState<string | null>(null)
   const [videoFailed, setVideoFailed] = useState(false)
   const version = shot.current_version != null ? shot.versions.find(v => v.number === shot.current_version) : undefined
   const outputPath = version?.status === 'complete' ? version.output_path : ''
   const capturePath = shot.capture_path
+  const blockoutPath = shot.blockout_path
 
   useEffect(() => {
     let cancelled = false
@@ -38,6 +39,10 @@ function useShotThumb(film: FilmProject, shot: FilmShot) {
       } else if (capturePath) {
         const url = await filmMediaUrl(film.id, capturePath)
         if (!cancelled) setThumb({ kind: 'image', url })
+      } else if (blockoutPath) {
+        // A 3D storyboard build leaves an isometric blockout until the shot is captured or rendered.
+        const url = await filmMediaUrl(film.id, blockoutPath)
+        if (!cancelled) setThumb({ kind: 'blockout', url })
       } else {
         setThumb(null)
       }
@@ -45,7 +50,7 @@ function useShotThumb(film: FilmProject, shot: FilmShot) {
     return () => {
       cancelled = true
     }
-  }, [film.id, outputPath, capturePath])
+  }, [film.id, outputPath, capturePath, blockoutPath])
 
   // When the video thumbnail errors (404, codec, interrupted download), fall
   // back to the composition capture so the card still shows the shot's
@@ -134,7 +139,7 @@ export function ShotCard({
               className="w-full h-full object-cover"
             />
           ) : (
-            <img src={thumb.url} alt="" className="w-full h-full object-cover" />
+            <img src={thumb.url} alt={thumb.kind === 'blockout' ? '3D blockout' : ''} data-testid={thumb.kind === 'blockout' ? 'shot-thumb-blockout' : undefined} className="w-full h-full object-cover" />
           )
         ) : (
           <Clapperboard className="h-7 w-7 text-zinc-700" />

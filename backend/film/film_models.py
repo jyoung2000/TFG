@@ -172,6 +172,12 @@ class FilmAsset(BaseModel):
     reference_images: list[str] = Field(default_factory=list[str])  # relative paths
     # AI-powered style guide filled from a reference image.
     style_guide: FilmAssetStyleGuide | None = None
+    #: Consistency Kit (phase 7): a registry LoRA every shot with this asset
+    #: inherits (with its trigger word), and a seed the renders lock to.
+    lora_id: str = ""
+    lora_trigger: str = ""
+    lora_multiplier: float = 1.0
+    seed_lock: int | None = None
     created_at: int = Field(default_factory=now_ms)
     updated_at: int = Field(default_factory=now_ms)
 
@@ -309,6 +315,10 @@ class ShotGenerationSettings(BaseModel):
     # "project" inherits FilmProjectSettings.default_quality_preset; an explicit
     # model/resolution on the shot always wins (treated as custom).
     quality_preset: Literal["project", "fast_preview", "balanced", "quality", "custom"] = "project"
+    #: Project-relative Deliver passes used as control signals (phase 6): the
+    #: clean reference render and the depth pass. "" = none.
+    control_video: str = ""
+    depth_video: str = ""
 
 
 class ShotVersion(BaseModel):
@@ -396,6 +406,8 @@ class FilmShot(BaseModel):
 
     composition: CompositionScene | None = None
     capture_path: str = ""  # relative path of captured reference PNG ('' = none)
+    #: Relative path of the isometric blockout thumbnail written by a 3D storyboard build ('' = none).
+    blockout_path: str = ""
 
     generation: ShotGenerationSettings = Field(default_factory=ShotGenerationSettings)
     versions: list[ShotVersion] = Field(default_factory=list[ShotVersion])

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from film.prompt_compiler import ConventionBasis, PromptStyle, ShotBrief
+from film.prompt_compiler import ConventionBasis, PromptHints, PromptStyle, ShotBrief, SpecCompileResult
+from film.prompt_templates import PromptTemplate, TemplateProfile
+from film.shot_spec import ShotSpec
 
 
 class CompiledPromptPayload(BaseModel):
@@ -68,3 +70,43 @@ class PromptTargetPayload(BaseModel):
 
 class PromptTargetListResponse(BaseModel):
     targets: list[PromptTargetPayload] = Field(default_factory=list[PromptTargetPayload])
+
+
+class CompileSpecRequest(BaseModel):
+    """Compile a ShotSpec for one target, optionally with knowledge hints."""
+
+    spec: ShotSpec
+    target: str
+    style: PromptStyle | None = None
+    seed: int | None = None
+    #: Ask the knowledge engine for winning phrases/params before compiling.
+    use_hints: bool = True
+    model: str = ""
+
+
+class CompileSpecResponse(BaseModel):
+    result: SpecCompileResult
+    hints: PromptHints | None = None
+    spec_keys: list[str] = Field(default_factory=list[str])
+
+
+class CompileSpecAllResponse(BaseModel):
+    """One compile per target × style, for the Reproduce editor's tabs."""
+
+    results: dict[str, SpecCompileResult] = Field(default_factory=dict[str, SpecCompileResult])
+    hints: PromptHints | None = None
+
+
+class PromptTemplateListResponse(BaseModel):
+    templates: list[PromptTemplate] = Field(default_factory=list[PromptTemplate])
+
+
+class PromptTemplateUpdateRequest(BaseModel):
+    instruction: str = Field(min_length=1, max_length=4000)
+
+
+class PromptTemplateCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    instruction: str = Field(min_length=1, max_length=4000)
+    description: str = ""
+    profile: TemplateProfile = "custom"

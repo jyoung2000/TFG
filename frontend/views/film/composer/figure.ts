@@ -309,3 +309,29 @@ export function mirrorPose(pose: Record<string, Vec3>): Record<string, Vec3> {
   }
   return mirrored
 }
+
+
+/**
+ * Distance-tied walk cycle (adapted from mangerik/Blocking-Room `src/spatial.js`
+ * `gait()`, MIT — see docs/INTEGRATED_UPSTREAMS.md): the limb swing is a
+ * function of metres travelled, so the same timeline time always shows the
+ * same stride, and it fades in/out over the first and last 0.15 s of a leg.
+ * Returns the swing angle in radians for hips (legs opposite) and shoulders.
+ */
+export function walkSwing(distance: number, speed: number, envelope = 1): number {
+  const stride = 1.15
+  return Math.sin((distance / stride) * Math.PI * 2) * 0.55 * Math.min(1, speed / 0.8) * Math.max(0, Math.min(1, envelope))
+}
+
+/** Layer the walk cycle over a base pose without touching the rig's stored pose. */
+export function applyWalkCycle(rig: FigureRig, basePose: Record<string, Vec3>, distance: number, speed: number, envelope = 1): void {
+  applyPose(rig, basePose)
+  const swing = walkSwing(distance, speed, envelope)
+  if (Math.abs(swing) < 1e-4) return
+  rig.joints.l_leg.rotation.x += swing
+  rig.joints.r_leg.rotation.x -= swing
+  rig.joints.l_arm.rotation.x -= swing * 0.7
+  rig.joints.r_arm.rotation.x += swing * 0.7
+  rig.joints.l_knee.rotation.x += Math.max(0, -swing) * 0.8
+  rig.joints.r_knee.rotation.x += Math.max(0, swing) * 0.8
+}

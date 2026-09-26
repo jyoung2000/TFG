@@ -86,7 +86,62 @@ The filmmaking features adapt designs and code from the following projects
   AI-command-registry design were adapted (ported to plain three.js and this
   app's backend architecture).
 
+- **ComfyUI-Florence2** — https://github.com/kijai/ComfyUI-Florence2 —
+  MIT License. The Florence-2 task/post-processing map and model registry
+  were adapted (`backend/services/vision/florence2.py`); no model code was
+  copied.
+
+- **clip-interrogator** — https://github.com/pharmapsychotic/clip-interrogator —
+  Copyright (c) 2022 pharmapsychotic — MIT License. Term lists vendored
+  unchanged under `backend/services/vision/clip_data/` (license reproduced
+  there); the LabelTable/ranking design was ported to
+  `backend/services/vision/clip_tagger.py`.
+
+- **imex-next** — https://github.com/macchant/imex-next — MIT License.
+  Deterministic image statistics (CIELAB palette, edges, aspect snapping,
+  EXIF) adapted in `backend/services/vision/deterministic.py` and
+  `frontend/lib/shotspec/deterministic.ts`.
+
+- **promptlens** — https://github.com/wildbyteai/promptlens — MIT License.
+  Built-in prompt templates and the custom-template shape were adapted in
+  `backend/film/prompt_templates.py`.
+
+- **Open-Generative-AI** — https://github.com/Anil-matcha/Open-Generative-AI —
+  MIT License. Cinema vocabulary tables adapted in
+  `backend/film/shot_vocabulary.py`; the hosted model catalog was extracted
+  into `backend/film/data/model_catalog.json`.
+
+- **Blockout** — https://github.com/wassermanproductions/blockout —
+  Copyright 2026 Sam Wasserman — Apache License 2.0. The pure-TypeScript
+  previs engine (`state(t)` evaluator, camera optics, the camera-move library,
+  rigs, gaits, generator profiles) is vendored unchanged under
+  `frontend/views/film/composer/blockout/engine/`; the Deliver and
+  reference-underlay designs are adapted beside it. Created by Sam Wasserman
+  (wassermanproductions.com). The upstream NOTICE is reproduced below.
+
+- **Blocking-Room** — https://github.com/mangerik/Blocking-Room —
+  Copyright (c) 2026 mangerik — MIT License. Keyframe interpolation and
+  validation, the distance-tied walk cycle and the bounded snapshot undo are
+  ported into the Shot Composer (`composer/keyframes.ts`, `figure.ts`,
+  `composer/history.ts`).
+
 ---
+
+## Upstream NOTICE files
+
+### Blockout (Apache-2.0 §4(d))
+
+```
+Blockout — a previs tool for AI-native filmmaking
+Copyright 2026 Sam Wasserman
+https://wassermanproductions.com · https://wasserman.ai
+
+This product was created by Sam Wasserman. If you use, fork, or
+redistribute this software or derivative works, you must retain this
+NOTICE file and credit "Sam Wasserman (wassermanproductions.com)" in
+your documentation and any about/credits surface, per Section 4(d) of
+the Apache License 2.0.
+```
 
 ## License Texts
 

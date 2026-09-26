@@ -167,6 +167,9 @@ export function useGeneration(): UseGenerationReturn {
       if (audioPath) {
         body.audioPath = audioPath
       }
+      if (settings.loras?.length) {
+        body.loras = settings.loras
+      }
 
       // Poll for real progress from backend with time-based interpolation
       let lastPhase = ''
@@ -402,6 +405,7 @@ export function useGeneration(): UseGenerationReturn {
           height: dims.height,
           numSteps,
           numImages,
+          loras: settings.loras ?? [],
         }),
         signal: abortControllerRef.current.signal,
       })

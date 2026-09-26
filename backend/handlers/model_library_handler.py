@@ -50,6 +50,11 @@ from film.media_providers import (
     media_provider,
 )
 from handlers.base import StateHandlerBase
+from handlers.jobs_handler import JobsHandler
+from handlers.vision_handler import VisionHandler
+from services.vision.clip_tagger import DEFAULT_CLIP_MODEL
+from services.vision.depth import DEPTH_MODELS, DINO_MODELS
+from services.vision.florence2 import FLORENCE_MODELS
 from runtime_config.model_download_specs import MODEL_FILE_ORDER
 from runtime_config.runtime_config import RuntimeConfig
 from services.interfaces import GpuInfo, HTTPClient, HttpTimeoutError, ModelDownloader, TaskRunner
@@ -102,6 +107,7 @@ class _Download:
     message: str = ""
     cancel_requested: bool = False
     started_ms: int = field(default_factory=now_ms)
+    job_id: str = ""
 
 
 class ModelLibraryHandler(StateHandlerBase):
@@ -117,8 +123,12 @@ class ModelLibraryHandler(StateHandlerBase):
         gpu_info: GpuInfo,
         task_runner: TaskRunner,
         model_downloader: ModelDownloader,
+        jobs: JobsHandler | None = None,
+        vision: VisionHandler | None = None,
     ) -> None:
         super().__init__(state, lock)
+        self._jobs = jobs
+        self._vision = vision
         self._config = config
         self._wangp = wangp_bridge
         self._http = http
@@ -201,6 +211,52 @@ class ModelLibraryHandler(StateHandlerBase):
                     supports_image_input=task == "video",
                     family=architecture,
                     quantization=quant,
+                )
+            )
+        return models
+
+    def _vision_root(self) -> Path:
+        with self.lock:
+            custom = self.state.app_settings.vision.cache_dir.strip()
+        return Path(custom) if custom else self._config.settings_file.parent / "vision-cache" / "models"
+
+    def _vision_installed(self, repo_id: str) -> bool:
+        """transformers' cache layout: <cache_dir>/hf/models--org--name/snapshots/<rev>/…"""
+        folder = self._vision_root() / "hf" / ("models--" + repo_id.replace("/", "--")) / "snapshots"
+        return folder.is_dir() and any(folder.iterdir())
+
+    def _vision_models(self, vram_gb: float | None) -> list[LibraryModel]:
+        """The local vision stack: Florence-2 variants, CLIP, depth, DINOv2."""
+        with self.lock:
+            settings = self.state.app_settings.vision
+        active = {settings.florence_model, settings.clip_model, settings.depth_model, settings.dino_model}
+        rows: list[tuple[str, str, str, str, float, str]] = []  # id, repo, name, family, vram_gb, description
+        for spec in FLORENCE_MODELS.values():
+            rows.append((spec.id, spec.repo_id, spec.repo_id.split("/")[-1], "florence2", spec.estimated_mb / 1024, spec.description or "Florence-2 captions, detection, grounding"))
+        rows.append((DEFAULT_CLIP_MODEL, DEFAULT_CLIP_MODEL, "CLIP ViT-L/14", "clip", 1.0, "Style tags + image embeddings for similarity"))
+        for model_id, (repo, _cls, mb) in DEPTH_MODELS.items():
+            rows.append((model_id, repo, repo.split("/")[-1], "depth-anything-v2", mb / 1024, "Monocular depth for the 3D storyboard and control video"))
+        for model_id, (repo, _cls, mb) in DINO_MODELS.items():
+            rows.append((model_id, repo, repo.split("/")[-1], "dinov2", mb / 1024, "Structural embeddings for candidate scoring"))
+        models: list[LibraryModel] = []
+        for model_id, repo, name, family, need_gb, description in rows:
+            installed = self._vision_installed(repo)
+            fits = self._fits(vram_gb, need_gb)
+            models.append(
+                LibraryModel(
+                    id=model_id,
+                    name=name,
+                    provider="vision",
+                    source="local",
+                    task="vision",
+                    description=description,
+                    state="active" if model_id in active and installed else "installed" if installed else "incompatible" if fits is False else "available",
+                    installed=installed,
+                    downloadable=not installed,
+                    size_gb=round(need_gb, 1),
+                    estimated_min_vram_gb=round(need_gb, 1),
+                    fits_gpu=fits,
+                    family=family,
                 )
             )
         return models
@@ -454,6 +510,7 @@ class ModelLibraryHandler(StateHandlerBase):
         native_models = self._native_models(vram_gb)
         if native_models:
             add_source("native", "local", True, native_models)
+        add_source("vision", "local", True, self._vision_models(vram_gb))
         text_source, local_text, local_text_error = self._local_text_models(settings, refresh)
         add_source(text_source, "local", bool(settings.openai_compatible_base_url.strip()), local_text, local_text_error)
 
@@ -685,6 +742,8 @@ class ModelLibraryHandler(StateHandlerBase):
             return self._start_wangp_download(model_id)
         if provider == "ollama":
             return self._start_ollama_pull(model_id)
+        if provider == "vision":
+            return self._start_vision_download(model_id)
         if provider == "native":
             raise HTTPError(
                 400,
@@ -716,6 +775,7 @@ class ModelLibraryHandler(StateHandlerBase):
         chosen = quantised or targets
         destination = root / "ckpts"
         state = _Download(provider="wangp", model_id=model_id, files_total=len(chosen), message="Starting…")
+        state.job_id = self._open_download_job(state, [f"{repo}/{path}" for repo, path in chosen])
         with self.lock:
             self._download = state
         self._task_runner.run_background(
@@ -733,6 +793,7 @@ class ModelLibraryHandler(StateHandlerBase):
                 if state.cancel_requested:
                     state.status = "cancelled"
                     state.message = "Cancelled"
+                    self._close_download_job(state)
                     return
                 state.message = f"Downloading {filename}"
 
@@ -740,6 +801,9 @@ class ModelLibraryHandler(StateHandlerBase):
                 with self.lock:
                     state.downloaded_bytes = _base + downloaded
                     state.total_bytes = max(state.total_bytes, _base + total)
+                    done, whole, message = state.downloaded_bytes, state.total_bytes, state.message
+                if state.job_id and self._jobs is not None and whole > 0:
+                    self._jobs.progress(state.job_id, done / whole * 100, message)
 
             try:
                 self._downloader.download_file(
@@ -758,8 +822,63 @@ class ModelLibraryHandler(StateHandlerBase):
             state.status = "complete"
             state.message = f"{state.model_id} installed"
             state.total_bytes = max(state.total_bytes, state.downloaded_bytes)
+        self._close_download_job(state, [str(destination / filename) for _, filename in targets])
         self._cache.pop("wangp", None)
         self.remember("wangp", state.model_id)
+
+    def _vision_repo(self, model_id: str) -> str | None:
+        spec = FLORENCE_MODELS.get(model_id)
+        if spec is not None:
+            return spec.repo_id
+        if model_id == DEFAULT_CLIP_MODEL:
+            return model_id
+        if model_id in DEPTH_MODELS:
+            return DEPTH_MODELS[model_id][0]
+        if model_id in DINO_MODELS:
+            return DINO_MODELS[model_id][0]
+        return None
+
+    def _start_vision_download(self, model_id: str) -> LibraryDownloadStatus:
+        repo_id = self._vision_repo(model_id)
+        if repo_id is None:
+            raise HTTPError(404, f"Unknown vision model: {model_id}")
+        destination = self._vision_root() / "hf"
+        state = _Download(provider="vision", model_id=model_id, files_total=1, message=f"Downloading {repo_id}…")
+        state.job_id = self._open_download_job(state, [repo_id])
+        with self.lock:
+            self._download = state
+        self._task_runner.run_background(
+            lambda: self._run_vision_download(state, repo_id, destination),
+            task_name=f"vision-download-{model_id}",
+            on_error=lambda exc: self._fail_download(state, str(exc)),
+        )
+        return self.download_status()
+
+    def _run_vision_download(self, state: _Download, repo_id: str, destination: Path) -> None:
+        """transformers resolves `cache_dir/models--org--name/...`; downloading the
+        snapshot into that same layout makes the wrapper's `from_pretrained`
+        hit the cache with no network."""
+        destination.mkdir(parents=True, exist_ok=True)
+        local_dir = destination / ("models--" + repo_id.replace("/", "--")) / "snapshots" / "main"
+
+        def on_progress(downloaded: int, total: int) -> None:
+            with self.lock:
+                state.downloaded_bytes = downloaded
+                state.total_bytes = max(state.total_bytes, total)
+            if state.job_id and self._jobs is not None and total > 0:
+                self._jobs.progress(state.job_id, downloaded / total * 100, state.message)
+
+        try:
+            self._downloader.download_snapshot(repo_id=repo_id, local_dir=str(local_dir), on_progress=on_progress)
+        except Exception as exc:  # noqa: BLE001
+            self._fail_download(state, f"{repo_id}: {exc}")
+            return
+        with self.lock:
+            state.status = "complete"
+            state.files_done = 1
+            state.message = f"{state.model_id} installed"
+        self._close_download_job(state, [str(local_dir)])
+        self._cache.pop("vision", None)
 
     def _start_ollama_pull(self, model_id: str) -> LibraryDownloadStatus:
         settings = self._settings()
@@ -767,6 +886,7 @@ class ModelLibraryHandler(StateHandlerBase):
         if not root:
             raise HTTPError(400, "Set the local endpoint base URL (for example http://127.0.0.1:11434/v1) first")
         state = _Download(provider="ollama", model_id=model_id, files_total=1, message=f"Pulling {model_id}…")
+        state.job_id = self._open_download_job(state, [model_id])
         with self.lock:
             self._download = state
         self._task_runner.run_background(
@@ -797,6 +917,7 @@ class ModelLibraryHandler(StateHandlerBase):
             state.status = "complete"
             state.files_done = 1
             state.message = f"{model_id} pulled"
+        self._close_download_job(state)
         self._cache.clear()
         self.remember("ollama", model_id)
 
@@ -805,6 +926,30 @@ class ModelLibraryHandler(StateHandlerBase):
         with self.lock:
             state.status = "failed"
             state.error = error
+        self._close_download_job(state)
+
+    def _open_download_job(self, state: _Download, files: list[str]) -> str:
+        if self._jobs is None:
+            return ""
+        return self._jobs.start(
+            "download",
+            title=state.model_id,
+            model=state.model_id,
+            provider=state.provider,
+            params={"files": files},
+        ).id
+
+    def _close_download_job(self, state: _Download, outputs: list[str] | None = None) -> None:
+        if not state.job_id or self._jobs is None:
+            return
+        with self.lock:
+            status, error = state.status, state.error
+        if status == "complete":
+            self._jobs.complete(state.job_id, outputs or [])
+        elif status == "cancelled":
+            self._jobs.mark_cancelled(state.job_id)
+        else:
+            self._jobs.fail(state.job_id, error or "Download failed")
 
 
 def _wangp_task(architecture: str) -> LibraryTask | None:

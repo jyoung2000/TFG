@@ -6,6 +6,7 @@
  */
 
 import { filmApi } from './film-api'
+import { fileUrlToPath } from './url-to-path'
 import type { Asset, GenerationParams } from '../types/project'
 
 export interface FilmConversionSource {
@@ -46,7 +47,7 @@ export function conversionSourceFromAsset(asset: Asset, params?: GenerationParam
     aspectRatio: generation?.imageAspectRatio,
     cameraMotion: generation?.cameraMotion,
     mode: generation?.mode,
-    inputImagePath: generation?.inputImageUrl?.startsWith('file://') ? generation.inputImageUrl.slice(7) : undefined,
+    inputImagePath: generation?.inputImageUrl ? (fileUrlToPath(generation.inputImageUrl) ?? undefined) : undefined,
   }
 }
 

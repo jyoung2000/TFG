@@ -179,7 +179,7 @@ def brief_from_analysis(analysis: VideoAnalysis, shot: AnalyzedShot) -> ShotBrie
         shot_size=visual.shot_size,
         camera=", ".join(camera_parts),
         lens=", ".join(p for p in (visual.lens_estimate, visual.depth_of_field) if p),
-        movement=camera.camera_movement or ("static camera" if camera.is_static else ""),
+        movement=_movement_words(shot),
         lighting=", ".join(lighting_parts),
         style=", ".join(style_parts),
         audio="; ".join(audio_parts),
@@ -187,3 +187,13 @@ def brief_from_analysis(analysis: VideoAnalysis, shot: AnalyzedShot) -> ShotBrie
         continuity=continuity,
         negative=["text", "watermark", "logo", "distorted hands", "extra limbs"],
     )
+
+
+def _movement_words(shot: AnalyzedShot) -> str:
+    """Optical flow (measured) beats a model's guess from stills."""
+    camera = shot.cinematography
+    words = camera.camera_movement or ("static camera" if camera.is_static else "")
+    motion = shot.motion
+    if motion.analyzed and motion.handheld and "handheld" not in words:
+        words = ", ".join(p for p in (words, "handheld") if p)
+    return words

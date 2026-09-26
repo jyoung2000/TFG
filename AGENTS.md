@@ -30,7 +30,7 @@ Run a single backend test: `cd backend && uv run pytest tests/test_generation.py
 
 ## CI Checks
 
-PRs must pass: `pnpm typecheck` + `pnpm backend:test` + frontend Vite build.
+PRs must pass: `pnpm typecheck` + `pnpm test:frontend` + `pnpm backend:test` + `pnpm e2e` (Playwright against `pnpm dev:ui`, see `docs/TESTING.md`) + frontend Vite build.
 
 ## Frontend Architecture
 
@@ -83,7 +83,7 @@ Key patterns:
 
 ## Python Config
 
-- Python 3.13+ (per `.python-version`), managed with `uv`
+- Python 3.12 (per `backend/.python-version`; `requires-python = ">=3.12"`), managed with `uv`
 - Pyright strict mode (`backend/pyrightconfig.json`)
 - Dependencies in `backend/pyproject.toml`
 

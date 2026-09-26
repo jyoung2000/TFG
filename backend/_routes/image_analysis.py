@@ -50,12 +50,14 @@ def delete_analysis(analysis_id: str, handler: AppHandler = Depends(get_state_se
 
 @router.post("/{analysis_id}/analyze", response_model=ImageAnalysis)
 def analyze_image(analysis_id: str, handler: AppHandler = Depends(get_state_service)) -> ImageAnalysis:
-    return handler.image_recreation.analyze(analysis_id, handler.film_director.optional_provider("storyboard"))
+    # The vision slot (Settings → Vision), not the Director's text model.
+    vlm = handler.vision.optional_vlm(handler.film_director.optional_provider("storyboard"))
+    return handler.image_recreation.analyze(analysis_id, vlm)
 
 
 @router.post("/{analysis_id}/render", response_model=ImageAnalysis)
 def render_images(analysis_id: str, req: RenderRequest, handler: AppHandler = Depends(get_state_service)) -> ImageAnalysis:
-    provider = handler.film_director.optional_provider("storyboard") if req.rounds > 1 else None
+    provider = handler.vision.optional_vlm(handler.film_director.optional_provider("storyboard")) if req.rounds > 1 else None
     return handler.image_recreation.render(analysis_id, req.candidates, req.rounds, provider)
 
 
@@ -66,13 +68,14 @@ def edit_prompt(analysis_id: str, req: PromptRequest, handler: AppHandler = Depe
 
 @router.post("/{analysis_id}/refine", response_model=ImageAnalysis)
 def refine_image(analysis_id: str, req: RenderRequest, handler: AppHandler = Depends(get_state_service)) -> ImageAnalysis:
-    return handler.image_recreation.refine(analysis_id, req.candidates, handler.film_director.optional_provider("storyboard"))
+    vlm = handler.vision.optional_vlm(handler.film_director.optional_provider("storyboard"))
+    return handler.image_recreation.refine(analysis_id, req.candidates, vlm)
 
 
 @router.get("/{analysis_id}/media")
 def image_media(analysis_id: str, path: str = Query(min_length=1), handler: AppHandler = Depends(get_state_service)) -> FileResponse:
     job = handler.image_recreation.get(analysis_id)
-    allowed = {job.source_path, *(candidate.path for candidate in job.candidates)}
+    allowed = {job.source_path, *(candidate.path for candidate in job.candidates), *([job.depth_path] if job.depth_path else [])}
     if path not in allowed:
         raise HTTPError(400, "Image is not part of this analysis")
     try:

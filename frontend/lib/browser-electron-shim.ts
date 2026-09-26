@@ -42,7 +42,22 @@ export function installBrowserElectronShim(): void {
       : Promise.resolve({ success: false, error: 'Not available in browser mode' })
 
   const shim = {
-    getBackend: resolved({ url: BROWSER_BACKEND_URL, token: '' }),
+    getBackend: resolved({ url: BROWSER_BACKEND_URL, token: '', remote: false }),
+    getRemoteBackend: resolved({ url: '', token: '', enabled: false }),
+    testRemoteBackend: async (url: string, token: string) => {
+      // A browser can probe a remote backend for real; it just cannot switch to it.
+      try {
+        const headers: Record<string, string> = {}
+        if (token) headers.Authorization = `Bearer ${token}`
+        const response = await fetch(`${url.replace(/\/+$/, '')}/health`, { headers })
+        if (!response.ok) return { ok: false, error: `Health check failed (${response.status})` }
+        const body = (await response.json()) as { status?: string; gpu_info?: { name?: string } }
+        return { ok: body.status === 'ok', status: body.status, gpu: body.gpu_info?.name }
+      } catch (error) {
+        return { ok: false, error: String(error) }
+      }
+    },
+    setRemoteBackend: () => Promise.resolve({ ok: false, error: 'Switching backends needs the desktop app.' }),
     getModelsPath: resolved(UI_MOCK ? `${MOCK_HOME}/models` : ''),
     readLocalFile: unsupported('Reading a local file'),
     approveLocalPath: resolved(true),

@@ -16,9 +16,15 @@ import type { LibraryShot } from '../../frontend/types/shot-library'
 import type { DirectorAction } from '../../frontend/types/timeline'
 import type { AppSettings, ClearableKeyProvider } from '../../frontend/types/settings'
 import type { LibraryDownloadStatus } from '../../frontend/types/models'
+import type { Job } from '../../frontend/types/jobs'
+import type { ReproduceJob } from '../../frontend/types/reproduce'
+import type { VideoReproduceJob } from '../../frontend/types/video-reproduce'
 import { DEMO_PROJECT_ID, emptyProject, seedProject, seedSettings } from './seed'
 import { seedKnowledge } from './routes/knowledge'
 import { seedShotLibrary } from './routes/shot-library'
+import { seedJobs } from './routes/jobs'
+import { seedTraining } from './routes/training'
+import type { Dataset, LoraEntry, TrainingRun } from '../../frontend/types/training'
 
 /** One simulated render, advanced by wall-clock time rather than a timer. */
 export interface MockJob extends QueuedJob {
@@ -65,6 +71,14 @@ export interface MockState {
   shotLibrary: LibraryShot[]
   /** Timeline edit history per project, each carrying its undo snapshot. */
   timelineHistory: Record<string, StoredTimelineAction[]>
+  /** The unified job store behind the History tab. */
+  historyJobs: Job[]
+  /** Image Reproduce v2 jobs, newest first. */
+  reproduceJobs: ReproduceJob[]
+  /** Video Reproduce v2 documents by analysis id. */
+  videoReproduce: Record<string, VideoReproduceJob>
+  /** LoRA training: datasets, runs and the registry. */
+  training: { datasets: Dataset[]; runs: TrainingRun[]; loras: LoraEntry[] }
 }
 
 export const EMPTY_LIBRARY_DOWNLOAD: LibraryDownloadStatus = {
@@ -110,6 +124,10 @@ export function freshState(): MockState {
       project.name,
     ),
     timelineHistory: {},
+    historyJobs: seedJobs(),
+    reproduceJobs: [],
+    videoReproduce: {},
+    training: seedTraining(),
     learning: { enabled: true, generation: true, approval: true, editing: true, feedback: true },
   }
 }
@@ -176,7 +194,7 @@ export class Store {
         // Stored state from an older shape would break the UI in confusing
         // ways; a missing project map is the cheapest reliable signal.
         if (parsed && typeof parsed === 'object' && parsed.projects) {
-          return { ...freshState(), ...parsed, analyses: parsed.analyses ?? {} }
+          return { ...freshState(), ...parsed, analyses: parsed.analyses ?? {}, historyJobs: parsed.historyJobs ?? seedJobs(), reproduceJobs: parsed.reproduceJobs ?? [], videoReproduce: parsed.videoReproduce ?? {}, training: parsed.training ?? seedTraining() }
         }
       }
     } catch {

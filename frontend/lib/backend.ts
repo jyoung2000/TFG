@@ -1,7 +1,17 @@
-let cached: { url: string; token: string } | null = null
+let cached: { url: string; token: string; remote?: boolean } | null = null
 
 export async function getBackendCredentials(): Promise<{ url: string; token: string }> {
   if (!cached) cached = await window.electronAPI.getBackend()
+  return cached
+}
+
+/** True once the app learned it talks to a backend on another machine (phase 9). */
+export function isRemoteBackend(): boolean {
+  return cached?.remote === true
+}
+
+/** The credentials already loaded, for synchronous URL building; null before the first fetch. */
+export function cachedBackendCredentials(): { url: string; token: string } | null {
   return cached
 }
 

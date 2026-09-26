@@ -3,7 +3,7 @@ import path from 'path'
 import fs from 'fs'
 import { checkGPU } from '../gpu'
 import { isPythonReady, downloadPythonEmbed } from '../python-setup'
-import { getBackendHealthStatus, getBackendUrl, getAuthToken, startPythonBackend } from '../python-backend'
+import { applyRemoteBackend, getBackendHealthStatus, getBackendUrl, getAuthToken, getRemoteBackend, isRemoteBackend, probeRemoteBackend, startPythonBackend } from '../python-backend'
 import { getMainWindow } from '../window'
 import { getAnalyticsState, setAnalyticsEnabled, sendAnalyticsEvent } from '../analytics'
 
@@ -68,8 +68,15 @@ function markLicenseAccepted(settingsPath: string): void {
 
 export function registerAppHandlers(): void {
   ipcMain.handle('get-backend', () => {
-    return { url: getBackendUrl() ?? '', token: getAuthToken() ?? '' }
+    return { url: getBackendUrl() ?? '', token: getAuthToken() ?? '', remote: isRemoteBackend() }
   })
+
+  // Remote backend (phase 9): saved in app_state.json; never in the renderer.
+  ipcMain.handle('get-remote-backend', () => getRemoteBackend())
+  ipcMain.handle('test-remote-backend', (_event, url: string, token: string) => probeRemoteBackend(String(url ?? ''), String(token ?? '')))
+  ipcMain.handle('set-remote-backend', (_event, config: { url: string; token: string; enabled: boolean }) =>
+    applyRemoteBackend({ url: String(config?.url ?? ''), token: String(config?.token ?? ''), enabled: config?.enabled === true }),
+  )
 
   ipcMain.handle('get-models-path', () => {
     return getModelsPath()

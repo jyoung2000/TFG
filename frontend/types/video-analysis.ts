@@ -5,6 +5,8 @@
 // UI shades anything a model guessed and shows its confidence, so a viewer can
 // tell a timestamp from an opinion.
 
+import type { ShotSpec } from './shotspec'
+
 export type AnalysisDepth = 'fast' | 'standard' | 'detailed'
 export type AnalysisStage =
   | 'idle'
@@ -162,6 +164,28 @@ export interface PromptLensAnalysis {
   confidence: number
 }
 
+/** Optical flow over the shot (phase 5). Measured, never inferred. */
+export interface MotionAnalysis {
+  analyzed: boolean
+  model: string
+  pan: number
+  tilt: number
+  zoom: number
+  roll: number
+  magnitude: number
+  subject_motion: number
+  jitter: number
+  handheld: boolean
+  pacing: string
+  frames_sampled: number
+  confidence: number
+}
+
+export const EMPTY_MOTION: MotionAnalysis = {
+  analyzed: false, model: '', pan: 0, tilt: 0, zoom: 0, roll: 0, magnitude: 0, subject_motion: 0,
+  jitter: 0, handheld: false, pacing: '', frames_sampled: 0, confidence: 0,
+}
+
 export interface AnalyzedShot {
   id: string
   index: number
@@ -180,6 +204,9 @@ export interface AnalyzedShot {
   text: TextAnalysis
   prompts: ReversePrompts
   prompt_lens: PromptLensAnalysis
+  motion: MotionAnalysis
+  /** The fused ShotSpec — what Video Reproduce renders from. */
+  spec: ShotSpec
   analysis_provider: string
   analysis_model: string
   provenance: Provenance

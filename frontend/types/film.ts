@@ -121,6 +121,11 @@ export interface FilmAsset {
   continuity_notes: string
   reference_images: string[]
   style_guide?: AssetStyleGuide
+  /** Consistency Kit (phase 7): a registry LoRA bound to this asset, its trigger word, strength and a locked seed. */
+  lora_id: string
+  lora_trigger: string
+  lora_multiplier: number
+  seed_lock: number | null
   created_at: number
   updated_at: number
 }
@@ -236,6 +241,9 @@ export interface ShotGenerationSettings {
   use_capture_as_reference: boolean
   continue_from_previous: boolean
   quality_preset: QualityPreset
+  /** Project-relative Deliver passes used as control signals ('' = none). */
+  control_video: string
+  depth_video: string
 }
 
 export interface ShotVersion {
@@ -267,6 +275,16 @@ export interface ShotVersion {
   deleted_media: string
 }
 
+/** Where a shot came from when it was reconstructed from an analysed video. */
+export interface ShotSourceRef {
+  kind: '' | 'video_analysis'
+  analysis_id: string
+  analysis_shot_id: string
+  source_path: string
+  start: number
+  end: number
+}
+
 export interface FilmShot {
   id: string
   order: number
@@ -289,8 +307,12 @@ export interface FilmShot {
   visual_prompt: string
   negative_prompt: string
   prompt_locked: boolean
+  /** Lineage back to an analysed video, when this shot was reconstructed. */
+  source_ref?: ShotSourceRef | null
   composition: CompositionScene | null
   capture_path: string
+  /** Isometric blockout thumbnail written by a 3D storyboard build ('' = none). */
+  blockout_path: string
   generation: ShotGenerationSettings
   versions: ShotVersion[]
   current_version: number | null
@@ -687,5 +709,7 @@ export function defaultGenerationSettings(): ShotGenerationSettings {
     use_capture_as_reference: true,
     continue_from_previous: false,
     quality_preset: 'project',
+    control_video: '',
+    depth_video: '',
   }
 }

@@ -91,7 +91,7 @@ export function ChatModelPickers() {
       />
       {open && (
         <div className="absolute bottom-full left-0 mb-1.5 z-40 w-[26rem] rounded-lg border border-zinc-700 bg-zinc-900 shadow-2xl p-3">
-          {open === 'text' ? <DirectorPicker onDone={() => setOpen(null)} /> : <MediaPicker task={open} onDone={() => setOpen(null)} />}
+          {open === 'text' ? <DirectorPicker onDone={() => setOpen(null)} /> : <MediaPicker task={open === 'video' ? 'video' : 'image'} onDone={() => setOpen(null)} />}
         </div>
       )}
     </div>

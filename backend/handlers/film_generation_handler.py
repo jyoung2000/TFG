@@ -12,18 +12,18 @@ from __future__ import annotations
 
 import base64
 import logging
-import mimetypes
 import os
+import tempfile
 import time
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from threading import RLock
 from typing import Any, cast
 
 from _routes._errors import HTTPError
-from api_types import GenerateImageRequest, GenerateVideoRequest, VideoCameraMotion
+from api_types import GenerateImageRequest, GenerateVideoRequest, VideoCameraMotion, LoraUse
 from film.film_api_types import (
     AddAssetReferenceRequest,
     BatchGenerateRequest,
@@ -38,10 +38,14 @@ from film.film_api_types import (
     QueuedJob,
     QueueShotResponse,
     ReplaceProjectRequest,
+    ReferenceSheetRequest,
+    ReferenceSheetResponse,
+    UpdateAssetRequest,
 )
 from film.film_continuity import check_shot_continuity
 from film.media_providers import MediaSpec
-from film.media_runner import MediaRunner, suffix_for
+from film.media_runner import MediaRunResult, MediaRunner, image_data_url, suffix_for
+from film.provider_tiers import Task, Tier, TierPlan, default_order, plan as plan_tiers, run_with_fallback
 from film.film_models import (
     FilmAsset,
     FilmProject,
@@ -55,6 +59,10 @@ from handlers.base import StateHandlerBase
 from handlers.film_handler import FilmHandler
 from handlers.knowledge_handler import KnowledgeHandler
 from handlers.generation_handler import GenerationHandler
+from handlers.jobs_handler import JobsHandler
+from handlers.training_handler import TrainingHandler
+from handlers.vision_handler import VisionHandler
+from services.similarity.metrics import cosine_similarity
 from handlers.image_generation_handler import ImageGenerationHandler
 from handlers.video_generation_handler import VideoGenerationHandler, get_allowed_durations
 from runtime_config.model_download_specs import MODEL_FILE_ORDER, resolve_required_model_types
@@ -140,18 +148,7 @@ def _wangp_task(architecture: str) -> str:
     return "video"
 
 
-def _image_data_url(path: str | None) -> str:
-    """A local conditioning image as a data: URL, which every hosted provider
-    accepts in place of a public URL — nothing of the user's is uploaded to a
-    file host first."""
-    if not path:
-        return ""
-    try:
-        raw = Path(path).read_bytes()
-    except OSError:
-        return ""
-    mime = mimetypes.guess_type(path)[0] or "image/png"
-    return f"data:{mime};base64,{base64.b64encode(raw).decode('ascii')}"
+_image_data_url = image_data_url
 
 
 def _system_ram_gb() -> float | None:
@@ -204,6 +201,8 @@ class _QueuedShotJob:
     shot_title: str
     kind: VersionKind
     version_number: int
+    #: History job id ("" when the jobs handler is not attached).
+    job_id: str = ""
 
     def to_payload(self, status: str) -> QueuedJob:
         return QueuedJob(
@@ -232,8 +231,10 @@ class FilmGenerationHandler(StateHandlerBase):
         wangp_bridge: WanGPBridge | None = None,
         media_runner: MediaRunner | None = None,
         image_generation_handler: ImageGenerationHandler | None = None,
+        jobs: JobsHandler | None = None,
     ) -> None:
         super().__init__(state, lock)
+        self._jobs = jobs
         self._film = film_handler
         self._video_generation = video_generation_handler
         self._generation = generation_handler
@@ -247,6 +248,9 @@ class FilmGenerationHandler(StateHandlerBase):
         # Optional on purpose: the queue works without it, and learning is
         # never allowed to be a reason a render fails.
         self._knowledge: KnowledgeHandler | None = None
+        #: Registry lookups for asset-bound LoRAs (phase 7); optional like knowledge.
+        self._training: TrainingHandler | None = None
+        self._vision: VisionHandler | None = None
         # Set while a hosted job runs, so the queue can report and cancel it.
         self._hosted_cancel = False
         self._hosted_progress: tuple[int, str] | None = None
@@ -313,7 +317,7 @@ class FilmGenerationHandler(StateHandlerBase):
                     + "; ".join(w.message for w in warnings),
                 )
 
-            version = self._create_version(project, shot, req.kind)
+            version = self._create_version(project, shot, req.kind, req)
             shot.versions.append(version)
             shot.status = "queued"
             shot.updated_at = now_ms()
@@ -326,12 +330,36 @@ class FilmGenerationHandler(StateHandlerBase):
                 shot_title=shot.title,
                 kind=req.kind,
                 version_number=version.number,
+                job_id=self._open_history_job(project, shot, version),
             )
             self._queue.append(job)
             self._ensure_worker()
             return QueueShotResponse(
                 status="queued", version_number=version.number, warnings=warnings
             )
+
+    def _open_history_job(self, project: FilmProject, shot: FilmShot, version: ShotVersion) -> str:
+        if self._jobs is None:
+            return ""
+        return self._jobs.queue(
+            "video_gen",
+            title=f"{shot.title or 'Shot'} · v{version.number} ({version.kind})",
+            model=version.model,
+            provider=self._media_selection(project.id)[0],
+            seed=version.seed,
+            prompt=version.prompt,
+            negative_prompt=version.negative_prompt,
+            params={
+                "kind": version.kind,
+                "resolution": version.resolution,
+                "fps": version.fps,
+                "duration_seconds": version.duration_seconds,
+                "version_number": version.number,
+            },
+            inputs={"capture_path": shot.capture_path} if shot.capture_path else {},
+            project_id=project.id,
+            shot_id=shot.id,
+        ).id
 
     def queue_batch(self, project_id: str, req: BatchGenerateRequest) -> BatchGenerateResponse:
         with self.lock:
@@ -484,7 +512,7 @@ class FilmGenerationHandler(StateHandlerBase):
     # ---- Version construction -------------------------------------------
 
     def _create_version(
-        self, project: FilmProject, shot: FilmShot, kind: VersionKind
+        self, project: FilmProject, shot: FilmShot, kind: VersionKind, req: GenerateShotRequest | None = None
     ) -> ShotVersion:
         settings = project.settings
         generation = shot.generation
@@ -504,6 +532,9 @@ class FilmGenerationHandler(StateHandlerBase):
             model, resolution = self._resolve_final_profile(project, shot)
             duration = shot.duration_seconds
 
+        if req is not None and req.duration_seconds is not None and req.duration_seconds > 0:
+            # Video Reproduce snaps to the model's allowed durations itself.
+            duration = req.duration_seconds
         duration_int = max(1, round(duration))
         if self._config.force_api_generations and not self._config.wangp_enabled:
             resolution = resolution if resolution in _FORCED_API_RESOLUTIONS else "1080p"
@@ -517,6 +548,11 @@ class FilmGenerationHandler(StateHandlerBase):
                 wardrobe_snapshot[asset.id] = asset.wardrobe
 
         capture_path = shot.capture_path if generation.use_capture_as_reference else ""
+        if req is not None and req.capture_path:
+            capture_path = req.capture_path
+        seed = generation.seed
+        if req is not None and req.seed is not None:
+            seed = req.seed
 
         snapshot: dict[str, object] = {
             "title": shot.title,
@@ -544,7 +580,7 @@ class FilmGenerationHandler(StateHandlerBase):
             resolution=resolution,
             fps=generation.fps,
             duration_seconds=float(duration_int),
-            seed=generation.seed,
+            seed=seed,
             capture_path=capture_path,
             wardrobe_snapshot=wardrobe_snapshot,
             shot_snapshot=snapshot,
@@ -619,6 +655,11 @@ class FilmGenerationHandler(StateHandlerBase):
         if provider != "local":
             self._run_hosted_job(job, provider, model)
             return
+        tiers = self._tier_plan(job.project_id, "t2v").usable
+        if tiers and tiers[0].provider != "local":
+            # The tier list puts a hosted provider first for this task.
+            self._run_hosted_job(job, tiers[0].provider, tiers[0].model)
+            return
         prepared = self._prepare_request(job)
         if prepared is None:
             return
@@ -635,12 +676,12 @@ class FilmGenerationHandler(StateHandlerBase):
                 settings.locked_seed = seed
         started = time.perf_counter()
         try:
-            response = self._video_generation.generate(request)
+            response = self._video_generation.generate(request, job_id=job.job_id or None, seed=seed, allow_fallback=False)
         except HTTPError as exc:
-            self._finish_version(job, status="failed", error=str(exc.detail), telemetry=self._telemetry(started))
+            self._local_failed(job, str(exc.detail), self._telemetry(started))
             return
         except Exception as exc:  # noqa: BLE001 - queue must survive any job failure
-            self._finish_version(job, status="failed", error=str(exc), telemetry=self._telemetry(started))
+            self._local_failed(job, str(exc), self._telemetry(started))
             return
         finally:
             if restore_seed is not None:
@@ -655,7 +696,59 @@ class FilmGenerationHandler(StateHandlerBase):
         elif response.status == "cancelled":
             self._finish_version(job, status="cancelled", error="Cancelled", telemetry=telemetry)
         else:
-            self._finish_version(job, status="failed", error=f"Generation ended with status {response.status}", telemetry=telemetry)
+            self._local_failed(job, f"Generation ended with status {response.status}", telemetry)
+
+    def _local_failed(self, job: _QueuedShotJob, error: str, telemetry: dict[str, Any]) -> None:
+        """A local render failed: move to the next usable tier, else record the failure."""
+        hosted = [t for t in self._tier_plan(job.project_id, "t2v").usable if t.provider != "local"]
+        if not hosted or self._hosted_cancelled_flag():
+            self._finish_version(job, status="failed", error=error, telemetry=telemetry)
+            return
+        logger.info("Local render failed (%s); falling back to %s", error, hosted[0].provider)
+        if job.job_id and self._jobs is not None:
+            self._jobs.progress(job.job_id, 0.0, f"Local failed: {error[:120]} — trying {hosted[0].provider}")
+        self._run_hosted_job(job, hosted[0].provider, hosted[0].model, fallback_from=("local", error))
+
+    def _hosted_cancelled_flag(self) -> bool:
+        with self.lock:
+            return self._hosted_cancel
+
+    # ---- Tiered fallback ---------------------------------------------------
+
+    def _tier_plan(self, project_id: str, task: Task) -> TierPlan:
+        """The provider order for this project and task, checked against keys,
+        model ids and the capability catalog (film/provider_tiers.py)."""
+        with self.lock:
+            settings = self.state.app_settings.model_copy(deep=True)
+        project_provider, project_video, project_image = "", "", ""
+        try:
+            project = self._film.store.load(project_id)
+            project_provider = (project.settings.media_provider or "").strip()
+            project_video = (project.settings.video_model or "").strip()
+            project_image = (project.settings.image_model or "").strip()
+        except Exception:  # noqa: BLE001 - a missing project is handled downstream
+            pass
+        if project_provider:
+            order = [project_provider]
+        else:
+            order = list(settings.media_tiers.get(task) or default_order(settings.media_provider))
+        image_task = task in ("t2i", "i2i", "edit")
+
+        def models(provider: str, _task: Task) -> str:
+            own = project_image if image_task else project_video
+            if project_provider == provider and own:
+                return own
+            return settings.default_image_model if image_task else settings.default_video_model
+
+        local_available = self._config.wangp_enabled or not self._config.force_api_generations or bool(settings.ltx_api_key.strip())
+        return plan_tiers(task, order=order, local_available=local_available, keys=settings.media_api_key, models=models)
+
+    def tier_preview(self, project_id: str) -> dict[str, list[dict[str, str]]]:
+        """What Settings shows: per task, the resolved tiers and why any is skipped."""
+        out: dict[str, list[dict[str, str]]] = {}
+        for task in ("t2i", "i2i", "t2v", "i2v", "edit"):
+            out[task] = [{"provider": t.provider, "model": t.model, "skip_reason": t.skip_reason} for t in self._tier_plan(project_id, task).tiers]
+        return out
 
     # ---- Reference images --------------------------------------------------
 
@@ -713,7 +806,29 @@ class FilmGenerationHandler(StateHandlerBase):
         prompt = req.prompt.strip() or self._reference_prompt(asset, project.settings.style_prompt)
         width, height = self._REFERENCE_SIZES.get(asset.kind, (1024, 1024))
 
-        if provider == "local":
+        tiers = self._tier_plan(project_id, "t2i").tiers if not project.settings.media_provider else []
+        if provider == "local" and tiers:
+            # Local first, then whichever hosted tiers are configured for stills.
+            def attempt(tier: Tier) -> MediaRunResult:
+                if tier.provider == "local":
+                    try:
+                        return MediaRunResult(status="complete", content=self._local_reference_image(prompt, width, height))
+                    except HTTPError as exc:
+                        return MediaRunResult(status="failed", error=str(exc.detail))
+                runner = self._media_runner
+                if runner is None:  # pragma: no cover - wired in AppHandler
+                    return MediaRunResult(status="failed", error="Hosted generation is not available in this build")
+                return runner.run(provider=tier.provider, api_key=settings.media_api_key(tier.provider), spec=MediaSpec(model=tier.model, prompt=prompt, task="image", width=width, height=height))
+
+            outcome = run_with_fallback(tiers, attempt)
+            if outcome.result.status != "complete":
+                raise HTTPError(502, outcome.result.error or "No provider returned an image")
+            image_bytes = outcome.result.content
+            provider = outcome.provider
+            if outcome.fell_back:
+                logger.info("Reference image: %s", outcome.note())
+                model = next((t.model for t in tiers if t.provider == provider), model)
+        elif provider == "local":
             image_bytes = self._local_reference_image(prompt, width, height)
         else:
             api_key = settings.media_api_key(provider)
@@ -772,7 +887,7 @@ class FilmGenerationHandler(StateHandlerBase):
         model = (project_model or settings.default_video_model).strip()
         return provider, model
 
-    def _run_hosted_job(self, job: _QueuedShotJob, provider: str, model: str) -> None:
+    def _run_hosted_job(self, job: _QueuedShotJob, provider: str, model: str, *, fallback_from: tuple[str, str] | None = None) -> None:
         """Render one shot on a hosted provider, then store the file exactly
         like a local render so versions, timeline and export behave the same."""
         prepared = self._prepare_request(job)
@@ -783,6 +898,9 @@ class FilmGenerationHandler(StateHandlerBase):
             settings = self.state.app_settings.model_copy(deep=True)
             self._hosted_cancel = False
             self._hosted_progress = (0, f"Preparing {provider} job")
+        if job.job_id and self._jobs is not None:
+            self._jobs.annotate(job.job_id, provider=provider, model=model, seed=seed)
+            self._jobs.mark_running(job.job_id, phase=f"Preparing {provider} job")
         api_key = settings.media_api_key(provider)
         started = time.perf_counter()
         if not api_key:
@@ -812,14 +930,31 @@ class FilmGenerationHandler(StateHandlerBase):
             self._clear_hosted()
             self._finish_version(job, status="failed", error="Hosted generation is not available in this build", telemetry=self._telemetry(started, execution_mode=provider))
             return
-        result = runner.run(
-            provider=provider,
-            api_key=api_key,
-            spec=spec,
-            is_cancelled=self._hosted_cancelled,
-            on_progress=self._report_hosted_progress,
-        )
+        # This provider first, then any later hosted tiers configured for the task.
+        later = [t for t in self._tier_plan(job.project_id, "t2v").usable if t.provider not in ("local", provider)]
+        tiers = [Tier(provider, model), *later]
+
+        def attempt(tier: Tier) -> MediaRunResult:
+            if job.job_id and self._jobs is not None and tier.provider != provider:
+                self._jobs.annotate(job.job_id, provider=tier.provider, model=tier.model)
+            return runner.run(
+                provider=tier.provider,
+                api_key=settings.media_api_key(tier.provider),
+                spec=replace(spec, model=tier.model),
+                is_cancelled=self._hosted_cancelled,
+                on_progress=self._report_hosted_progress,
+            )
+
+        outcome = run_with_fallback(tiers, attempt, is_cancelled=self._hosted_cancelled)
+        result = outcome.result
+        if outcome.provider:
+            provider = outcome.provider
+        attempts = ([fallback_from] if fallback_from else []) + outcome.attempts
         telemetry = self._telemetry(started, execution_mode=provider)
+        if attempts:
+            telemetry["fallback"] = [{"provider": p, "error": e} for p, e in attempts]
+            if job.job_id and self._jobs is not None:
+                self._jobs.annotate(job.job_id, metrics={"fallback": "; ".join(f"{p}: {e[:80]}" for p, e in attempts)})
         if result.status == "cancelled":
             self._clear_hosted()
             self._finish_version(job, status="cancelled", error="Cancelled", telemetry=telemetry)
@@ -848,6 +983,9 @@ class FilmGenerationHandler(StateHandlerBase):
     def _report_hosted_progress(self, percent: int, phase: str) -> None:
         with self.lock:
             self._hosted_progress = (percent, phase)
+            active = self._active
+        if active is not None and active.job_id and self._jobs is not None:
+            self._jobs.progress(active.job_id, percent, phase)
 
     def _clear_hosted(self) -> None:
         with self.lock:
@@ -895,6 +1033,18 @@ class FilmGenerationHandler(StateHandlerBase):
 
             camera_motion = _CAMERA_MOVE_TO_HOST.get(shot.camera_move, "none")
             aspect_ratio = shot.generation.aspect_ratio
+            control_video = self._deliver_pass(job.project_id, shot.generation.control_video)
+            depth_video = self._deliver_pass(job.project_id, shot.generation.depth_video)
+            loras = self.asset_loras(project, shot)
+            seed_lock = self.asset_seed_lock(project, shot)
+            if version.seed is None and seed_lock is not None:
+                version.seed = seed_lock
+                self._film.store.save(project)
+            reference_images = [
+                str(self._film.store.resolve_media_path(job.project_id, asset.reference_images[0]))
+                for asset in (project.asset(c.asset_id) for c in shot.characters)
+                if asset is not None and asset.reference_images and asset.lora_id == ""
+            ][:2]
 
         request = GenerateVideoRequest(
             prompt=version.prompt,
@@ -908,8 +1058,22 @@ class FilmGenerationHandler(StateHandlerBase):
             imagePath=image_path,
             audioPath=None,
             aspectRatio=aspect_ratio,
+            controlVideoPath=control_video,
+            depthVideoPath=depth_video,
+            loras=loras,
+            referenceImagePaths=[p for p in reference_images if Path(p).is_file()],
         )
         return request, version.seed
+
+    def _deliver_pass(self, project_id: str, relative: str) -> str | None:
+        """Absolute path of a Deliver pass inside the project, or None."""
+        if not relative:
+            return None
+        try:
+            path = self._film.store.resolve_media_path(project_id, relative)
+        except Exception:  # noqa: BLE001 - a stale or escaping path is simply not a control signal
+            return None
+        return str(path) if path.is_file() else None
 
     def _extract_previous_frame(
         self, project: FilmProject, shot: FilmShot, job: _QueuedShotJob
@@ -993,6 +1157,29 @@ class FilmGenerationHandler(StateHandlerBase):
                 version.negative_prompt,
                 version.generation_seconds,
             )
+            job_metrics: dict[str, object] = {}
+            if version.generation_seconds is not None:
+                job_metrics["seconds"] = version.generation_seconds
+            if version.peak_vram_gb is not None:
+                job_metrics["peak_vram_mb"] = round(version.peak_vram_gb * 1024)
+            if version.gpu_name:
+                job_metrics["gpu_name"] = version.gpu_name
+
+        if status == "complete" and output_path:
+            score = self._consistency_score(job.project_id, job.shot_id, output_path)
+            if score is not None:
+                job_metrics["consistency"] = score
+
+        if job.job_id and self._jobs is not None:
+            metrics = {k: v for k, v in job_metrics.items()}
+            if status == "complete" and output_path:
+                self._jobs.complete(job.job_id, [output_path], metrics=metrics)
+                if seed_used is not None:
+                    self._jobs.annotate(job.job_id, seed=seed_used)
+            elif status == "cancelled":
+                self._jobs.mark_cancelled(job.job_id, reason=error or "Cancelled")
+            else:
+                self._jobs.fail(job.job_id, error or "Generation failed", metrics=metrics)
 
         # Outside the lock: learning is advisory and must never hold up a render
         # or fail one. The handler itself declines if the user switched it off.
@@ -1014,6 +1201,126 @@ class FilmGenerationHandler(StateHandlerBase):
                 duration_seconds=seconds,
                 error=error,
             )
+
+    def _consistency_score(self, project_id: str, shot_id: str, output_path: str) -> float | None:
+        """Cross-frame consistency (phase 7): CLIP cosine between the shot's
+        first frame and the reference image of each character in it, averaged.
+        Best effort — never fails a render, None when nothing to compare."""
+        if self._vision is None:
+            return None
+        try:
+            project = self._film.store.load(project_id)
+            found = project.find_shot(shot_id)
+            if found is None:
+                return None
+            _, shot = found
+            references = [
+                self._film.store.resolve_media_path(project_id, asset.reference_images[0])
+                for asset in (project.asset(c.asset_id) for c in shot.characters)
+                if asset is not None and asset.reference_images
+            ]
+            references = [r for r in references if r.is_file()]
+            if not references:
+                return None
+            cap = self._video_processor.open_video(output_path)
+            try:
+                frame = self._video_processor.read_frame(cap, 0)
+                if frame is None:
+                    return None
+                jpeg = self._video_processor.encode_frame_jpeg(frame, quality=90)
+            finally:
+                self._video_processor.release(cap)
+            # A scratch file, never project media: it must not show up in packages or the assets gallery.
+            with tempfile.NamedTemporaryFile(prefix=f"{shot.id}-consistency-", suffix=".jpg", delete=False) as handle:
+                handle.write(jpeg)
+                probe = Path(handle.name)
+            try:
+                frame_vector = self._vision.embed(str(probe), "clip")
+            finally:
+                probe.unlink(missing_ok=True)
+            scores: list[float] = []
+            for reference in references:
+                vector = self._vision.embed(str(reference), "clip")
+                scores.append(cosine_similarity(frame_vector, vector))
+            return round(sum(scores) / len(scores), 4) if scores else None
+        except Exception as exc:  # noqa: BLE001 - advisory metric
+            logger.info("Consistency score unavailable: %s", exc)
+            return None
+
+    def generate_reference_sheet(self, project_id: str, asset_id: str, req: ReferenceSheetRequest) -> ReferenceSheetResponse:
+        """Consistency Kit: the same asset from several angles with one seed and
+        its bound LoRA, saved as reference images (local image model only)."""
+        project = self._film.get_project(project_id)
+        asset = project.asset(asset_id)
+        if asset is None:
+            raise HTTPError(404, f"Asset not found: {asset_id}")
+        handler = self._image_generation
+        if handler is None:  # pragma: no cover - wired in AppHandler
+            raise HTTPError(500, "Local image generation is not available in this build")
+        views = [v.strip() for v in req.views if v.strip()][:6] or ["front view"]
+        seed = req.seed if req.seed is not None else asset.seed_lock
+        if seed is None:
+            seed = int(time.time()) % 2_000_000_000
+        base = self._reference_prompt(asset, project.settings.style_prompt)
+        trigger = asset.lora_trigger.strip()
+        loras: list[LoraUse] = []
+        if asset.lora_id and self._training is not None:
+            try:
+                entry = self._training.get_lora(asset.lora_id)
+                loras.append(LoraUse(name=entry.file, multiplier=asset.lora_multiplier or entry.default_multiplier))
+                trigger = trigger or entry.trigger
+            except HTTPError:
+                pass
+        width, height = self._REFERENCE_SIZES.get(asset.kind, (1024, 1024))
+        prompts: list[str] = []
+        paths: list[str] = []
+        for view in views:
+            prompt = ", ".join(p for p in (trigger, base, view, "consistent character sheet, same person, same outfit") if p)
+            prompts.append(prompt)
+            response = handler.generate(GenerateImageRequest(prompt=prompt, width=width, height=height, numImages=1, loras=loras), seed=seed)
+            out_paths = response.image_paths or []
+            if response.status != "complete" or not out_paths:
+                raise HTTPError(502, "The local image model did not return an image")
+            image_bytes = Path(out_paths[0]).read_bytes()
+            encoded = base64.b64encode(image_bytes).decode("ascii")
+            updated = self._film.add_asset_reference(project_id, asset_id, AddAssetReferenceRequest(image_base64=encoded, name_hint=f"{asset.name}-{view.replace(' ', '-')}"))
+            paths.append(updated.reference_images[-1])
+        asset = self._film.get_project(project_id).asset(asset_id)
+        assert asset is not None
+        if asset.seed_lock is None:
+            asset = self._film.update_asset(project_id, asset_id, UpdateAssetRequest(seed_lock=seed))
+        return ReferenceSheetResponse(asset=asset, prompts=prompts, seed=seed, reference_paths=paths)
+
+    def attach_training(self, training: TrainingHandler, vision: VisionHandler | None = None) -> None:
+        self._training = training
+        self._vision = vision
+
+    def asset_loras(self, project: FilmProject, shot: FilmShot) -> list[LoraUse]:
+        """Every LoRA bound to an asset the shot references, deduplicated."""
+        if self._training is None:
+            return []
+        out: list[LoraUse] = []
+        seen: set[str] = set()
+        asset_ids = [c.asset_id for c in shot.characters] + list(shot.prop_ids) + ([shot.location_id] if shot.location_id else [])
+        for asset_id in asset_ids:
+            asset = project.asset(asset_id)
+            if asset is None or not asset.lora_id or asset.lora_id in seen:
+                continue
+            seen.add(asset.lora_id)
+            try:
+                entry = self._training.get_lora(asset.lora_id)
+            except HTTPError:
+                continue
+            out.append(LoraUse(name=entry.file, multiplier=asset.lora_multiplier if asset.lora_multiplier > 0 else entry.default_multiplier))
+        return out
+
+    @staticmethod
+    def asset_seed_lock(project: FilmProject, shot: FilmShot) -> int | None:
+        for character in shot.characters:
+            asset = project.asset(character.asset_id)
+            if asset is not None and asset.seed_lock is not None:
+                return asset.seed_lock
+        return None
 
     def attach_knowledge(self, knowledge: KnowledgeHandler) -> None:
         """Give the queue somewhere to report outcomes.

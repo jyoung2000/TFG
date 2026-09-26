@@ -1,6 +1,6 @@
 /** The Model Library: one catalog over local weights and hosted providers. */
 
-export type LibraryTask = 'video' | 'image' | 'text'
+export type LibraryTask = 'video' | 'image' | 'text' | 'vision'
 export type LibrarySourceKind = 'local' | 'hosted'
 
 /** Providers that generate images/video. `local` is the only offline one. */

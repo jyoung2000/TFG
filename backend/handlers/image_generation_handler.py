@@ -10,9 +10,13 @@ from pathlib import Path
 from threading import RLock
 from typing import TYPE_CHECKING
 
+from PIL import Image
+
 from _routes._errors import HTTPError
 from api_types import GenerateImageRequest, GenerateImageResponse
 from handlers.base import StateHandlerBase
+from handlers.jobs_handler import JobsHandler
+from handlers.vision_handler import VisionHandler
 from handlers.generation_handler import GenerationHandler
 from handlers.pipelines_handler import PipelinesHandler
 from services.interfaces import ZitAPIClient
@@ -36,8 +40,12 @@ class ImageGenerationHandler(StateHandlerBase):
         config: RuntimeConfig,
         zit_api_client: ZitAPIClient,
         wangp_bridge: WanGPBridge,
+        jobs: JobsHandler | None = None,
+        vision: VisionHandler | None = None,
     ) -> None:
         super().__init__(state, lock)
+        self._jobs = jobs
+        self._vision = vision
         self._generation = generation_handler
         self._pipelines = pipelines_handler
         self._outputs_dir = outputs_dir
@@ -45,9 +53,91 @@ class ImageGenerationHandler(StateHandlerBase):
         self._zit_api_client = zit_api_client
         self._wangp_bridge = wangp_bridge
 
-    def generate(self, req: GenerateImageRequest) -> GenerateImageResponse:
+    def generate(
+        self,
+        req: GenerateImageRequest,
+        *,
+        job_id: str | None = None,
+        seed: int | None = None,
+    ) -> GenerateImageResponse:
+        """Render images. `job_id` reuses an existing History job; `seed` pins the seed (re-runs)."""
+        if self._generation.is_generation_running():
+            raise HTTPError(409, "Generation already in progress")
+        tracked = self._open_job(req, job_id, seed)
+        peak_mb: int | None = None
+        try:
+            if self._vision is not None:
+                model_type = self._config.wangp_image_model_type if self._config.wangp_enabled else "z_image"
+                with self._vision.render_scope(model_type) as scope:
+                    response = self._dispatch(req, tracked, seed)
+                peak_mb = scope.peak_mb
+            else:
+                response = self._dispatch(req, tracked, seed)
+        except HTTPError as exc:
+            self._close_job(tracked, error=str(exc.detail))
+            raise
+        except Exception as exc:
+            self._close_job(tracked, error=str(exc))
+            raise
+        if peak_mb is not None and tracked and self._jobs is not None:
+            self._jobs.annotate(tracked, metrics={"peak_vram_mb": peak_mb})
+        self._close_job(tracked, response=response)
+        return response
+
+    def cancel_current(self) -> None:
+        """Cancel whatever image generation is running (used by the Reproduce loop)."""
+        self._generation.cancel_generation()
+
+    def edit(self, req: GenerateImageRequest, *, reference: Image.Image, mask_png: bytes) -> GenerateImageResponse:
+        """Edit `reference` inside `mask_png` with the edit-capable WanGP image model.
+
+        The exact WanGP keys for reference images and masks depend on the
+        checkout (`wgp.py` / `shared/api.py`) and could not be verified in
+        this build; the bridge method raises with a clear message until they
+        are confirmed (see session-notes VF-008).
+        """
+        if not self._config.wangp_enabled:
+            raise HTTPError(400, "Image editing needs the WanGP edit model (Qwen-Image-Edit / Flux Kontext)")
+        del reference, mask_png
+        raise HTTPError(501, "Image editing with WanGP is not wired yet: the reference/mask parameter names must be confirmed against the local checkout")
+
+    def _open_job(self, req: GenerateImageRequest, job_id: str | None, seed: int | None) -> str:
+        if self._jobs is None:
+            return ""
         if self._config.wangp_enabled:
-            return self._generate_via_wangp(req)
+            provider, model = "wangp", self._config.wangp_image_model_type
+        elif self._config.force_api_generations:
+            provider, model = "ltx-api", "z-image"
+        else:
+            provider, model = "local", "z-image"
+        params = req.model_dump()
+        if job_id:
+            self._jobs.annotate(job_id, model=model, provider=provider, prompt=req.prompt, params=params, seed=seed)
+            self._jobs.mark_running(job_id, phase="starting")
+            return job_id
+        return self._jobs.start(
+            "image_gen", title=req.prompt[:80], model=model, provider=provider, seed=seed, prompt=req.prompt, params=params
+        ).id
+
+    def _close_job(self, job_id: str, *, response: GenerateImageResponse | None = None, error: str = "") -> None:
+        if not job_id or self._jobs is None:
+            return
+        if response is None:
+            self._jobs.fail(job_id, error or "Image generation failed")
+        elif response.status == "complete" and response.image_paths:
+            self._jobs.complete(job_id, list(response.image_paths))
+        elif response.status == "cancelled":
+            self._jobs.mark_cancelled(job_id)
+        else:
+            self._jobs.fail(job_id, f"Image generation ended with status {response.status}")
+
+    def _note_seed(self, job_id: str, seed: int) -> None:
+        if job_id and self._jobs is not None:
+            self._jobs.annotate(job_id, seed=seed)
+
+    def _dispatch(self, req: GenerateImageRequest, job_id: str, seed_override: int | None) -> GenerateImageResponse:
+        if self._config.wangp_enabled:
+            return self._generate_via_wangp(req, job_id=job_id, seed_override=seed_override)
 
         if self._generation.is_generation_running():
             raise HTTPError(409, "Generation already in progress")
@@ -58,11 +148,14 @@ class ImageGenerationHandler(StateHandlerBase):
 
         generation_id = uuid.uuid4().hex[:8]
         settings = self.state.app_settings.model_copy(deep=True)
-        if settings.seed_locked:
+        if seed_override is not None:
+            seed = seed_override
+        elif settings.seed_locked:
             seed = settings.locked_seed
             logger.info("Using locked seed for image: %s", seed)
         else:
             seed = int(time.time()) % 2147483647
+        self._note_seed(job_id, seed)
 
         if self._config.force_api_generations:
             return self._generate_via_api(
@@ -76,7 +169,7 @@ class ImageGenerationHandler(StateHandlerBase):
 
         try:
             self._pipelines.load_zit_to_gpu()
-            self._generation.start_generation(generation_id)
+            self._generation.start_generation(generation_id, job_id=job_id)
             output_paths = self.generate_image(
                 prompt=req.prompt,
                 width=width,
@@ -99,9 +192,23 @@ class ImageGenerationHandler(StateHandlerBase):
             self._generation.fail_generation(str(e))
             raise HTTPError(500, str(e)) from e
 
-    def _generate_via_wangp(self, req: GenerateImageRequest) -> GenerateImageResponse:
+    def _generate_via_wangp(
+        self, req: GenerateImageRequest, *, job_id: str = "", seed_override: int | None = None
+    ) -> GenerateImageResponse:
         if self._generation.is_generation_running():
             raise HTTPError(409, "Generation already in progress")
+
+        # Same rule as video: missing weights are an explicit Models-tab
+        # download, never a silent side effect of a render (wgp.py would
+        # otherwise auto-download the checkpoint on load).
+        model_type = self._config.wangp_image_model_type
+        if self._wangp_bridge.weights_installed(model_type) is False:
+            raise HTTPError(
+                409,
+                f"The local image model '{model_type}' has no downloaded weights yet. "
+                "Download it first in the Models tab (Model Library → Local · WanGP models) — "
+                "a render never starts a checkpoint download on its own.",
+            )
 
         width = (req.width // 16) * 16
         height = (req.height // 16) * 16
@@ -109,10 +216,14 @@ class ImageGenerationHandler(StateHandlerBase):
 
         generation_id = uuid.uuid4().hex[:8]
         settings = self.state.app_settings.model_copy(deep=True)
-        seed = settings.locked_seed if settings.seed_locked else int(time.time()) % 2147483647
+        if seed_override is not None:
+            seed = seed_override
+        else:
+            seed = settings.locked_seed if settings.seed_locked else int(time.time()) % 2147483647
+        self._note_seed(job_id, seed)
 
         try:
-            self._generation.start_api_generation(generation_id)
+            self._generation.start_api_generation(generation_id, job_id=job_id)
             output_paths = self._wangp_bridge.generate_images(
                 prompt=req.prompt,
                 width=width,
@@ -122,6 +233,7 @@ class ImageGenerationHandler(StateHandlerBase):
                 seed=seed,
                 on_progress=self._generation.update_progress,
                 is_cancelled=self._generation.is_generation_cancelled,
+                loras=[(lora.name, lora.multiplier) for lora in req.loras if Path(lora.name).is_file()],
             )
             self._generation.complete_generation(output_paths)
             return GenerateImageResponse(status="complete", image_paths=output_paths)

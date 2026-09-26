@@ -93,6 +93,43 @@ class OpenRouterRoleModels(SettingsBaseModel):
         return str(chosen).strip() or self.default_model.strip() or "openai/gpt-4o-mini"
 
 
+VisionMode = Literal["auto", "local", "sidecar"]
+VlmProvider = Literal["off", "ollama", "openai_compatible", "director"]
+VideoProfile = Literal["fast", "balanced"]
+
+
+class VisionSettings(SettingsBaseModel):
+    """The local vision stack (Settings → Vision), independent of the AI Director.
+
+    Each component can be switched off; the models are small (Florence-2 ≤ 1.7 GB,
+    CLIP ≤ 1 GB, depth/DINO ≤ 0.5 GB) and load lazily, and the VRAM manager
+    unloads them before a render. The optional VLM runs on Ollama or any
+    OpenAI-compatible endpoint; `vlm_keep_alive` is passed to Ollama so a
+    warm 6 GB model never sits next to a 10 GB render.
+    """
+
+    enabled: bool = True
+    mode: VisionMode = "auto"
+    sidecar_url: str = "http://127.0.0.1:8765"
+    florence_enabled: bool = True
+    florence_model: str = "florence-2-large"
+    clip_enabled: bool = True
+    clip_model: str = "openai/clip-vit-large-patch14"
+    depth_enabled: bool = True
+    depth_model: str = "depth-anything-v2-small"
+    dino_enabled: bool = True
+    dino_model: str = "dinov2-small"
+    #: "director" keeps the pre-2.0 behaviour (the AI Director model reads images);
+    #: a text-only Director no longer breaks analysis because the local stack
+    #: runs first and a failed VLM call degrades to its prompt.
+    vlm_provider: VlmProvider = "director"
+    #: Empty means "qwen3-vl:4b if Ollama has it, else qwen2.5vl:3b".
+    vlm_model: str = ""
+    vlm_base_url: str = "http://127.0.0.1:11434"
+    vlm_keep_alive: str = "0"
+    cache_dir: str = ""
+
+
 class AppSettings(SettingsBaseModel):
     use_torch_compile: bool = False
     load_on_startup: bool = False
@@ -101,6 +138,13 @@ class AppSettings(SettingsBaseModel):
     # (e.g. an integrated compositor): set what the app may use and it treats
     # the GPU as having only that much VRAM for compatibility verdicts.
     gpu_vram_budget_gb: float | None = None
+    # Override the free VRAM (MB) the render guard demands per model type,
+    # e.g. {"ltx2_22B_distilled": 7800}. Unlisted models keep the built-in
+    # defaults (services/vram/vram_manager.py RENDER_NEEDS_MB); setting a
+    # model to 0 restores its default (settings patches deep-merge, so keys
+    # cannot be deleted). This is the knob to turn after measuring a real
+    # peak on your card.
+    vram_render_needs_mb: dict[str, int] = Field(default_factory=dict[str, int])
     ltx_api_key: str = ""
     user_prefers_ltx_api_video_generations: bool = False
     use_local_text_encoder: bool = False
@@ -131,6 +175,9 @@ class AppSettings(SettingsBaseModel):
     fal_api_key: str = ""
     wavespeed_api_key: str = ""
     replicate_api_key: str = ""
+    # Tiered fallback per task (phase 9): the order providers are tried, e.g.
+    # {"t2v": ["local", "fal"]}. A missing task means [media_provider].
+    media_tiers: dict[str, list[str]] = Field(default_factory=dict[str, list[str]])
     # Default model ids used when a film project does not override them.
     default_video_model: str = ""
     default_image_model: str = ""
@@ -142,8 +189,16 @@ class AppSettings(SettingsBaseModel):
     # honoured when an event is written, not when it is read, so turning
     # learning off stops collection rather than merely hiding it.
     learning: LearningSettings = Field(default_factory=LearningSettings)
+    #: Local vision models used by Reproduce and video analysis.
+    vision: VisionSettings = Field(default_factory=VisionSettings)
     seed_locked: bool = False
     locked_seed: int = 42
+    #: Hardware preset last applied ("" until one is); see state/hardware_presets.py.
+    hardware_preset: str = ""
+    #: Quick video / Film default quality profile on the local video model.
+    video_profile: VideoProfile = "fast"
+    #: Steps for the local image model (Z-Image turbo: 8).
+    image_steps: int = 8
 
     def resolved_openrouter_api_key(self) -> str:
         """Settings-file key first, OPENROUTER_API_KEY env var as fallback."""
@@ -264,16 +319,25 @@ class SettingsResponse(SettingsBaseModel):
     media_provider: MediaProvider = "local"
     has_wavespeed_api_key: bool = False
     has_replicate_api_key: bool = False
+    media_tiers: dict[str, list[str]] = Field(default_factory=dict[str, list[str]])
     default_video_model: str = ""
     default_image_model: str = ""
     recent_model_ids: list[str] = Field(default_factory=list[str])
+    vram_render_needs_mb: dict[str, int] = Field(default_factory=dict[str, int])
 
     # What TFG may remember about how models behave here. Off switches are
     # honoured when an event is written, not when it is read, so turning
     # learning off stops collection rather than merely hiding it.
     learning: LearningSettings = Field(default_factory=LearningSettings)
+    vision: VisionSettings = Field(default_factory=VisionSettings)
     seed_locked: bool = False
     locked_seed: int = 42
+    #: Hardware preset last applied ("" until one is); see state/hardware_presets.py.
+    hardware_preset: str = ""
+    #: Quick video / Film default quality profile on the local video model.
+    video_profile: VideoProfile = "fast"
+    #: Steps for the local image model (Z-Image turbo: 8).
+    image_steps: int = 8
 
 
 def to_settings_response(settings: AppSettings) -> SettingsResponse:

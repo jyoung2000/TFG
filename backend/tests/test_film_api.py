@@ -151,6 +151,63 @@ class TestAssets:
         assert media.status_code == 200
         assert media.content.startswith(b"\x89PNG")
 
+    def test_style_guide_edits_persist(self, client):
+        asset_id = client.post(
+            f"/api/film/projects/{PROJECT}/assets",
+            json={"kind": "character", "name": "Sarah"},
+        ).json()["asset"]["id"]
+        guide = {
+            "key_traits": ["short dark hair", "field jacket"],
+            "color_palette": ["olive", "#22c55e"],
+            "mood": "grounded",
+            "recommended_prompt": "sarah, olive field jacket, grounded light",
+        }
+        updated = client.put(
+            f"/api/film/projects/{PROJECT}/assets/{asset_id}", json={"style_guide": guide}
+        )
+        assert updated.status_code == 200
+        assert updated.json()["asset"]["style_guide"] == guide
+        # Survives a reload from the store, and other fields are untouched.
+        fetched = client.get(f"/api/film/projects/{PROJECT}").json()["project"]["assets"][0]
+        assert fetched["style_guide"]["key_traits"] == guide["key_traits"]
+        assert fetched["name"] == "Sarah"
+
+    def test_delete_reference_removes_entry_and_file(self, client):
+        asset_id = client.post(
+            f"/api/film/projects/{PROJECT}/assets",
+            json={"kind": "character", "name": "Sarah"},
+        ).json()["asset"]["id"]
+        for hint in ("seed", "extra"):
+            client.post(
+                f"/api/film/projects/{PROJECT}/assets/{asset_id}/references",
+                json={"image_base64": _png_base64(), "name_hint": hint},
+            )
+        refs = client.get(f"/api/film/projects/{PROJECT}").json()["project"]["assets"][0][
+            "reference_images"
+        ]
+        assert len(refs) == 2
+        response = client.delete(
+            f"/api/film/projects/{PROJECT}/assets/{asset_id}/references",
+            params={"path": refs[0]},
+        )
+        assert response.status_code == 200
+        assert response.json()["asset"]["reference_images"] == [refs[1]]
+        # The file itself is gone; the other one still serves.
+        assert (
+            client.get(f"/api/film/projects/{PROJECT}/media", params={"path": refs[0]}).status_code
+            == 404
+        )
+        assert (
+            client.get(f"/api/film/projects/{PROJECT}/media", params={"path": refs[1]}).status_code
+            == 200
+        )
+        # Unknown paths are refused without changing the asset.
+        missing = client.delete(
+            f"/api/film/projects/{PROJECT}/assets/{asset_id}/references",
+            params={"path": "references/nope.png"},
+        )
+        assert missing.status_code == 404
+
     def test_deleting_asset_scrubs_references(self, client):
         asset_id = client.post(
             f"/api/film/projects/{PROJECT}/assets",

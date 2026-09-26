@@ -53,6 +53,28 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 const enc = encodeURIComponent
 
+/** A Deliver package from the composer: base64 PNG frames per pass. */
+export interface DeliverPayload {
+  fps: number
+  width: number
+  height: number
+  clean: string[]
+  depth: string[]
+  normal: string[]
+  stills: string[]
+  prompt: string
+  metadata: Record<string, unknown>
+  composition: CompositionScene | null
+}
+
+export interface DeliverResult {
+  package_dir: string
+  files: string[]
+  control_video: string
+  depth_video: string
+  shot: FilmShot
+}
+
 export const filmApi = {
   getProject: (projectId: string) =>
     request<{ project: FilmProject }>(`/api/film/projects/${enc(projectId)}`).then(r => r.project),
@@ -117,6 +139,13 @@ export const filmApi = {
       method: 'DELETE',
     }),
 
+  /** Consistency Kit: the same asset from several angles with one seed and its bound LoRA. */
+  referenceSheet: (projectId: string, assetId: string, data: { views?: string[]; seed?: number | null } = {}) =>
+    request<{ asset: FilmAsset; prompts: string[]; seed: number | null; reference_paths: string[] }>(
+      `/api/film/projects/${enc(projectId)}/assets/${enc(assetId)}/reference-sheet`,
+      { method: 'POST', body: JSON.stringify(data) },
+    ),
+
   addAssetReference: (projectId: string, assetId: string, imageBase64: string, nameHint: string) =>
     request<{ asset: FilmAsset }>(
       `/api/film/projects/${enc(projectId)}/assets/${enc(assetId)}/references`,
@@ -124,6 +153,13 @@ export const filmApi = {
         method: 'POST',
         body: JSON.stringify({ image_base64: imageBase64, name_hint: nameHint }),
       },
+    ).then(r => r.asset),
+
+  /** Remove one reference image (by relative path) and delete its file. */
+  deleteAssetReference: (projectId: string, assetId: string, path: string) =>
+    request<{ asset: FilmAsset }>(
+      `/api/film/projects/${enc(projectId)}/assets/${enc(assetId)}/references?path=${enc(path)}`,
+      { method: 'DELETE' },
     ).then(r => r.asset),
 
   createScene: (projectId: string, data: Partial<FilmScene>) =>
@@ -202,6 +238,12 @@ export const filmApi = {
     request<FilmShot>(
       `/api/film/projects/${enc(projectId)}/scenes/${enc(sceneId)}/shots/${enc(shotId)}/capture`,
       { method: 'POST', body: JSON.stringify({ image_base64: imageBase64, composition }) },
+    ),
+
+  deliverShot: (projectId: string, sceneId: string, shotId: string, payload: DeliverPayload) =>
+    request<DeliverResult>(
+      `/api/film/projects/${enc(projectId)}/scenes/${enc(sceneId)}/shots/${enc(shotId)}/deliver`,
+      { method: 'POST', body: JSON.stringify(payload) },
     ),
 
   generateShot: (projectId: string, sceneId: string, shotId: string, kind: VersionKind) =>

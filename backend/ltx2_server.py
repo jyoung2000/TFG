@@ -219,6 +219,9 @@ SETTINGS_DIR.mkdir(parents=True, exist_ok=True)
 SETTINGS_FILE = SETTINGS_DIR / "settings.json"
 
 DEFAULT_APP_SETTINGS = AppSettings()
+# The compose stack points the VLM at its ollama service without a settings edit.
+if os.environ.get("TFG_VLM_BASE_URL", "").strip():
+    DEFAULT_APP_SETTINGS.vision.vlm_base_url = os.environ["TFG_VLM_BASE_URL"].strip()
 
 from app_factory import DEFAULT_ALLOWED_ORIGINS, create_app
 from state import RuntimeConfig, build_initial_state
@@ -233,7 +236,10 @@ IC_LORA_DIR.mkdir(parents=True, exist_ok=True)
 
 LTX_API_BASE_URL = "https://api.ltx.video"
 WANGP_ROOT = _resolve_wangp_root()
-WANGP_ENABLED = platform.system() in ("Windows", "Linux") and WANGP_ROOT is not None
+#: A WanGP on another machine or in the compose stack (docs/CONTAINERS.md); overrides the local checkout.
+WANGP_REMOTE_URL = os.environ.get("WANGP_REMOTE_URL", "").strip().rstrip("/")
+WANGP_REMOTE_TOKEN = os.environ.get("WANGP_REMOTE_TOKEN", "").strip()
+WANGP_ENABLED = bool(WANGP_REMOTE_URL) or (platform.system() in ("Windows", "Linux") and WANGP_ROOT is not None)
 WANGP_PYTHON = _resolve_wangp_python(WANGP_ROOT) if WANGP_ENABLED else None
 WANGP_CONFIG_DIR = APP_DATA_DIR / "wangp_bridge"
 WANGP_VIDEO_MODEL_TYPE = os.environ.get("WANGP_VIDEO_MODEL_TYPE", "ltx2_22B_distilled")
@@ -306,6 +312,8 @@ runtime_config = RuntimeConfig(
     wangp_video_model_type=WANGP_VIDEO_MODEL_TYPE,
     wangp_image_model_type=WANGP_IMAGE_MODEL_TYPE,
     wangp_extra_args=WANGP_EXTRA_ARGS,
+    wangp_remote_url=WANGP_REMOTE_URL,
+    wangp_remote_token=WANGP_REMOTE_TOKEN,
 )
 
 handler = build_initial_state(runtime_config, DEFAULT_APP_SETTINGS)
@@ -347,7 +355,10 @@ def log_hardware_info() -> None:
     logger.info(f"GPU: {gpu_info['name']}  |  VRAM: {vram_gb} GB")
     logger.info(f"SageAttention: {'enabled' if use_sage_attention else 'disabled'}")
     if WANGP_ENABLED:
-        logger.info("WanGP bridge: enabled  |  Root: %s  |  Python: %s", WANGP_ROOT, WANGP_PYTHON)
+        from services.wangp_worker_bridge import select_wangp_mode
+
+        mode = select_wangp_mode(remote_url=WANGP_REMOTE_URL, enabled=WANGP_ENABLED, root=WANGP_ROOT, python=WANGP_PYTHON)
+        logger.info("WanGP bridge: enabled  |  WanGP mode: %s  |  Root: %s  |  Python: %s", mode, WANGP_ROOT, WANGP_PYTHON)
     else:
         logger.info("WanGP bridge: disabled")
     logger.info(f"Python: {sys.version.split()[0]}  |  Torch: {torch.__version__}")
@@ -392,7 +403,9 @@ if __name__ == "__main__":
     sock.bind(("127.0.0.1", port))
     actual_port = int(sock.getsockname()[1])
 
-    config = uvicorn.Config(app, host="127.0.0.1", port=actual_port, log_level="info", access_log=False, log_config=log_config)
+    # LTX_HOST=0.0.0.0 inside a container (docs/CONTAINERS.md); the desktop keeps loopback.
+    bind_host = os.environ.get("LTX_HOST", "").strip() or "127.0.0.1"
+    config = uvicorn.Config(app, host=bind_host, port=actual_port, log_level="info", access_log=False, log_config=log_config)
     server = uvicorn.Server(config)
 
     _orig_startup = server.startup

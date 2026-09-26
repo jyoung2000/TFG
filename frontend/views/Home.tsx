@@ -1,6 +1,6 @@
 import { APP_NAME } from "../lib/brand";
 import { useState } from 'react'
-import { Clapperboard, FileVideo, Image as ImageIcon, Plus, Folder, MoreVertical, Trash2, Pencil, Sparkles, Zap } from 'lucide-react'
+import { Clapperboard, FileVideo, Image as ImageIcon, Layers, Plus, Folder, MoreVertical, Trash2, Pencil, Sparkles, Zap, History } from 'lucide-react'
 import { useProjects } from '../contexts/ProjectContext'
 import { LtxLogo } from '../components/LtxLogo'
 import { Button } from '../components/ui/button'
@@ -110,7 +110,7 @@ function ProjectCard({ project, onOpen, onDelete, onRename }: {
 export function Home() {
   const { projects, createProject, deleteProject, renameProject, openProject, openPlayground, openQuickMode, openAnalyzeVideo } =
     useProjects()
-  const { setCurrentView } = useProjects()
+  const { setCurrentView, openHistory, openTrain } = useProjects()
   const [isCreating, setIsCreating] = useState(false)
   const [createTarget, setCreateTarget] = useState<ProjectTab>('gen-space')
   const [newProjectName, setNewProjectName] = useState('')
@@ -176,32 +176,34 @@ export function Home() {
           
           <div className="mt-6">
             <h4 className="px-3 text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-2">
-              Quick Actions
+              Make
             </h4>
-            <button
-              onClick={openQuickMode}
-              className="w-full px-3 py-2 rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-white text-left text-sm flex items-center gap-2 transition-colors"
-            >
-              <Zap className="h-4 w-4" />
-              Quick video
-            </button>
+            {([
+              { label: 'Create', hint: 'Quick video', icon: <Zap className="h-4 w-4" />, onClick: openQuickMode },
+              { label: 'Reproduce image', hint: '', icon: <ImageIcon className="h-4 w-4" />, onClick: () => setCurrentView('analyze-image') },
+              { label: 'Reproduce video', hint: '', icon: <FileVideo className="h-4 w-4" />, onClick: openAnalyzeVideo },
+              { label: 'Train', hint: 'LoRA', icon: <Layers className="h-4 w-4" />, onClick: openTrain },
+              { label: 'History', hint: '', icon: <History className="h-4 w-4" />, onClick: openHistory },
+            ] as const).map(item => (
+              <button
+                key={item.label}
+                onClick={item.onClick}
+                className="w-full px-3 py-2 rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-white text-left text-sm flex items-center gap-2 transition-colors"
+              >
+                {item.icon}
+                {item.label}
+                {item.hint && <span className="ml-auto text-[10px] text-zinc-600" aria-hidden="true">{item.hint}</span>}
+              </button>
+            ))}
+            <h4 className="px-3 mt-5 text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-2">
+              Advanced
+            </h4>
             <button
               onClick={() => startCreate('storyboard')}
               className="w-full px-3 py-2 rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-white text-left text-sm flex items-center gap-2 transition-colors"
             >
               <Clapperboard className="h-4 w-4" />
-              New film
-            </button>
-            <button
-              onClick={openAnalyzeVideo}
-              className="w-full px-3 py-2 rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-white text-left text-sm flex items-center gap-2 transition-colors"
-            >
-              <FileVideo className="h-4 w-4" />
-              Analyse video
-            </button>
-            <button onClick={() => setCurrentView('analyze-image')}
-              className="w-full px-3 py-2 rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-white text-left text-sm flex items-center gap-2 transition-colors">
-              <ImageIcon className="h-4 w-4" /> Recreate from image
+              Film Studio
             </button>
             <button
               onClick={openPlayground}
@@ -304,66 +306,77 @@ export function Home() {
           </div>
         )}
 
-        {/* What do you want to make? */}
-        <div className="px-8 pt-8">
-          <h2 className="text-xl font-semibold text-white mb-4">What do you want to make?</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+        {/* The front door: four verbs, then the studio for people who want the whole pipeline. */}
+        <section className="px-8 pt-8" aria-labelledby="make-heading">
+          <h2 id="make-heading" className="text-xl font-semibold text-white mb-1">What do you want to make?</h2>
+          <p className="text-sm text-zinc-500 mb-4">Everything below runs on this computer. Pick a verb; you can promote any result to a film later.</p>
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4" data-testid="front-door">
             <button
               onClick={openQuickMode}
-              className="group text-left rounded-xl border border-zinc-800 bg-zinc-900 hover:border-violet-600 p-5 transition-colors"
+              className="group text-left rounded-xl border border-zinc-800 bg-zinc-900 hover:border-violet-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-violet-400 p-5 transition-colors"
             >
               <div className="flex items-center gap-2 mb-2">
-                <span className="p-2 rounded-lg bg-violet-600/20 text-violet-300">
-                  <Zap className="h-5 w-5" />
-                </span>
-                <span className="text-base font-semibold text-white">Quick video</span>
+                <span className="p-2 rounded-lg bg-violet-600/20 text-violet-300"><Zap className="h-5 w-5" /></span>
+                <span className="text-base font-semibold text-white">Create</span>
               </div>
               <p className="text-sm text-zinc-400 leading-relaxed">
-                Describe an idea, refine it with the assistant, and generate one clip in minutes. Every result can be
-                saved to a project or promoted to a film as Scene 1 / Shot 1.
+                Describe a clip or a still, pick Fast or Balanced, and generate in a minute or three. LoRAs you trained are one checkbox away.
               </p>
-              <span className="inline-block mt-3 text-xs text-violet-300 group-hover:text-violet-200">Start a quick video →</span>
+              <span className="inline-block mt-3 text-xs text-violet-300 group-hover:text-violet-200">Make a quick video →</span>
             </button>
-            <button
-              onClick={openAnalyzeVideo}
-              className="group text-left rounded-xl border border-zinc-800 bg-zinc-900 hover:border-zinc-700 p-5 transition-colors"
-            >
-              <div className="flex items-center gap-3">
-                <span className="p-2 rounded-lg bg-sky-600/20 text-sky-300">
-                  <FileVideo className="h-5 w-5" />
-                </span>
-                <span className="text-base font-semibold text-white">Analyse video</span>
+            <div className="group rounded-xl border border-zinc-800 bg-zinc-900 hover:border-teal-500 p-5 transition-colors flex flex-col">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="p-2 rounded-lg bg-teal-600/20 text-teal-300"><ImageIcon className="h-5 w-5" /></span>
+                <span className="text-base font-semibold text-white">Reproduce</span>
               </div>
               <p className="text-sm text-zinc-400 leading-relaxed">
-                Import a clip and TFG finds its shots, reads their framing and camera language, and builds an editable
-                storyboard you can change and regenerate. Finding the shots needs nothing but this computer.
+                Give it an image or a video. The local vision stack reads it, builds an editable ShotSpec, renders candidates, scores them against the original and keeps going until they match.
               </p>
-              <span className="inline-block mt-3 text-xs text-sky-300 group-hover:text-sky-200">Analyse a video →</span>
-            </button>
+              <div className="mt-3 flex gap-3">
+                <button onClick={() => setCurrentView('analyze-image')} className="text-xs text-teal-300 hover:text-teal-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-teal-400 rounded">Reproduce image →</button>
+                <button onClick={openAnalyzeVideo} className="text-xs text-teal-300 hover:text-teal-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-teal-400 rounded">Reproduce video →</button>
+              </div>
+            </div>
             <button
-              onClick={() => startCreate('storyboard')}
-              className="group text-left rounded-xl border border-zinc-800 bg-zinc-900 hover:border-blue-500 p-5 transition-colors"
+              onClick={openTrain}
+              className="group text-left rounded-xl border border-zinc-800 bg-zinc-900 hover:border-fuchsia-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-fuchsia-400 p-5 transition-colors"
             >
               <div className="flex items-center gap-2 mb-2">
-                <span className="p-2 rounded-lg bg-blue-600/20 text-blue-300">
-                  <Clapperboard className="h-5 w-5" />
-                </span>
-                <span className="text-base font-semibold text-white">Filmmaker Studio</span>
+                <span className="p-2 rounded-lg bg-fuchsia-600/20 text-fuchsia-300"><Layers className="h-5 w-5" /></span>
+                <span className="text-base font-semibold text-white">Train</span>
               </div>
               <p className="text-sm text-zinc-400 leading-relaxed">
-                Script, characters and locations, a storyboard with a 3D shot composer, continuity checks, an AI Director,
-                a production queue, and a timeline for the final cut.
+                Teach the image model a character, style or object: a folder, a video or your own History becomes a captioned dataset and a LoRA that fits a 12 GB card.
               </p>
-              <span className="inline-block mt-3 text-xs text-blue-300 group-hover:text-blue-200">Create a film project →</span>
+              <span className="inline-block mt-3 text-xs text-fuchsia-300 group-hover:text-fuchsia-200">Train a LoRA →</span>
             </button>
-            <button onClick={() => setCurrentView('analyze-image')}
-              className="group text-left rounded-xl border border-zinc-800 bg-zinc-900 hover:border-teal-500 p-5 transition-colors">
-              <div className="flex items-center gap-2 mb-2"><span className="p-2 rounded-lg bg-teal-600/20 text-teal-300"><ImageIcon className="h-5 w-5" /></span><span className="text-base font-semibold text-white">Recreate from image</span></div>
-              <p className="text-sm text-zinc-400 leading-relaxed">Analyze a reference, generate candidates, compare them side by side and refine the prompt using visible differences.</p>
-              <span className="inline-block mt-3 text-xs text-teal-300 group-hover:text-teal-200">Choose an image →</span>
+            <button
+              onClick={openHistory}
+              className="group text-left rounded-xl border border-zinc-800 bg-zinc-900 hover:border-amber-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-400 p-5 transition-colors"
+            >
+              <div className="flex items-center gap-2 mb-2">
+                <span className="p-2 rounded-lg bg-amber-600/20 text-amber-300"><History className="h-5 w-5" /></span>
+                <span className="text-base font-semibold text-white">History</span>
+              </div>
+              <p className="text-sm text-zinc-400 leading-relaxed">
+                Every image, video, analysis, download and training run, live as it happens, with its prompt, seed, settings and lineage. Re-run, cancel or pick up where you left off.
+              </p>
+              <span className="inline-block mt-3 text-xs text-amber-300 group-hover:text-amber-200">Open History →</span>
             </button>
           </div>
-        </div>
+          <button
+            onClick={() => startCreate('storyboard')}
+            className="group mt-4 w-full text-left rounded-xl border border-zinc-800 bg-zinc-900/60 hover:border-blue-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-400 p-4 transition-colors flex items-center gap-4"
+            aria-label="Film Studio (advanced): create a film project"
+          >
+            <span className="p-2 rounded-lg bg-blue-600/20 text-blue-300"><Clapperboard className="h-5 w-5" /></span>
+            <span className="flex-1">
+              <span className="text-sm font-semibold text-white">Film Studio <span className="ml-1 text-[10px] font-normal uppercase tracking-wide text-zinc-500">advanced</span></span>
+              <span className="block text-xs text-zinc-400 mt-0.5">Script, characters and locations, a storyboard with a 3D shot composer, continuity checks, an AI Director, a production queue and a timeline for the final cut.</span>
+            </span>
+            <span className="text-xs text-blue-300 group-hover:text-blue-200 whitespace-nowrap">New film →</span>
+          </button>
+        </section>
 
         {/* Projects Grid */}
         <div className="p-8">

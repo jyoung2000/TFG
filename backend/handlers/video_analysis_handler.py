@@ -22,7 +22,7 @@ import logging
 import uuid
 from pathlib import Path
 from threading import RLock
-from typing import Literal, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 
 from _routes._errors import HTTPError
 from film.film_models import (
@@ -49,7 +49,9 @@ from film.shot_detection import (
     split_shot,
 )
 from film.video_analysis_api_types import PromptEditRequest, VideoRecreationRequest, VideoRecreationResponse
+from film.shot_spec_fusion import apply_flow, apply_vlm, spec_from_vision
 from film.video_analysis_models import (
+    MotionAnalysis,
     AnalysisDepth,
     AnalysisStage,
     AnalyzedShot,
@@ -70,10 +72,16 @@ from film.prompt_brief import brief_from_analysis
 from film.prompt_compiler import compile_for
 from film.video_analysis_store import VideoAnalysisStore, VideoAnalysisStoreError
 from handlers.base import StateHandlerBase
+from handlers.jobs_handler import JobsHandler
+from handlers.vision_handler import VisionHandler
 from server_utils.path_policy import PathPolicyError, require_absolute_file
 from services.media_probe.media_probe import MediaProbe
 from services.interfaces import TaskRunner
+from services.motion.motion_analyzer import MotionAnalyzer, MotionSummary, describe_motion
 from state.app_state_types import AppState
+
+if TYPE_CHECKING:
+    from handlers.video_reproduce_handler import VideoReproduceHandler
 
 logger = logging.getLogger(__name__)
 
@@ -100,8 +108,17 @@ class VideoAnalysisHandler(StateHandlerBase):
         probe: MediaProbe,
         task_runner: TaskRunner,
         film_store: FilmStore,
+        jobs: JobsHandler | None = None,
+        vision: VisionHandler | None = None,
+        motion: MotionAnalyzer | None = None,
     ) -> None:
         super().__init__(state, lock)
+        self._jobs = jobs
+        self._vision = vision
+        self._motion = motion
+        self._reproduce: VideoReproduceHandler | None = None
+        self._analysis_jobs: dict[str, str] = {}
+        self._grounding: dict[str, str] = {}
         self._store = VideoAnalysisStore(root)
         self._probe = probe
         self._tasks = task_runner
@@ -120,6 +137,13 @@ class VideoAnalysisHandler(StateHandlerBase):
             return self._store.load(analysis_id)
         except VideoAnalysisStoreError as exc:
             raise HTTPError(404, str(exc)) from exc
+
+    def load(self, analysis_id: str) -> VideoAnalysis:
+        """An analysis by id, 404 when unknown (used by Video Reproduce)."""
+        return self._load(analysis_id)
+
+    def attach_reproduce(self, reproduce: VideoReproduceHandler) -> None:
+        self._reproduce = reproduce
 
     def _save(self, analysis: VideoAnalysis) -> VideoAnalysis:
         analysis.updated_at = now_ms()
@@ -213,6 +237,32 @@ class VideoAnalysisHandler(StateHandlerBase):
 
     # ---- stage 2: detect shots ------------------------------------------
 
+    def _open_job(self, analysis: VideoAnalysis, phase: str) -> None:
+        if self._jobs is None:
+            return
+        job = self._jobs.start(
+            "analysis",
+            title=f"{phase.capitalize()}: {analysis.title}",
+            model=analysis.model,
+            inputs={"analysis_id": analysis.id, "video_path": analysis.source.path},
+            params={"depth": analysis.depth, "sensitivity": analysis.sensitivity, "phase": phase},
+        )
+        self._analysis_jobs[analysis.id] = job.id
+
+    def _close_job(self, analysis: VideoAnalysis) -> None:
+        job_id = self._analysis_jobs.pop(analysis.id, "")
+        if not job_id or self._jobs is None:
+            return
+        if analysis.stage == "cancelled":
+            self._jobs.mark_cancelled(job_id)
+        elif analysis.stage == "failed":
+            self._jobs.fail(job_id, analysis.error or analysis.message)
+        else:
+            root = self._store.directory(analysis.id)
+            frames = [str(root / shot.frames[0].path) for shot in analysis.shots if shot.frames]
+            self._jobs.annotate(job_id, model=analysis.model, inputs={"shots": len(analysis.shots)})
+            self._jobs.complete(job_id, frames[:12])
+
     def detect(self, analysis_id: str) -> VideoAnalysis:
         """Find shot boundaries and extract a still for each. Deterministic."""
         analysis = self._load(analysis_id)
@@ -222,6 +272,14 @@ class VideoAnalysisHandler(StateHandlerBase):
         analysis.error = ""
         analysis.message = "Reading the video"
         self._save(analysis)
+        self._open_job(analysis, "detect")
+        try:
+            return self._detect(analysis)
+        finally:
+            self._close_job(analysis)
+
+    def _detect(self, analysis: VideoAnalysis) -> VideoAnalysis:
+        analysis_id = analysis.id
 
         try:
             signatures = self._probe.sample_signatures(
@@ -324,7 +382,14 @@ class VideoAnalysisHandler(StateHandlerBase):
         analysis.progress = 0.0
         analysis.error = ""
         self._save(analysis)
+        self._open_job(analysis, "analyze")
+        try:
+            return self._analyze(analysis, provider)
+        finally:
+            self._close_job(analysis)
 
+    def _analyze(self, analysis: VideoAnalysis, provider: LLMProvider | None) -> VideoAnalysis:
+        analysis_id = analysis.id
         total = len(analysis.shots)
         used_model = ""
         for position, shot in enumerate(analysis.shots):
@@ -390,80 +455,237 @@ class VideoAnalysisHandler(StateHandlerBase):
         shot.text = TextAnalysis(analyzed=False)
         shot.analysis_provider = shot.analysis_provider or "deterministic"
         shot.provenance = "measured"
+        vision_result = self._ground_with_vision(analysis, shot)
+        self._build_spec(analysis, shot, vision_result)
+        self._measure_motion(analysis, shot)
+
+    def _build_spec(self, analysis: VideoAnalysis, shot: AnalyzedShot, vision_result: Any) -> None:
+        """The shot's ShotSpec from what was measured; locked/user sections survive."""
+        base = shot.spec if shot.spec.provenance else None
+        if vision_result is not None:
+            try:
+                shot.spec = spec_from_vision(vision_result, kind="video_shot", base=base)
+            except Exception as exc:  # noqa: BLE001 - a spec is a bonus, never a blocker
+                logger.info("Spec fusion failed for %s: %s", shot.id, exc)
+        shot.spec.source.kind = "video_shot"
+        shot.spec.source.path = shot.spec.source.path or analysis.source.path
+        shot.spec.source.start = shot.start
+        shot.spec.source.end = shot.end
+        shot.spec.source.fps = analysis.source.fps or None
+        if not shot.spec.source.aspect:
+            shot.spec.source.aspect = analysis.source.aspect_ratio
+        if not shot.spec.narrative.what_happens and shot.visual.description and not shot.spec.is_locked("narrative"):
+            shot.spec.narrative.what_happens = shot.visual.description
+
+    def _measure_motion(self, analysis: VideoAnalysis, shot: AnalyzedShot) -> None:
+        """Optical flow over the shot's span: camera move words with *measured*
+        provenance, `shot.motion`, and `spec.motion` / `spec.camera.move`."""
+        if self._motion is None or not analysis.source.path:
+            return
+        try:
+            summary: MotionSummary = self._motion.analyze(analysis.source.path, start=shot.start, end=shot.end)
+        except Exception as exc:  # noqa: BLE001 - the deterministic pass must never fail on flow
+            shot.evidence_note = (shot.evidence_note + " " if shot.evidence_note else "") + f"Motion analysis unavailable: {exc}"
+            return
+        if not summary.analyzed:
+            return
+        shot.motion = MotionAnalysis(**summary.model_dump())
+        movement, types, is_static = describe_motion(summary)
+        shot.cinematography.camera_movement = movement
+        shot.cinematography.movement_types = types
+        shot.cinematography.is_static = is_static
+        shot.cinematography.confidence = max(shot.cinematography.confidence, summary.confidence)
+        try:
+            apply_flow(
+                shot.spec,
+                pan=summary.pan, tilt=summary.tilt, zoom=summary.zoom, roll=summary.roll,
+                magnitude=summary.magnitude, subject_motion=summary.subject_motion,
+                handheld=summary.handheld, pacing=summary.pacing, fps=analysis.source.fps or None,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.info("apply_flow failed for %s: %s", shot.id, exc)
+        grounded = self._grounding.get(shot.id, "")
+        line = f"Measured camera motion (optical flow): {movement}; magnitude {summary.magnitude:.4f}, subject motion {summary.subject_motion:.4f}, pacing {summary.pacing}."
+        self._grounding[shot.id] = f"{grounded}\n{line}" if grounded else line
+
+    def _ground_with_vision(self, analysis: VideoAnalysis, shot: AnalyzedShot) -> Any:
+        """Florence-2 + CLIP + stats on the shot's representative still: fills
+        subjects, a caption and a palette with *measured* provenance, and
+        keeps the text as grounded context for the model pass."""
+        self._grounding.pop(shot.id, "")
+        if self._vision is None or not shot.frames:
+            return None
+        frame = self._store.directory(analysis.id) / shot.frames[len(shot.frames) // 2].path
+        if not frame.is_file():
+            return None
+        try:
+            result = self._vision.analyze(str(frame), want_depth=False)
+        except Exception as exc:  # noqa: BLE001 - the deterministic pass must never fail on vision
+            shot.evidence_note = f"Local vision unavailable: {exc}"
+            return None
+        counts: dict[str, int] = {}
+        for region in result.regions:
+            counts[region.label] = counts.get(region.label, 0) + 1
+        subjects = [f"{n} {label}" if n > 1 else label for label, n in counts.items()]
+        if subjects and not shot.visual.subjects:
+            shot.visual.subjects = subjects
+        if result.caption and not shot.visual.description:
+            shot.visual.description = result.caption.text
+        if result.measured.palette and not shot.visual.palette:
+            shot.visual.palette = [entry.hex for entry in result.measured.palette[:4]]
+        if result.tags and not shot.visual.visual_style:
+            shot.visual.visual_style = ", ".join(t.term for t in result.tags.tags[:5])
+        if subjects or result.caption:
+            shot.visual.confidence = max(shot.visual.confidence, 0.5)
+        lines: list[str] = []
+        if result.caption:
+            lines.append(f"Detected caption: {result.caption.text}")
+        if subjects:
+            lines.append("Detected subjects (object detection): " + ", ".join(subjects) + ".")
+        if result.measured.palette:
+            lines.append("Measured palette: " + ", ".join(e.hex for e in result.measured.palette[:4]) + f"; luminance {result.measured.luminance:.2f}, contrast {result.measured.contrast:.2f}.")
+        if result.tags:
+            lines.append("Style tags (CLIP): " + ", ".join(t.term for t in result.tags.tags[:8]) + ".")
+        self._grounding[shot.id] = "\n".join(lines)
+        return result
 
     def _describe_with_model(self, analysis: VideoAnalysis, shot: AnalyzedShot, provider: LLMProvider) -> str:
-        """Ask a multimodal model to read the shot's stills."""
+        """Ask a multimodal model to read the shot's stills, one section per call.
+
+        Small local VLMs drop fields and break JSON when asked for forty keys
+        at once; four focused calls with a repair round each keep what they
+        can answer and lose only the section that failed.
+        """
         images = self._frame_data_urls(analysis, shot)
         if not images:
             return ""
-
-        instruction = (
-                    "You are a cinematographer describing ONE shot from a film. "
-                    "Reply with JSON only, matching this shape:\n"
-                    '{"visual":{"description":"","subjects":[],"objects":[],"location":"","environment":"",'
-                    '"foreground":"","midground":"","background":"","composition":"","framing":"","shot_size":"",'
-                    '"angle":"","camera_height":"","perspective":"","lens_estimate":"","depth_of_field":"","focus":"",'
-                    '"lighting":"","palette":[],"contrast":"","visual_style":"","production_design":"","wardrobe":"",'
-                    '"props":[],"confidence":0.0},'
-                    '"cinematography":{"camera_position":"","camera_movement":"","movement_types":[],"is_static":true,'
-                    '"screen_direction":"","eyeline":"","ots_relationship":"","blocking":"","composition_rules":[],'
-                    '"confidence":0.0},'
-                    '"narrative":{"what_happens":"","who_acts":[],"narrative_purpose":"","emotional_purpose":"",'
-                    '"story_beat":"","setup_or_payoff":"","continuity_implications":[],"confidence":0.0},'
-                    '"visual_description":"",'
-                    '"prompt_lens":{"core_prompt":"","deep_description":"","subject":"","environment":"","camera":"",'
-                    '"lighting":"","style":"","mood":"","confidence":0.0}}\n'
-                    "shot_size must be one of: xwide, wide, full, medium, mcu, closeup, xcu. "
-                    "Every confidence is 0..1 and must reflect how much the frames actually show — "
-                    "use a low number when you are guessing. Describe only what is visible; do not invent a story.\n"
-                    "In prompt_lens: core_prompt is ONE concise sentence, directly usable as an AI video generation "
-                    "prompt that would reproduce this exact shot. deep_description is a vivid 150-200 word paragraph "
-                    "of the whole frame. subject covers who/what is in frame, appearance, action, clothing. "
-                    "environment covers scene type, location, time of day, weather, background, depth layers. "
-                    "camera covers angle, shot scale, movement, focus, composition. lighting covers source, direction, "
-                    "color temperature, mood of light. style covers visual style, palette, texture, post-processing. "
-                    "mood covers emotional tone, narrative implication, rhythm. "
-                    "Do not invent details that are not in the frame — for anything unseen, leave the field empty."
-                )
         context = (
             f"Shot {shot.index + 1} of {len(analysis.shots)}. "
             f"Runs {shot.start:.2f}s to {shot.end:.2f}s ({shot.duration:.2f}s) "
             f"of a {analysis.source.duration_seconds:.0f}s video at {analysis.source.aspect_ratio or 'unknown ratio'}."
         )
-        reply = provider.chat(
-            [
-                LLMMessage(role="system", content=instruction),
-                LLMMessage(role="user", content=context, images=images),
-            ],
-            json_mode=True,
-            timeout=120,
-        )
-        parsed = _json_object(reply.text)
-        if parsed is None:
-            shot.evidence_note = "The model did not return usable JSON for this shot."
-            return provider.model
+        grounded = self._grounding.get(shot.id, "")
+        if grounded:
+            context = f"{context}\n\nGround truth from a local measurement pass (do not contradict):\n{grounded}"
 
-        visual = _as_dict(parsed.get("visual"))
-        cinematography = _as_dict(parsed.get("cinematography"))
-        narrative = _as_dict(parsed.get("narrative"))
-        lens = _as_dict(parsed.get("prompt_lens"))
-        if visual:
-            shot.visual = VisualAnalysis.model_validate(_clean(visual, VisualAnalysis))
-        if cinematography:
-            shot.cinematography = CinematographyAnalysis.model_validate(_clean(cinematography, CinematographyAnalysis))
-        if narrative:
-            merged = _clean(narrative, NarrativeAnalysis)
-            # Keep the measured pacing; the model does not time the shot.
-            merged.setdefault("pacing", shot.narrative.pacing)
-            shot.narrative = NarrativeAnalysis.model_validate(merged)
-        if lens:
-            shot.prompt_lens = PromptLensAnalysis.model_validate(_clean(lens, PromptLensAnalysis))
+        answered: list[str] = []
+        failed: list[str] = []
+        raw_notes: list[str] = []
+        for section, model_type, shape, guidance in _VLM_SECTIONS:
+            parsed, raw = self._ask_section(provider, section, shape, guidance, context, images)
+            if raw:
+                raw_notes.append(f"[{section}] {raw[:600]}")
+            if parsed is None:
+                failed.append(section)
+                continue
+            payload = _clean(parsed, model_type)
+            if not payload:
+                failed.append(section)
+                continue
+            self._apply_section(shot, section, payload)
+            answered.append(section)
 
-        shot.analysis_provider = provider.name
-        shot.analysis_model = provider.model
-        shot.provenance = "inferred"
-        shot.evidence_note = reply.text[:2000]
+        if answered:
+            shot.analysis_provider = provider.name
+            shot.analysis_model = provider.model
+            shot.provenance = "inferred"
+            self._apply_vlm_to_spec(shot)
+        note = "\n".join(raw_notes)[:2000]
+        if failed:
+            note = f"Sections without a usable answer: {', '.join(failed)}.\n{note}"
+        shot.evidence_note = note or "The model did not return usable JSON for this shot."
         return provider.model
+
+    def _ask_section(
+        self,
+        provider: LLMProvider,
+        section: str,
+        shape: str,
+        guidance: str,
+        context: str,
+        images: list[str],
+    ) -> tuple[dict[str, object] | None, str]:
+        instruction = (
+            "You are a cinematographer describing ONE shot from a film. "
+            f"Reply with JSON only, exactly this shape:\n{shape}\n{guidance} "
+            "Every confidence is 0..1 and must reflect how much the frames actually show. "
+            "Describe only what is visible; leave a field empty rather than invent."
+        )
+        messages = [
+            LLMMessage(role="system", content=instruction),
+            LLMMessage(role="user", content=context, images=images),
+        ]
+        reply = provider.chat(messages, json_mode=True, timeout=120)
+        parsed = _json_object(reply.text)
+        if parsed is not None and _has_expected_keys(parsed, shape):
+            return parsed, reply.text
+        # One repair round: show the model what it sent and the shape it owed.
+        repair = LLMMessage(
+            role="user",
+            content=(
+                "Your previous reply was not valid JSON of the required shape. "
+                f"Send only the JSON object, no prose, matching exactly:\n{shape}\n\nPrevious reply:\n{reply.text[:1500]}"
+            ),
+        )
+        try:
+            fixed = provider.chat([*messages, LLMMessage(role="assistant", content=reply.text[:1500]), repair], json_mode=True, timeout=120)
+        except HTTPError as exc:
+            logger.info("Repair call for %s failed: %s", section, exc.detail)
+            return None, reply.text
+        parsed = _json_object(fixed.text)
+        if parsed is not None and _has_expected_keys(parsed, shape):
+            return parsed, fixed.text
+        return None, fixed.text or reply.text
+
+    @staticmethod
+    def _apply_section(shot: AnalyzedShot, section: str, payload: dict[str, object]) -> None:
+        if section == "visual":
+            merged = shot.visual.model_dump()
+            merged.update(payload)
+            shot.visual = VisualAnalysis.model_validate(merged)
+        elif section == "cinematography":
+            merged = shot.cinematography.model_dump()
+            measured_move = shot.motion.analyzed
+            for key, value in payload.items():
+                # Optical flow measured the move; the model may only add what flow cannot see.
+                if measured_move and key in ("camera_movement", "movement_types", "is_static"):
+                    continue
+                merged[key] = value
+            shot.cinematography = CinematographyAnalysis.model_validate(merged)
+        elif section == "narrative":
+            merged = shot.narrative.model_dump()
+            merged.update(payload)
+            merged["pacing"] = shot.narrative.pacing  # timed, not guessed
+            shot.narrative = NarrativeAnalysis.model_validate(merged)
+        elif section == "prompt_lens":
+            shot.prompt_lens = PromptLensAnalysis.model_validate(_clean(payload, PromptLensAnalysis))
+
+    @staticmethod
+    def _apply_vlm_to_spec(shot: AnalyzedShot) -> None:
+        visual, narrative = shot.visual, shot.narrative
+        fields: dict[str, Any] = {
+            "location": visual.location,
+            "environment": visual.environment,
+            "time_of_day": "",
+            "fg": visual.foreground,
+            "mg": visual.midground,
+            "bg": visual.background,
+            "shot_size": visual.shot_size,
+            "angle": visual.angle,
+            "height": visual.camera_height,
+            "lens_estimate": visual.lens_estimate,
+            "dof": visual.depth_of_field,
+            "focus": visual.focus,
+            "lighting": visual.lighting,
+            "what_happens": narrative.what_happens,
+            "purpose": narrative.narrative_purpose,
+            "beat": narrative.story_beat,
+            "style": visual.visual_style,
+        }
+        try:
+            apply_vlm(shot.spec, fields, confidence=max(visual.confidence, 0.3))
+        except Exception as exc:  # noqa: BLE001
+            logger.info("apply_vlm failed for %s: %s", shot.id, exc)
 
     def _frame_data_urls(self, analysis: VideoAnalysis, shot: AnalyzedShot) -> list[str]:
         directory = self._store.directory(analysis.id)
@@ -497,6 +719,10 @@ class VideoAnalysisHandler(StateHandlerBase):
 
     # ---- stage 4: reverse prompts ----------------------------------------
 
+    def compose_prompts(self, analysis: VideoAnalysis, shot: AnalyzedShot) -> ReversePrompts:
+        """Recompose a shot's prompts from its current analysis (used after spec edits)."""
+        return self._compose_prompts(analysis, shot)
+
     def _compose_prompts(self, analysis: VideoAnalysis, shot: AnalyzedShot) -> ReversePrompts:
         """Turn the analysis into prompts. Never overwrites a human's edit."""
         if shot.prompts.edited:
@@ -508,6 +734,8 @@ class VideoAnalysisHandler(StateHandlerBase):
         palette = ", ".join(visual.palette[:3])
         look = ", ".join(part for part in (visual.lighting, palette, visual.visual_style) if part)
         motion = camera.camera_movement or ("static camera" if camera.is_static else "")
+        if shot.motion.analyzed and shot.motion.pacing and shot.motion.pacing != "still":
+            motion = ", ".join(part for part in (motion, f"{shot.motion.pacing} pacing") if part)
 
         framing = " ".join(part for part in (visual.shot_size, visual.angle) if part)
         storyboard = ", ".join(part for part in (framing, subject, environment) if part) or shot.visual.description
@@ -675,42 +903,12 @@ class VideoAnalysisHandler(StateHandlerBase):
     # ---- stage 6: video recreation ---------------------------------------
     
     def recreate_video(self, analysis_id: str, req: VideoRecreationRequest) -> VideoRecreationResponse:
-        """Recreate video from analyzed shots to verify prompts produce similar results.
-        
-        Combines shot prompts from analysis into generation requests and returns
-        generated video candidates for comparison with the original.
-        """
-        analysis = self._load(analysis_id)
-        if not analysis.shots:
-            raise HTTPError(400, "No shots available. Detect and analyze shots first.")
-        
-        # Determine which shots to recreate
-        shots_to_recreate = analysis.shots
-        if req.shot_ids:
-            shots_to_recreate = [s for s in analysis.shots if s.id in req.shot_ids]
-            if not shots_to_recreate:
-                raise HTTPError(400, "No matching shots found for the provided shot IDs")
-        
-        # Build combined prompt from all shots
-        combined_prompt = self._build_combined_recreation_prompt(analysis, shots_to_recreate)
-        if not combined_prompt.strip():
-            raise HTTPError(400, "No valid prompts available for recreation. Analyze shots first.")
-        
-        # For now, return a structured response that the route handler will populate
-        return VideoRecreationResponse(
-            status="ready_to_generate",
-            video_paths=None,
-            shots_generated=len(shots_to_recreate),
-            analysis_id=analysis_id
-        )
-    
-    def _build_combined_recreation_prompt(self, analysis: VideoAnalysis, shots: list[AnalyzedShot]) -> str:
-        """Build a combined generation prompt from multiple shots."""
-        parts: list[str] = []
-        for shot in shots:
-            if shot.prompts.video and shot.prompts.video.strip():
-                parts.append(f"Shot {shot.index + 1}: {shot.prompts.video.strip()}")
-        return "\n\n".join(parts)
+        """Reproduce the analysed shots: one film-queue job per shot, scored,
+        stitched. The work lives in `VideoReproduceHandler`; this stays the
+        entry point the route and History call."""
+        if self._reproduce is None:
+            raise HTTPError(503, "Video reproduce is not wired in this build")
+        return self._reproduce.start(analysis_id, req)
 
     def _film_shot_from(
         self, analysis: VideoAnalysis, analysed: AnalyzedShot, order: int, asset_by_name: dict[str, str]
@@ -782,6 +980,9 @@ class VideoAnalysisHandler(StateHandlerBase):
         analysis.progress = round(max(0.0, min(1.0, progress)), 3)
         analysis.message = message
         self._save(analysis)
+        job_id = self._analysis_jobs.get(analysis.id, "")
+        if job_id and self._jobs is not None:
+            self._jobs.progress(job_id, analysis.progress * 100, message)
 
     def recover_interrupted(self) -> int:
         """Turn jobs left running by a dead process into failures, at startup."""
@@ -827,6 +1028,54 @@ def _frame_times(start: float, end: float, wanted: int) -> list[tuple[FrameRole,
     return ordered[:wanted]
 
 
+#: (section, model, JSON shape, extra guidance) — one focused call each.
+_VLM_SECTIONS: tuple[tuple[str, type[object], str, str], ...] = (
+    (
+        "visual",
+        VisualAnalysis,
+        '{"description":"","subjects":[],"objects":[],"location":"","environment":"","foreground":"","midground":"",'
+        '"background":"","composition":"","framing":"","shot_size":"","angle":"","camera_height":"","perspective":"",'
+        '"lens_estimate":"","depth_of_field":"","focus":"","lighting":"","palette":[],"contrast":"","visual_style":"",'
+        '"production_design":"","wardrobe":"","props":[],"confidence":0.0}',
+        "shot_size must be one of: xwide, wide, full, medium, mcu, closeup, xcu.",
+    ),
+    (
+        "cinematography",
+        CinematographyAnalysis,
+        '{"camera_position":"","camera_movement":"","movement_types":[],"is_static":true,"screen_direction":"",'
+        '"eyeline":"","ots_relationship":"","blocking":"","composition_rules":[],"confidence":0.0}',
+        "If the ground truth names a measured camera motion, repeat it rather than guessing from stills.",
+    ),
+    (
+        "narrative",
+        NarrativeAnalysis,
+        '{"what_happens":"","who_acts":[],"narrative_purpose":"","emotional_purpose":"","story_beat":"",'
+        '"setup_or_payoff":"","continuity_implications":[],"confidence":0.0}',
+        "Do not invent a story; describe the action the frames show.",
+    ),
+    (
+        "prompt_lens",
+        PromptLensAnalysis,
+        '{"core_prompt":"","deep_description":"","subject":"","environment":"","camera":"","lighting":"","style":"",'
+        '"mood":"","confidence":0.0}',
+        "core_prompt is ONE concise sentence usable as an AI video prompt that reproduces this exact shot; "
+        "deep_description is a vivid 150-200 word paragraph of the whole frame.",
+    ),
+)
+
+
+def _has_expected_keys(parsed: dict[str, object], shape: str) -> bool:
+    """At least one of the shape's keys came back — the model answered this
+    section rather than something else (an error object, another section)."""
+    try:
+        expected = set(cast(dict[str, object], json.loads(shape)).keys())
+    except json.JSONDecodeError:
+        return True
+    if not expected:
+        return True
+    return bool(expected & set(parsed.keys()))
+
+
 def _json_object(raw: str) -> dict[str, object] | None:
     """Parse a model reply that should be a JSON object, tolerating fencing."""
     text = raw.strip()
@@ -841,10 +1090,6 @@ def _json_object(raw: str) -> dict[str, object] | None:
     except json.JSONDecodeError:
         return None
     return cast(dict[str, object], parsed) if isinstance(parsed, dict) else None
-
-
-def _as_dict(value: object) -> dict[str, object]:
-    return cast(dict[str, object], value) if isinstance(value, dict) else {}
 
 
 def _clean(payload: dict[str, object], model: type[object]) -> dict[str, object]:
