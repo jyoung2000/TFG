@@ -134,6 +134,17 @@ export default defineConfig({
         },
       }
     : {
-        outDir: 'dist'
+        outDir: 'dist',
+        // Vendor code in its own chunks so the main (app shell) chunk stays small
+        // and cacheable; views are lazy (see App.tsx) and three.js rides with the composer.
+        rollupOptions: {
+          output: {
+            manualChunks(id: string) {
+              if (id.includes('node_modules/react') || id.includes('node_modules/scheduler')) return 'react-vendor'
+              if (id.includes('node_modules/lucide-react')) return 'icons'
+              return undefined
+            },
+          },
+        },
       }
 })

@@ -71,6 +71,39 @@ export function registerSettingsRoutes(router: Router, store: Store): void {
     }),
   )
 
+  const PRESET = {
+    id: 'rtx-4070-12gb',
+    name: 'RTX 4070 · 12 GB',
+    description: 'Everything local and sized for 12 GB of VRAM: distilled LTX-2 for video, Z-Image for stills, the small vision stack, no VLM by default.',
+    changes: [
+      'Video: LTX-2 22B distilled — Fast profile (540p · 6 s), Balanced available (720p · 6–8 s)',
+      'Image: Z-Image at 8 steps',
+      'Vision: Florence-2-large captions, CLIP ViT-L/14 tags, Depth-Anything-V2-small, DINOv2-small',
+      'VLM off by default; keep_alive 0 so it never holds VRAM',
+      'Local text encoder on, media provider local, VRAM budget 12 GB',
+    ],
+    video_profiles: [
+      { id: 'fast', label: 'Fast', model: 'ltx2_22B_distilled', resolution: '540p', duration_seconds: 6, note: '540p · 6 s · 8 steps' },
+      { id: 'balanced', label: 'Balanced', model: 'ltx2_22B_distilled', resolution: '720p', duration_seconds: 8, note: '720p · 6–8 s' },
+    ],
+  }
+  router.get('/api/settings/presets', () => ({
+    presets: [{ ...PRESET, recommended: true, applied: store.data.settings.hardwarePreset === PRESET.id }],
+    gpu_name: 'NVIDIA GeForce RTX 4070',
+    gpu_vram_gb: 12,
+    applied: store.data.settings.hardwarePreset,
+  }))
+  router.post('/api/settings/presets/:id/apply', req =>
+    store.mutate(state => {
+      if (req.params.id !== PRESET.id) throw new MockHttpError(404, `Unknown hardware preset: ${req.params.id}`)
+      applySettingsPatch(state, {
+        hardwarePreset: PRESET.id, gpuVramBudgetGb: 12, defaultVideoModel: 'ltx2_22B_distilled', defaultImageModel: 'z_image', videoProfile: 'fast', imageSteps: 8, useLocalTextEncoder: true, mediaProvider: 'local',
+        vision: { ...state.settings.vision, florenceModel: 'florence-2-large', clipModel: 'openai/clip-vit-large-patch14', depthModel: 'depth-anything-v2-small', dinoModel: 'dinov2-small', vlmProvider: 'off', vlmKeepAlive: '0' },
+      })
+      return state.settings
+    }),
+  )
+
   router.delete('/api/settings/api-keys/:provider', req =>
     store.mutate(state => {
       const provider = req.params.provider as ClearableKeyProvider

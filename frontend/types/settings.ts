@@ -135,6 +135,12 @@ export interface AppSettings {
   vision: VisionSettings
   seedLocked: boolean
   lockedSeed: number
+  /** Hardware preset last applied ('' until one is). */
+  hardwarePreset: string
+  /** Quick video / Film default quality profile on the local video model. */
+  videoProfile: 'fast' | 'balanced'
+  /** Steps for the local image model. */
+  imageSteps: number
 }
 
 export const DEFAULT_OPENROUTER_ROLE_MODELS: OpenRouterRoleModels = {
@@ -180,4 +186,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   vision: DEFAULT_VISION_SETTINGS,
   seedLocked: false,
   lockedSeed: 42,
+  hardwarePreset: '',
+  videoProfile: 'fast',
+  imageSteps: 8,
 }

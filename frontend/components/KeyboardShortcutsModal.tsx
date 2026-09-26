@@ -111,6 +111,7 @@ const CATEGORY_COLORS: Record<string, { bg: string; border: string; text: string
   Editing:   { bg: 'bg-amber-600/30',   border: 'border-amber-500/60',   text: 'text-amber-300',   dot: 'bg-amber-400' },
   Marking:   { bg: 'bg-rose-600/30',    border: 'border-rose-500/60',    text: 'text-rose-300',    dot: 'bg-rose-400' },
   Timeline:  { bg: 'bg-blue-600/30',  border: 'border-blue-500/60',  text: 'text-blue-300',  dot: 'bg-blue-400' },
+  App:       { bg: 'bg-fuchsia-600/30', border: 'border-fuchsia-500/60', text: 'text-fuchsia-300', dot: 'bg-fuchsia-400' },
 }
 
 // Keys that are modifier indicators (not assignable targets)
@@ -304,7 +305,7 @@ export function KeyboardShortcutsModal() {
   if (!isEditorOpen) return null
 
   // Filter and group actions
-  const categories = ['Tools', 'Transport', 'Editing', 'Marking', 'Timeline'] as const
+  const categories = ['App', 'Tools', 'Transport', 'Editing', 'Marking', 'Timeline'] as const
   const filteredActions = ACTION_REGISTRY.filter(a => {
     if (selectedCategory && a.category !== selectedCategory) return false
     if (searchQuery) {

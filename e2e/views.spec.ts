@@ -31,6 +31,25 @@ test.describe('views', () => {
     await expectMediaIntact(page, guard, { minVideos: 1 })
   })
 
+  test('Front door: four verbs, Film Studio as advanced, keyboard navigation', async ({ page }) => {
+    const guard = await openHome(page)
+    const door = page.getByTestId('front-door')
+    for (const verb of ['Create', 'Reproduce', 'Train', 'History']) await expect(door.getByText(verb, { exact: true })).toBeVisible()
+    await expect(page.getByRole('button', { name: /Film Studio \(advanced\)/ })).toBeVisible()
+    await door.getByRole('button', { name: /Reproduce video/ }).click()
+    await expect(page.getByRole('heading', { name: 'Reproduce video' })).toBeVisible()
+    // Alt+4 goes to Train from anywhere; Alt+1 comes home.
+    await page.keyboard.press('Alt+4')
+    await expect(page.getByRole('heading', { name: 'Train', exact: true })).toBeVisible()
+    await page.keyboard.press('Alt+5')
+    await expect(page.getByRole('heading', { name: 'History' })).toBeVisible()
+    await page.keyboard.press('Alt+1')
+    await expect(page.getByText('What do you want to make?')).toBeVisible()
+    await settle(page)
+    await expectMediaIntact(page, guard)
+    expect(guard.errors).toEqual([])
+  })
+
   test('Quick video', async ({ page }) => {
     const guard = await openHome(page)
     await page.getByRole('button', { name: /Quick video/i }).first().click()
@@ -41,10 +60,10 @@ test.describe('views', () => {
     await backHome(page)
   })
 
-  test('Analyse video', async ({ page }) => {
+  test('Reproduce video', async ({ page }) => {
     const guard = await openHome(page)
-    await page.getByRole('button', { name: /Analyse video/i }).first().click()
-    await expect(page.getByRole('heading', { name: 'Analyse video' })).toBeVisible()
+    await page.getByRole('button', { name: /Reproduce video/i }).first().click()
+    await expect(page.getByRole('heading', { name: 'Reproduce video' })).toBeVisible()
     await expect(page.getByRole('button', { name: /Import a video/i })).toBeVisible()
     await settle(page)
     await expectMediaIntact(page, guard)

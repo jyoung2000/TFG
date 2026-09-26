@@ -28,4 +28,23 @@ test.describe('Settings', () => {
     await expect(panel.getByRole('status')).toContainText('Unloaded')
     await expectMediaIntact(page, guard)
   })
+
+  test('General tab offers the RTX 4070 preset and applies it', async ({ page, request, baseURL }) => {
+    const guard = attachConsoleGuard(page)
+    await page.goto('/')
+    await page.getByText('The Relay (demo)').first().click()
+    await page.getByTitle('Settings').click()
+    const card = page.getByTestId('hardware-preset')
+    await expect(card).toBeVisible()
+    await expect(card).toContainText('NVIDIA GeForce RTX 4070')
+    await expect(card).toContainText('Recommended for this GPU')
+    await card.getByRole('button', { name: 'Apply RTX 4070 · 12 GB' }).click()
+    await expect(card).toContainText('Applied')
+    await expect.poll(async () => ((await (await request.get(`${baseURL}/api/settings`)).json()) as { hardwarePreset: string; vision: { vlmProvider: string } }).hardwarePreset).toBe('rtx-4070-12gb')
+    const settings = (await (await request.get(`${baseURL}/api/settings`)).json()) as { defaultVideoModel: string; vision: { vlmProvider: string; vlmKeepAlive: string } }
+    expect(settings.defaultVideoModel).toBe('ltx2_22B_distilled')
+    expect(settings.vision.vlmProvider).toBe('off')
+    expect(settings.vision.vlmKeepAlive).toBe('0')
+    expect(guard.errors).toEqual([])
+  })
 })

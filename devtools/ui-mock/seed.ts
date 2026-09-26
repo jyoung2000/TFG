@@ -532,6 +532,9 @@ export function seedSettings(): AppSettings {
     promptEnhancerEnabledI2V: false,
     seedLocked: false,
     lockedSeed: 42,
+    hardwarePreset: '',
+    videoProfile: 'fast',
+    imageSteps: 8,
     vision: {
       enabled: true,
       mode: 'auto',

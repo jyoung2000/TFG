@@ -98,6 +98,9 @@ function normalizeAppSettings(data: Partial<AppSettings>): AppSettings {
     vision: { ...DEFAULT_APP_SETTINGS.vision, ...(data.vision ?? {}) },
     seedLocked: data.seedLocked ?? DEFAULT_APP_SETTINGS.seedLocked,
     lockedSeed: data.lockedSeed ?? DEFAULT_APP_SETTINGS.lockedSeed,
+    hardwarePreset: data.hardwarePreset ?? DEFAULT_APP_SETTINGS.hardwarePreset,
+    videoProfile: data.videoProfile === 'balanced' ? 'balanced' : 'fast',
+    imageSteps: data.imageSteps ?? DEFAULT_APP_SETTINGS.imageSteps,
   }
 }
 

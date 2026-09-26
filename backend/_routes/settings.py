@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 
 from fastapi import APIRouter, Depends
+from pydantic import BaseModel
 
 from _routes._errors import HTTPError
 from state.app_settings import SettingsResponse, UpdateSettingsRequest, to_settings_response
@@ -49,6 +50,35 @@ _KEY_FIELDS = {
     "wavespeed": "wavespeed_api_key",
     "replicate": "replicate_api_key",
 }
+
+
+class HardwarePresetsResponse(BaseModel):
+    presets: list[dict[str, object]]
+    gpu_name: str | None
+    gpu_vram_gb: float | None
+    applied: str
+
+
+@router.get("/settings/presets", response_model=HardwarePresetsResponse)
+def route_list_presets(handler: AppHandler = Depends(get_state_service)) -> HardwarePresetsResponse:
+    gpu_name = handler.gpu_info.get_device_name()
+    vram = handler.gpu_info.get_vram_total_gb()
+    return HardwarePresetsResponse(
+        presets=handler.settings.presets(gpu_name, float(vram) if vram is not None else None),
+        gpu_name=gpu_name,
+        gpu_vram_gb=float(vram) if vram is not None else None,
+        applied=handler.settings.get_settings_snapshot().hardware_preset,
+    )
+
+
+@router.post("/settings/presets/{preset_id}/apply", response_model=SettingsResponse)
+def route_apply_preset(preset_id: str, handler: AppHandler = Depends(get_state_service)) -> SettingsResponse:
+    try:
+        preset = handler.settings.apply_preset(preset_id)
+    except KeyError as exc:
+        raise HTTPError(404, f"Unknown hardware preset: {preset_id}") from exc
+    logger.info("Applied hardware preset %s", preset.id)
+    return to_settings_response(handler.settings.get_settings_snapshot())
 
 
 @router.delete("/settings/api-keys/{provider}", response_model=StatusResponse)

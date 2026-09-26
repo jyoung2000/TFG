@@ -221,7 +221,7 @@ export function AnalyzeVideo() {
           <ArrowLeft className="h-4 w-4" />
         </button>
         <FileVideo className="h-4 w-4 text-violet-400" />
-        <h1 className="text-sm font-semibold text-white">Analyse video</h1>
+        <h1 className="text-sm font-semibold text-white">Reproduce video</h1>
         {current && (
           <>
             <span className="text-xs text-zinc-500 truncate max-w-[24rem]">{current.source.file_name}</span>

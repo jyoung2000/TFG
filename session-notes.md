@@ -5,8 +5,8 @@
 4 Image Reproduce v2 · 5 Motion + Video Reproduce v2 · 6 3D storyboard · 7 LoRA Train · 8 front door/4070 preset ·
 9 containers/remote/tiering · 10 acceptance/docs/PR
 
-**Current phase:** 7 (committing)
-**Last passing gate:** Gate 7 (tsc 0 · pyright 0 · vitest 53/53 · pytest 793 · e2e 25/25 · Vite build OK)
+**Current phase:** 8 (committing)
+**Last passing gate:** Gate 8 (tsc 0 · pyright 0 · vitest 53/53 · pytest 793+5 · e2e 27/27 · main chunk 302 kB)
 
 ## Environment (this session)
 - Cloud Linux container (not the Windows 4070 box the prompt assumes). No GPU, no nvidia-smi.
@@ -63,8 +63,26 @@
   runnable on a 12 GB card; listed in the catalog only so the UI can say so.
 - VF-018: the `dataviz` skill the prompt names is not available in this session (only `docs` and `xlsx` exist);
   the loss sparkline is a plain inline SVG (`views/train/LossSparkline.tsx`).
+- VF-019 (phase 8): none of the skills the prompt names for this phase exist in this session (`frontend-design`,
+  `modern-web-guidance`, `design:ux-copy`, `design:accessibility-review`, `engineering:code-review`; ListSkills
+  returns nothing for them) — the front door, copy and accessibility pass were done by hand and reviewed the same way.
+- VF-020: the Wan2GP README (fetched 2026-09-26) names no Wan 2.2 5B TI2V model key and no VRAM figure for it, so a
+  second "Wan 2.2 5B" video profile is NOT offered by the 4070 preset; the Settings card says so. Verifying the
+  key needs the WanGP checkout on the 4070 (BLOCKED — ENVIRONMENT, docs/RTX_4070_TEST_MATRIX.md).
 
 ## Decisions
+- D-036 (phase 8): hardware presets live in `backend/state/hardware_presets.py` as settings patches applied through
+  the normal `update_settings` path (validation, persistence, listeners); `AppSettings.hardware_preset` records the
+  last one. The RTX 4070 preset is recommended by GPU-name markers or any 12 GB NVIDIA card, applied automatically
+  once at first run (`handleFirstRunComplete`) and re-appliable from Settings → General.
+- D-037: video quality is a `video_profile` setting (fast 540p·6 s / balanced 720p·8 s on `ltx2_22B_distilled`);
+  Quick video seeds its defaults from it and the Profile select writes it back.
+- D-038: Home is four verbs (Create · Reproduce · Train · History) + Film Studio marked *advanced*; "Analyse video"
+  is renamed "Reproduce video" everywhere the person sees it while the `analyze` view id (deep links) is unchanged.
+- D-039: route-level code splitting = React.lazy for every view but Home + `manualChunks` for react/lucide; main
+  chunk 1.32 MB → 302 kB (react-vendor 203 kB, composer/three 650 kB lazy).
+- D-040: app-wide shortcuts are `app.*` actions in every keyboard preset (Alt+1…5 views, Ctrl+/ editor), handled by
+  `useGlobalShortcuts` and ignored while typing or while the shortcuts editor is open.
 - D-028 (phase 7): trainers are subprocess-only, each in its own venv (`backend/.venv-trainer-*`) cloned by
   `scripts/ensure-trainer.{sh,ps1}`; never vendored. One `LoraTrainer` Protocol, `FakeTrainer` for tests. The
   bootstrap pattern (clone → venv → pip under the app's folders) follows Open-Generative-AI's installer as a
@@ -236,5 +254,16 @@
 - devtools/ui-mock/routes/{training,film,jobs,reproduce}.ts, state.ts, server.ts, seed.ts; e2e/train.spec.ts;
   docs/{TRAINING,INTEGRATED_UPSTREAMS}.md
 
+## Files touched (phase 8)
+- backend/state/{hardware_presets.py,app_settings.py} (hardware_preset, video_profile, image_steps),
+  handlers/settings_handler.py (presets/apply_preset), _routes/settings.py (GET presets, POST apply),
+  tests/test_hardware_presets.py
+- frontend/App.tsx (lazy views, Suspense, first-run preset, global shortcuts), hooks/use-global-shortcuts.ts,
+  lib/{presets-api,keyboard-shortcuts}.ts, components/settings/HardwarePresetCard.tsx, components/{SettingsModal,
+  KeyboardShortcutsModal}.tsx, views/{Home,QuickMode,AnalyzeVideo}.tsx, types/settings.ts,
+  contexts/AppSettingsContext.tsx, vite.config.ts (manualChunks)
+- devtools/ui-mock/{routes/settings.ts,seed.ts}; e2e/{views,settings,storyboard3d,video-reproduce}.spec.ts
+
 ## Next step
-Phase 8: front door (Create · Reproduce · Train · History), RTX 4070 preset, UX polish.
+Phase 9: deploy/ containers (backend + vision sidecar + WanGP), Electron remote backend setting, wangp_remote_bridge,
+per-task provider capabilities + tiered fallback, docs/AI_PROVIDERS.md.

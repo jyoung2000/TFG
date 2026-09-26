@@ -95,6 +95,7 @@ class OpenRouterRoleModels(SettingsBaseModel):
 
 VisionMode = Literal["auto", "local", "sidecar"]
 VlmProvider = Literal["off", "ollama", "openai_compatible", "director"]
+VideoProfile = Literal["fast", "balanced"]
 
 
 class VisionSettings(SettingsBaseModel):
@@ -182,6 +183,12 @@ class AppSettings(SettingsBaseModel):
     vision: VisionSettings = Field(default_factory=VisionSettings)
     seed_locked: bool = False
     locked_seed: int = 42
+    #: Hardware preset last applied ("" until one is); see state/hardware_presets.py.
+    hardware_preset: str = ""
+    #: Quick video / Film default quality profile on the local video model.
+    video_profile: VideoProfile = "fast"
+    #: Steps for the local image model (Z-Image turbo: 8).
+    image_steps: int = 8
 
     def resolved_openrouter_api_key(self) -> str:
         """Settings-file key first, OPENROUTER_API_KEY env var as fallback."""
@@ -313,6 +320,12 @@ class SettingsResponse(SettingsBaseModel):
     vision: VisionSettings = Field(default_factory=VisionSettings)
     seed_locked: bool = False
     locked_seed: int = 42
+    #: Hardware preset last applied ("" until one is); see state/hardware_presets.py.
+    hardware_preset: str = ""
+    #: Quick video / Film default quality profile on the local video model.
+    video_profile: VideoProfile = "fast"
+    #: Steps for the local image model (Z-Image turbo: 8).
+    image_steps: int = 8
 
 
 def to_settings_response(settings: AppSettings) -> SettingsResponse:

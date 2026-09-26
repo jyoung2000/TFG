@@ -9,6 +9,7 @@ from pathlib import Path
 from threading import RLock
 
 from state.app_settings import AppSettings, UpdateSettingsRequest
+from state.hardware_presets import PRESETS, VIDEO_PROFILES, HardwarePreset, recommended_preset
 from handlers._settings_utils import (
     collect_changed_paths,
     deep_merge_dicts,
@@ -111,6 +112,35 @@ class SettingsHandler(StateHandlerBase):
         self.save_settings()
         self._notify(after)
         return before, after, changed_paths
+
+    # ---- hardware presets ---------------------------------------------------------------
+
+    def presets(self, gpu_name: str | None, vram_gb: float | None) -> list[dict[str, object]]:
+        """Every preset with whether it fits this GPU and whether it is the one applied."""
+        recommended = recommended_preset(gpu_name, vram_gb)
+        applied = self.state.app_settings.hardware_preset
+        return [
+            {
+                "id": preset.id,
+                "name": preset.name,
+                "description": preset.description,
+                "changes": list(preset.changes),
+                "recommended": recommended is not None and recommended.id == preset.id,
+                "applied": applied == preset.id,
+                "video_profiles": [
+                    {"id": profile.id, "label": profile.label, "model": profile.model, "resolution": profile.resolution, "duration_seconds": profile.duration_seconds, "note": profile.note}
+                    for profile in VIDEO_PROFILES.values()
+                ],
+            }
+            for preset in PRESETS.values()
+        ]
+
+    def apply_preset(self, preset_id: str) -> HardwarePreset:
+        preset = PRESETS.get(preset_id)
+        if preset is None:
+            raise KeyError(preset_id)
+        self.update_settings(UpdateSettingsRequest.model_validate(preset.patch))
+        return preset
 
     @with_state_lock
     def clear_api_key(self, key_field: str) -> None:

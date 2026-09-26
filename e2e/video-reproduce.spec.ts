@@ -23,7 +23,7 @@ test.describe('Video reproduce', () => {
     await analysedVideo(request, baseURL!)
     const guard = attachConsoleGuard(page)
     await page.goto('/', { waitUntil: 'domcontentloaded' })
-    await page.getByRole('button', { name: /Analyse video/i }).first().click()
+    await page.getByRole('button', { name: /Reproduce video/i }).first().click()
     await page.getByRole('button', { name: /Reference clip/ }).first().click()
     await expect(page.getByText('Measured motion')).toBeVisible()
 
@@ -66,7 +66,7 @@ test.describe('Video reproduce', () => {
     await analysedVideo(request, baseURL!)
     const guard = attachConsoleGuard(page)
     await page.goto('/', { waitUntil: 'domcontentloaded' })
-    await page.getByRole('button', { name: /Analyse video/i }).first().click()
+    await page.getByRole('button', { name: /Reproduce video/i }).first().click()
     await page.getByRole('button', { name: /Reference clip/ }).first().click()
     await page.getByLabel('Candidates per shot').fill('3')
     await page.getByRole('button', { name: 'Recreate video' }).click()

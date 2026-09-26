@@ -21,7 +21,7 @@ test.describe('3D storyboard', () => {
     await analysedVideo(request, baseURL!)
     const guard = attachConsoleGuard(page)
     await page.goto('/', { waitUntil: 'domcontentloaded' })
-    await page.getByRole('button', { name: /Analyse video/i }).first().click()
+    await page.getByRole('button', { name: /Reproduce video/i }).first().click()
     await page.getByRole('button', { name: /Reference clip/ }).first().click()
     await page.getByRole('button', { name: 'Build 3D storyboard' }).click()
 

@@ -26,6 +26,7 @@ import { filmApi } from '../lib/film-api'
 import { importClipAsShot } from '../lib/film-conversion'
 import { fileUrlToPath } from '../lib/url-to-path'
 import { logger } from '../lib/logger'
+import { backendFetch } from '../lib/backend'
 import {
   FORCED_API_VIDEO_RESOLUTIONS,
   getAllowedForcedApiDurations,
@@ -73,6 +74,12 @@ interface ChatTurn extends DirectorChatMessage {
   suggestedDuration?: number | null
   context?: DirectorContextDetails
   error?: boolean
+}
+
+/** Quick video defaults per hardware-preset profile (docs/RTX_4070_TEST_MATRIX.md). */
+const VIDEO_PROFILE_DEFAULTS: Record<'fast' | 'balanced', Pick<QuickSettings, 'videoResolution' | 'duration'>> = {
+  fast: { videoResolution: '540p', duration: 6 },
+  balanced: { videoResolution: '720p', duration: 8 },
 }
 
 const DEFAULT_QUICK_SETTINGS: QuickSettings = {
@@ -148,12 +155,28 @@ function projectNameFromPrompt(prompt: string): string {
  */
 export function QuickMode() {
   const { goHome, createProject, addAsset, updateAsset, openProject, projects, openHistory, quickPreset, setQuickPreset } = useProjects()
-  const { shouldVideoGenerateWithLtxApi, hasDirectorProvider } = useAppSettings()
+  const { shouldVideoGenerateWithLtxApi, hasDirectorProvider, settings: appSettings, refreshSettings } = useAppSettings()
   const generation = useGeneration()
 
   const [prompt, setPrompt] = useState('')
   const [negativePrompt, setNegativePrompt] = useState('')
   const [settings, setSettings] = useState<QuickSettings>(DEFAULT_QUICK_SETTINGS)
+  // The hardware preset's video profile seeds the defaults until the person changes them.
+  const profileSeededRef = useRef(false)
+  useEffect(() => {
+    if (profileSeededRef.current) return
+    profileSeededRef.current = true
+    setSettings(s => ({ ...s, ...VIDEO_PROFILE_DEFAULTS[appSettings.videoProfile] }))
+  }, [appSettings.videoProfile])
+  const setVideoProfile = useCallback(async (profile: 'fast' | 'balanced') => {
+    setSettings(s => ({ ...s, ...VIDEO_PROFILE_DEFAULTS[profile] }))
+    try {
+      await backendFetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ videoProfile: profile }) })
+      await refreshSettings()
+    } catch (e) {
+      logger.warn(`Video profile not saved: ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }, [refreshSettings])
   const [loras, setLoras] = useState<LoraUse[]>([])
   const [chat, setChat] = useState<ChatTurn[]>([])
   const [chatInput, setChatInput] = useState('')
@@ -550,6 +573,13 @@ export function QuickMode() {
                       {d}s
                     </option>
                   ))}
+                </select>
+              </label>
+              <label className="block">
+                <span className="text-[10px] text-zinc-500 uppercase tracking-wide">Profile</span>
+                <select value={appSettings.videoProfile} onChange={e => void setVideoProfile(e.target.value as 'fast' | 'balanced')} className={`${selectClass} mt-1 w-full`} aria-label="Video profile" title="Fast: 540p · 6 s. Balanced: 720p · 8 s, about three times longer per clip on a 4070.">
+                  <option value="fast">Fast · 540p</option>
+                  <option value="balanced">Balanced · 720p</option>
                 </select>
               </label>
               <label className="block">

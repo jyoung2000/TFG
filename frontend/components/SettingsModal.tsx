@@ -1,4 +1,5 @@
 import { APP_NAME } from "../lib/brand";
+import { HardwarePresetCard } from './settings/HardwarePresetCard'
 import { AlertCircle, Boxes, Brain, Check, Cpu, Eye, Library, Download, Film, Folder, Info, KeyRound, RefreshCw, Settings, Sliders, Sparkles, X, Zap } from 'lucide-react'
 import React, { useEffect, useRef, useState } from 'react'
 import { Button } from './ui/button'
@@ -365,6 +366,7 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
         <div className="px-6 py-5 space-y-6 h-[60vh] overflow-y-auto">
           {activeTab === 'general' && (
             <>
+              <HardwarePresetCard />
               {/* GPU Detection */}
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
