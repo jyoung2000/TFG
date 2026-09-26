@@ -283,7 +283,10 @@ Windows "file cannot be accessed by the system" repair
 
 ## Agents: Hermes, Claude Code, Cursor
 
-A full debugging pass for Hermes Agent, GPT‑6 Sol and Claude Opus 5.5 is
+Hand Hermes only [`docs/HERMES_PROMPT.md`](docs/HERMES_PROMPT.md) and this
+repository: it sets up from scratch (`pnpm backend:dev:win` starts a headless
+backend), tests every feature as a user and grades it into
+`docs/HERMES_REVIEW.md`. A deeper multi-agent debugging pass is
 scripted in [`docs/AGENT_DEBUG_PROMPT.md`](docs/AGENT_DEBUG_PROMPT.md)
 (shared brief + per-agent adapters, reports to `docs/DEBUG_REPORT_<agent>.md`).
 

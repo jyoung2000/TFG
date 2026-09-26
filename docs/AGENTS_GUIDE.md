@@ -47,6 +47,11 @@ Then `hermes mcp test tfg` and, for the workflow notes,
 `hermes skills install <path-or-url-to>/skills/tfg`. Hermes' per-server
 `tools.include` / `tools.exclude` filters narrow the 214 tools to a task.
 
+**Starting a backend for an agent.** `pnpm backend:dev` (`backend:dev:win`)
+runs the backend headless with no Electron: data in `~/.local/share/tfg`
+(`%LOCALAPPDATA%\tfg`), WanGP from `./Wan2GP` or `WANGP_ROOT`, no token on
+loopback unless `LTX_AUTH_TOKEN` is set. It prints the MCP command and URL.
+
 **Where the token comes from.** The desktop backend gets a random token
 per session from Electron (`LTX_AUTH_TOKEN` in the backend's environment;
 Settings → About shows it). Set `LTX_OPEN_API=1` when starting the backend
