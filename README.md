@@ -283,6 +283,10 @@ Windows "file cannot be accessed by the system" repair
 
 ## Agents: Hermes, Claude Code, Cursor
 
+A full debugging pass for Hermes Agent, GPT‑6 Sol and Claude Opus 5.5 is
+scripted in [`docs/AGENT_DEBUG_PROMPT.md`](docs/AGENT_DEBUG_PROMPT.md)
+(shared brief + per-agent adapters, reports to `docs/DEBUG_REPORT_<agent>.md`).
+
 Every API route is an MCP tool — `pnpm agent:mcp` (stdio) or `POST /mcp`
 (HTTP). [`skills/tfg/SKILL.md`](skills/tfg/SKILL.md) is the agent skill
 (agentskills.io format; `hermes skills install …`), and

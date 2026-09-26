@@ -101,6 +101,9 @@ put `/data/models` and `wangp-ckpts` on the cache when possible.
 
 ## Docker Desktop on Windows: "The file cannot be accessed by the system"
 
+> Seen and resolved on the reference 4070 machine (2026-09-26); the notes
+> below stay for the next time an unclean shutdown leaves the sockets behind.
+
 If Docker Desktop (4.77–4.90) refuses to start with
 
 ```
