@@ -71,9 +71,21 @@ def default_config(target: str, preset: DatasetPreset, *, image_count: int = 12)
     )
 
 
+def _server_vram_floor_mb(target: str) -> int:
+    """The VRAM this target costs according to *our* table, not the caller's.
+
+    `TrainingConfig.estimated_vram_mb` travels in the request body, so a hand-written
+    config (an MCP tool call, a curl, a stale UI payload) can put any number there.
+    The 12 GB guard must therefore never trust it downwards: we take the higher of
+    the two, so a client may only ever be *more* pessimistic than the server.
+    """
+    return _BASE.get(target, _BASE["z_image"]).estimated_vram_mb
+
+
 def fits_machine(config: TrainingConfig, total_mb: int | None = None) -> tuple[bool, str]:
     limit = total_mb or MACHINE_VRAM_MB
-    if config.estimated_vram_mb > limit:
+    needed = max(config.estimated_vram_mb, _server_vram_floor_mb(config.target))
+    if needed > limit:
         names = ", ".join(t.name for t in trainers_for_target(config.target)) or "no trainer"
-        return False, f"{config.target} LoRA training is estimated at {config.estimated_vram_mb / 1024:.1f} GB ({names}); this machine has {limit / 1024:.0f} GB. Pick an image target (Z-Image, Qwen-Image, FLUX) or train elsewhere."
+        return False, f"{config.target} LoRA training is estimated at {needed / 1024:.1f} GB ({names}); this machine has {limit / 1024:.0f} GB. Pick an image target (Z-Image, Qwen-Image, FLUX) or train elsewhere."
     return True, ""

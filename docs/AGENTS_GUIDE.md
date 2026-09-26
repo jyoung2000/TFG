@@ -30,7 +30,7 @@ mcp_servers:
       TFG_BACKEND_URL: "http://127.0.0.1:8000"
       TFG_AUTH_TOKEN: "<token>"
     tools:
-      exclude: [system_shutdown]
+      exclude: [health_shutdown]
 ```
 
 or, against the container stack (`docs/CONTAINERS.md`):
@@ -91,8 +91,10 @@ Cursor and other clients take the same `command`/`args`/`env` or the
 - File-serving routes (`*_media`, `film_output`, `*_frame`) return metadata
   over MCP (`content_type`, `bytes`); fetch bytes over HTTP with the token
   when needed.
-- `system_shutdown` is a real tool; exclude it in the client config unless
-  the agent should be able to stop the backend.
+- `health_shutdown` is a real tool (`POST /api/system/shutdown`); exclude it in
+  the client config unless the agent should be able to stop the backend. Note
+  the name: the tool is generated as `<tag>_<route>`, and that route is tagged
+  `health`, so it is **not** called `system_shutdown`.
 
 ## Protocol
 

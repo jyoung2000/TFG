@@ -36,7 +36,10 @@ ok "pnpm install complete"
 echo ""
 echo "Setting up Python backend venv..."
 cd "$PROJECT_DIR/backend"
-uv sync --extra dev
+# `test` is included on purpose: the documented gates (docs/TESTING.md, README)
+# run `pytest` and `pyright` from this venv, and `uv sync` prunes any extra that
+# is not requested, so a dev-only sync leaves `python -m pytest` unrunnable.
+uv sync --extra dev --extra test
 ok "uv sync complete"
 
 echo ""

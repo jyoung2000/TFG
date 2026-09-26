@@ -51,7 +51,7 @@ mcp_servers:
     headers:
       Authorization: "Bearer <LTX_AUTH_TOKEN>"
     tools:
-      exclude: [system_shutdown]
+      exclude: [health_shutdown]
 ```
 
 `hermes mcp test tfg` should list the tools. Claude Code: `claude mcp add
@@ -132,4 +132,6 @@ Reproduce and film shots; `film_update_asset` binds one to a character
 - Prefer `jobs_*` for status; do not poll faster than every 2 s.
 - Paths in results belong to the backend host. For a remote backend use the
   `*_media` / `film_output` tools to fetch bytes.
-- `system_shutdown` stops the backend; exclude it unless the user asked.
+- `health_shutdown` stops the backend; exclude it unless the user asked. (The
+  tool is named after the route's tag, so `POST /api/system/shutdown` is exposed
+  as `health_shutdown`, not `system_shutdown`.)

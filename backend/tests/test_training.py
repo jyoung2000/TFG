@@ -163,6 +163,29 @@ class TestPresetsAndVramGuard:
         assert fake_services.trainer.requests == []
         assert client.get("/api/training/runs").json()["runs"] == []
 
+    def test_a_client_cannot_understate_the_vram_estimate_to_unlock_a_video_target(
+        self, client, tmp_path: Path, fake_services
+    ):
+        """`estimated_vram_mb` is a *server* fact about the target, not a client knob.
+
+        A config posted by hand (an MCP tool call, a curl, a stale UI payload) can
+        carry any number. If the guard reads the number the client sent, a video
+        target that needs 24-32 GB walks straight past the 12 GB check and the run
+        is only stopped later by the trainer subprocess check -- or not at all.
+        """
+        dataset = _dataset(client, tmp_path, count=4)
+        for target in ("wan22", "ltx2"):
+            config = default_config(target, "character").model_dump()
+            assert config["estimated_vram_mb"] > MACHINE_VRAM_MB, target  # the real cost
+            config["estimated_vram_mb"] = 1  # what a lying client sends
+            response = client.post(
+                "/api/training/runs", json={"dataset_id": dataset["id"], "config": config}
+            )
+            assert response.status_code == 400, f"{target} was not refused: {response.text}"
+            assert "12 GB" in response.json()["error"], response.json()["error"]
+        assert fake_services.trainer.requests == []
+        assert client.get("/api/training/runs").json()["runs"] == []
+
     def test_status_reports_trainers_and_missing_weights(self, client):
         status = client.get("/api/training/status").json()
         ids = {t["id"]: t for t in status["trainers"]}

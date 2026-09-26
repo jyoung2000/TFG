@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Repair a Docker Desktop (Windows) start-up crash loop caused by stale
   AF_UNIX socket files — without a factory reset.

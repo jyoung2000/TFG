@@ -15,7 +15,26 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 SCANNED_SUFFIXES = {".py", ".ts", ".tsx", ".js", ".mjs", ".cjs", ".json", ".md", ".txt", ".yml", ".yaml", ".toml"}
-SKIP_DIRS = {"node_modules", ".venv", ".git", "dist", "dist-electron", "dist-ui", "release", "ui-preview", "__pycache__", ".cache", "test-results", "playwright-report"}
+# `python-embed` and `Wan2GP` are local build/runtime checkouts, not vendored source:
+# they are gitignored and carry their own third-party licences (cv2, ultralytics and
+# friends legitimately ship AGPL-adjacent notices). This guard is about code *vendored
+# into this repository*, so build artefacts must not be scanned.
+SKIP_DIRS = {
+    "node_modules",
+    ".venv",
+    ".git",
+    "dist",
+    "dist-electron",
+    "dist-ui",
+    "release",
+    "ui-preview",
+    "__pycache__",
+    ".cache",
+    "test-results",
+    "playwright-report",
+    "python-embed",
+    "Wan2GP",
+}
 
 AGPL_PATTERNS = (
     re.compile(r"GNU\s+AFFERO\s+GENERAL\s+PUBLIC\s+LICENSE", re.IGNORECASE),

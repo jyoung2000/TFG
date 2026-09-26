@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
+import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -32,10 +35,32 @@ def _format_diagnostics(payload: dict[str, Any], limit: int = 15) -> str:
     return "\n".join(lines)
 
 
+def _pyright_command() -> list[str] | None:
+    """Prefer the pyright installed *in this venv* over whatever is on PATH.
+
+    `pyright` is a dev extra of `backend/.venv`, and a venv's `Scripts` directory is
+    not on PATH by default — so resolving the bare name raised `FileNotFoundError`
+    before the "not available" skip below could ever run, turning a missing optional
+    tool into a hard test failure on Windows.
+    """
+    scripts_dir = Path(sys.executable).resolve().parent
+    candidates = [
+        scripts_dir / ("pyright.exe" if os.name == "nt" else "pyright"),
+        scripts_dir / "pyright",
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return [str(candidate)]
+    return shutil.which("pyright") and ["pyright"] or None
+
+
 def test_pyright_has_no_errors_or_warnings() -> None:
     backend_root = Path(__file__).resolve().parents[1]
+    command = _pyright_command()
+    if command is None:
+        pytest.skip("pyright is not available in this venv or on PATH; skipping type-check gate")
     result = subprocess.run(
-        ["pyright", "--outputjson"],
+        [*command, "--outputjson"],
         cwd=backend_root,
         capture_output=True,
         text=True,
