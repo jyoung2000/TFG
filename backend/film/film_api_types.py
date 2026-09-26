@@ -243,6 +243,12 @@ class PoseResponse(BaseModel):
 
 class GenerateShotRequest(BaseModel):
     kind: VersionKind = "preview"
+    #: Explicit render length (already snapped by the caller); None = derive from the shot.
+    duration_seconds: float | None = None
+    #: Project-relative start frame for image-to-video; "" = the shot's own capture rule.
+    capture_path: str = ""
+    #: Pin the seed for this version; None = the shot's generation setting.
+    seed: int | None = None
 
 
 class BatchGenerateRequest(BaseModel):

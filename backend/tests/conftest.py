@@ -103,6 +103,8 @@ def test_state(tmp_path: Path, fake_services: FakeServices):
         ic_lora_model_downloader=fake_services.ic_lora_model_downloader,
         vision=fake_services.vision,
         nvml=fake_services.nvml,
+        motion=fake_services.motion,
+        stitcher=fake_services.stitcher,
     )
 
     handler = build_initial_state(

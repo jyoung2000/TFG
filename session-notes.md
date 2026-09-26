@@ -5,8 +5,8 @@
 4 Image Reproduce v2 · 5 Motion + Video Reproduce v2 · 6 3D storyboard · 7 LoRA Train · 8 front door/4070 preset ·
 9 containers/remote/tiering · 10 acceptance/docs/PR
 
-**Current phase:** 4 (committing)
-**Last passing gate:** Gate 3 (tsc 0 · pyright 0 · vitest 45/45 · pytest 717 + 1 strict xfail · e2e 13/13)
+**Current phase:** 5 (committing)
+**Last passing gate:** Gate 5 (tsc 0 · pyright 0 · vitest 45/45 · pytest 753 · e2e 20/20)
 
 ## Environment (this session)
 - Cloud Linux container (not the Windows 4070 box the prompt assumes). No GPU, no nvidia-smi.
@@ -39,8 +39,20 @@
   raise an actionable error until confirmed. Adjustments + patch-from-reference are fully local and tested.
 - VF-009: `uv run pytest` re-syncs the lock (pulls torch cu128 → egress 403). Use `backend/.venv/bin/python -m pytest`
   in this container; CI uses `pnpm backend:test` with network.
+- VF-010 (phase 5): backend venv has PyAV 18.1, OpenCV 5.0 headless and the imageio-ffmpeg 7.0.2 binary; the real
+  `OpticalFlowAnalyzer` and `FfmpegStitcher` are exercised on `samples/clip-01.mp4` in tests (no GPU needed).
+- VF-011: WanGP VACE/depth-control keys for the reference clip could not be verified here (no checkout); Video
+  Reproduce conditions on the start frame only and records `spec.layout3d.depth_map_path` for phase 6.
 
 ## Decisions
+- D-021 (phase 5): Video Reproduce reuses the film queue (`queue_shot` with explicit duration / capture / seed on
+  `GenerateShotRequest`), waits on the version, scores, stitches; no parallel engine. One `video_gen` child per
+  candidate under a `video_reproduce` parent (`jobs.parent()` scope).
+- D-022: durations always snap to `get_allowed_durations()` (6/8/10 s) — local renders included — so a shot's clip
+  length is legal on every path; the source span stays on `spec.source.start/end`.
+- D-023: candidate score = 0.8 × frame composite (start/middle/end vs the shot's extracted frames) + 0.2 × flow
+  match (magnitude + pan/tilt direction), renormalised when motion is unmeasured.
+- D-024: the VLM is asked per section (4 calls + ≤1 repair each); flow-measured camera move is never overwritten.
 - D-017 (phase 4): composite score = 0.35 CLIP-I + 0.25 DINOv2 + 0.15 SSIM + 0.15 palette ΔE2000 + 0.10 layout,
   renormalised over available components (fakes → SSIM/palette/layout only). Seeds `seed0 + (round-1)*100 + n`.
 - D-018: Fix canvas is plain Canvas 2D (no Konva/Fabric): mask + adjustment maths mirrored in `services/image_ops.py`
@@ -135,6 +147,19 @@
 - devtools/ui-mock/routes/reproduce.ts, state.ts (reproduceJobs), server.ts; e2e/reproduce.spec.ts (5),
   e2e/views.spec.ts (label); docs/REPRODUCE.md
 
+## Files touched (phase 5)
+- backend/services/motion/{flow_math,motion_analyzer,fake_motion}.py, services/stitcher/video_stitcher.py,
+  film/video_reproduce_models.py, handlers/video_reproduce_handler.py, _routes/video_reproduce.py,
+  handlers/video_analysis_handler.py (motion, spec fusion, per-section VLM, recreate delegate, public load),
+  film/video_analysis_models.py (MotionAnalysis, spec), film/video_analysis_api_types.py (kind, seed),
+  film/film_api_types.py + handlers/film_generation_handler.py (explicit duration/capture/seed),
+  film/prompt_brief.py (movement from flow), handlers/knowledge_handler.py (task), app_handler.py (bundle + wiring),
+  app_factory.py, tests/{test_motion,test_video_reproduce}.py, tests/test_video_analysis.py (xfail → real),
+  tests/fakes/services.py, tests/conftest.py
+- frontend/types/{video-analysis (motion, spec),video-reproduce}.ts, lib/video-reproduce-api.ts,
+  views/reproduce/VideoReproduce.tsx, views/AnalyzeVideo.tsx (panel, measured motion row)
+- devtools/ui-mock/routes/{video-analysis (motion/spec),video-reproduce}.ts, state.ts, server.ts;
+  e2e/video-reproduce.spec.ts; docs/VIDEO_REPRODUCE.md, docs/VIDEO_ANALYSIS.md
+
 ## Next step
-Phase 5: motion analysis (`services/vision/motion.py` optical-flow → SpecMotion, shot boundaries), Video Reproduce v2
-(per-shot ShotSpec, LTX-2/Wan 2.2 targets, temporal scoring), replace the 501 in `video_analysis_handler.recreate_video`.
+Phase 6: 3D shot analysis → editable storyboard (blockout Apache-2.0 engine + Deliver, Blocking-Room MIT utilities, CozyClay concepts only): depth → layout3d, ScenePanel, composer keyframes from spec.motion, scene_build jobs.

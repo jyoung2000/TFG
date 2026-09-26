@@ -18,6 +18,7 @@ import type { AppSettings, ClearableKeyProvider } from '../../frontend/types/set
 import type { LibraryDownloadStatus } from '../../frontend/types/models'
 import type { Job } from '../../frontend/types/jobs'
 import type { ReproduceJob } from '../../frontend/types/reproduce'
+import type { VideoReproduceJob } from '../../frontend/types/video-reproduce'
 import { DEMO_PROJECT_ID, emptyProject, seedProject, seedSettings } from './seed'
 import { seedKnowledge } from './routes/knowledge'
 import { seedShotLibrary } from './routes/shot-library'
@@ -72,6 +73,8 @@ export interface MockState {
   historyJobs: Job[]
   /** Image Reproduce v2 jobs, newest first. */
   reproduceJobs: ReproduceJob[]
+  /** Video Reproduce v2 documents by analysis id. */
+  videoReproduce: Record<string, VideoReproduceJob>
 }
 
 export const EMPTY_LIBRARY_DOWNLOAD: LibraryDownloadStatus = {
@@ -119,6 +122,7 @@ export function freshState(): MockState {
     timelineHistory: {},
     historyJobs: seedJobs(),
     reproduceJobs: [],
+    videoReproduce: {},
     learning: { enabled: true, generation: true, approval: true, editing: true, feedback: true },
   }
 }
@@ -185,7 +189,7 @@ export class Store {
         // Stored state from an older shape would break the UI in confusing
         // ways; a missing project map is the cheapest reliable signal.
         if (parsed && typeof parsed === 'object' && parsed.projects) {
-          return { ...freshState(), ...parsed, analyses: parsed.analyses ?? {}, historyJobs: parsed.historyJobs ?? seedJobs(), reproduceJobs: parsed.reproduceJobs ?? [] }
+          return { ...freshState(), ...parsed, analyses: parsed.analyses ?? {}, historyJobs: parsed.historyJobs ?? seedJobs(), reproduceJobs: parsed.reproduceJobs ?? [], videoReproduce: parsed.videoReproduce ?? {} }
         }
       }
     } catch {

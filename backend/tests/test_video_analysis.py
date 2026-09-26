@@ -267,7 +267,8 @@ class TestReconstruction:
 
 
 class TestRecreation:
-    """Video recreation: combining shot prompts into generated candidates."""
+    """The recreate endpoint is the entry point of Video Reproduce v2; the
+    loop itself is covered in `test_video_reproduce.py`."""
 
     def test_recreating_before_analysis_is_refused(self, client, video):
         analysis = _import(client, video)
@@ -275,10 +276,6 @@ class TestRecreation:
         response = client.post(f"/api/video-analysis/{analysis['id']}/recreate", json={"candidates": 1})
         assert response.status_code == 400
 
-    @pytest.mark.xfail(
-        strict=True,
-        reason="Video reproduce v2 (phase 5): per-shot jobs through the film queue; handler returns 501 until then.",
-    )
     def test_recreation_generates_candidates_from_analyzed_shots(
         self, client, video, test_state, create_fake_model_files
     ):
@@ -302,16 +299,3 @@ class TestRecreation:
         for candidate in payload["video_paths"]:
             assert Path(candidate).is_file(), candidate
             assert Path(candidate).stat().st_size > 0, candidate
-
-    def test_recreation_is_honest_about_being_unavailable(self, client, video, test_state, create_fake_model_files):
-        """Until phase 5 the endpoint refuses with 501 instead of pretending to render."""
-        from tests.test_generation import _enable_local_text_encoding
-
-        create_fake_model_files()
-        _enable_local_text_encoding(test_state)
-        analysis = _import(client, video)
-        client.post(f"/api/video-analysis/{analysis['id']}/detect")
-        client.post(f"/api/video-analysis/{analysis['id']}/analyze", json={})
-        response = client.post(f"/api/video-analysis/{analysis['id']}/recreate", json={"candidates": 1})
-        assert response.status_code == 501, response.text
-

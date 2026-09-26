@@ -36,7 +36,10 @@ from handlers.jobs_handler import JobsHandler
 from handlers.vision_handler import VisionHandler
 from film.prompt_templates import TemplateStore
 from handlers.reproduce_handler import ReproduceHandler
+from handlers.video_reproduce_handler import VideoReproduceHandler
 from services.vision.protocol import VisionService
+from services.motion.motion_analyzer import MotionAnalyzer
+from services.stitcher.video_stitcher import VideoStitcher
 from services.vram.vram_manager import NvmlProbe, VramManager
 from runtime_config.runtime_config import RuntimeConfig
 from services.wangp_bridge import WanGPBridge
@@ -89,6 +92,8 @@ class AppHandler:
         ic_lora_model_downloader: IcLoraModelDownloader,
         vision: VisionService | None = None,
         nvml: NvmlProbe | None = None,
+        motion: MotionAnalyzer | None = None,
+        stitcher: VideoStitcher | None = None,
     ) -> None:
         self.config = config
 
@@ -168,6 +173,19 @@ class AppHandler:
             outputs_dir=config.outputs_dir,
         )
         self.settings.add_listener(self.vision.apply_settings)
+
+        # Motion (optical flow) and stitching are plain services: real ones by
+        # default, fakes in tests. Neither touches the GPU.
+        if motion is None:
+            from services.motion.motion_analyzer import OpticalFlowAnalyzer
+
+            motion = OpticalFlowAnalyzer()
+        if stitcher is None:
+            from services.stitcher.video_stitcher import FfmpegStitcher
+
+            stitcher = FfmpegStitcher()
+        self._motion = motion
+        self._stitcher = stitcher
 
         # The unified job store: every handler below that does work reports
         # to it, and the History tab reads nothing else.
@@ -326,6 +344,7 @@ class AppHandler:
             film_store=self.film.store,
             jobs=self.jobs,
             vision=self.vision,
+            motion=self._motion,
         )
 
         self.timeline = TimelineHandler(
@@ -400,6 +419,23 @@ class AppHandler:
             wangp_enabled=config.wangp_enabled,
         )
 
+        self.video_reproduce = VideoReproduceHandler(
+            state=self.state,
+            lock=self._lock,
+            video_analysis=self.video_analysis,
+            film_handler=self.film,
+            film_generation=self.film_generation,
+            probe=media_probe,
+            motion=self._motion,
+            stitcher=self._stitcher,
+            task_runner=task_runner,
+            config=config,
+            jobs=self.jobs,
+            vision=self.vision,
+            knowledge=self.knowledge,
+        )
+        self.video_analysis.attach_reproduce(self.video_reproduce)
+
         # History controls: cancel and re-run per job kind. Film-queued shots
         # cancel through the queue; everything else through the single-slot
         # generation state machine.
@@ -448,7 +484,17 @@ class AppHandler:
             return _cancel_generation(job)
 
         self.jobs.register_canceller("image_reproduce", _cancel_reproduce)
-        self.jobs.register_canceller("video_reproduce", _cancel_generation)
+        def _cancel_video_reproduce(job: Job) -> bool:
+            analysis_id = str(job.inputs.get("analysis_id", ""))
+            if analysis_id:
+                try:
+                    self.video_reproduce.cancel(analysis_id)
+                    return True
+                except HTTPError:
+                    pass
+            return _cancel_generation(job)
+
+        self.jobs.register_canceller("video_reproduce", _cancel_video_reproduce)
         self.jobs.register_canceller("download", _cancel_download)
         self.jobs.register_canceller("analysis", _cancel_analysis)
         self.jobs.register_rerunner("video_gen", _rerun_video)
@@ -482,6 +528,10 @@ class ServiceBundle:
     vision: VisionService | None = None
     #: None → pynvml; tests inject FakeNvml.
     nvml: NvmlProbe | None = None
+    #: None → OpenCV Farneback over PyAV frames; tests inject FakeMotion.
+    motion: MotionAnalyzer | None = None
+    #: None → ffmpeg concat (imageio-ffmpeg / TFG_FFMPEG); tests inject FakeStitcher.
+    stitcher: VideoStitcher | None = None
 
 
 def _default_nvml() -> NvmlProbe:
@@ -583,4 +633,6 @@ def build_initial_state(
         ic_lora_model_downloader=bundle.ic_lora_model_downloader,
         vision=bundle.vision,
         nvml=bundle.nvml,
+        motion=bundle.motion,
+        stitcher=bundle.stitcher,
     )

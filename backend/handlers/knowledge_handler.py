@@ -32,6 +32,7 @@ from film.knowledge_models import (
     Observation,
     OBSERVATION_KIND_RANK,
     PromptPattern,
+    Task,
 )
 from film.knowledge_store import KnowledgeStore
 from handlers.base import StateHandlerBase
@@ -200,6 +201,7 @@ class KnowledgeHandler(StateHandlerBase):
         project_id: str = "",
         shot_id: str = "",
         note: str = "",
+        task: Task = "image",
     ) -> KnowledgeEvent | None:
         """One scored candidate (`candidate_scored`) or the user's choice
         (`candidate_picked`). The spec keys are what `hints_for` matches on."""
@@ -210,7 +212,7 @@ class KnowledgeHandler(StateHandlerBase):
                 shot_id=shot_id,
                 model=model,
                 provider=provider,
-                task="image",
+                task=task,
                 execution_mode=provider,
                 prompt=prompt[:2000],
                 negative_prompt=negative_prompt[:1000],

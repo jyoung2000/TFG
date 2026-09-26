@@ -20,6 +20,8 @@ from typing import Annotated, Literal, cast
 
 from pydantic import BaseModel, BeforeValidator, Field
 
+from film.shot_spec import ShotSpec
+
 from film.film_models import now_ms
 
 
@@ -236,6 +238,24 @@ class PromptLensAnalysis(BaseModel):
     confidence: float = 0.0
 
 
+class MotionAnalysis(BaseModel):
+    """Optical flow over the shot (phase 5). Measured, never inferred."""
+
+    analyzed: bool = False
+    model: str = ""
+    pan: float = 0.0
+    tilt: float = 0.0
+    zoom: float = 0.0
+    roll: float = 0.0
+    magnitude: float = 0.0
+    subject_motion: float = 0.0
+    jitter: float = 0.0
+    handheld: bool = False
+    pacing: str = ""
+    frames_sampled: int = 0
+    confidence: float = 0.0
+
+
 class AnalyzedShot(BaseModel):
     """One detected shot and everything derived from it."""
 
@@ -258,6 +278,10 @@ class AnalyzedShot(BaseModel):
     text: TextAnalysis = Field(default_factory=TextAnalysis)
     prompts: ReversePrompts = Field(default_factory=ReversePrompts)
     prompt_lens: PromptLensAnalysis = Field(default_factory=PromptLensAnalysis)
+    motion: MotionAnalysis = Field(default_factory=MotionAnalysis)
+    #: The fused ShotSpec (measured → Florence → CLIP → flow → VLM); the only
+    #: contract Video Reproduce renders from.
+    spec: ShotSpec = Field(default_factory=ShotSpec)
 
     #: Where the content came from: a model, or the deterministic fallback.
     analysis_provider: str = ""

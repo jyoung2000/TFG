@@ -318,7 +318,7 @@ class FilmGenerationHandler(StateHandlerBase):
                     + "; ".join(w.message for w in warnings),
                 )
 
-            version = self._create_version(project, shot, req.kind)
+            version = self._create_version(project, shot, req.kind, req)
             shot.versions.append(version)
             shot.status = "queued"
             shot.updated_at = now_ms()
@@ -513,7 +513,7 @@ class FilmGenerationHandler(StateHandlerBase):
     # ---- Version construction -------------------------------------------
 
     def _create_version(
-        self, project: FilmProject, shot: FilmShot, kind: VersionKind
+        self, project: FilmProject, shot: FilmShot, kind: VersionKind, req: GenerateShotRequest | None = None
     ) -> ShotVersion:
         settings = project.settings
         generation = shot.generation
@@ -533,6 +533,9 @@ class FilmGenerationHandler(StateHandlerBase):
             model, resolution = self._resolve_final_profile(project, shot)
             duration = shot.duration_seconds
 
+        if req is not None and req.duration_seconds is not None and req.duration_seconds > 0:
+            # Video Reproduce snaps to the model's allowed durations itself.
+            duration = req.duration_seconds
         duration_int = max(1, round(duration))
         if self._config.force_api_generations and not self._config.wangp_enabled:
             resolution = resolution if resolution in _FORCED_API_RESOLUTIONS else "1080p"
@@ -546,6 +549,11 @@ class FilmGenerationHandler(StateHandlerBase):
                 wardrobe_snapshot[asset.id] = asset.wardrobe
 
         capture_path = shot.capture_path if generation.use_capture_as_reference else ""
+        if req is not None and req.capture_path:
+            capture_path = req.capture_path
+        seed = generation.seed
+        if req is not None and req.seed is not None:
+            seed = req.seed
 
         snapshot: dict[str, object] = {
             "title": shot.title,
@@ -573,7 +581,7 @@ class FilmGenerationHandler(StateHandlerBase):
             resolution=resolution,
             fps=generation.fps,
             duration_seconds=float(duration_int),
-            seed=generation.seed,
+            seed=seed,
             capture_path=capture_path,
             wardrobe_snapshot=wardrobe_snapshot,
             shot_snapshot=snapshot,

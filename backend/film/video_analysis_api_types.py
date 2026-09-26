@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from film.video_analysis_models import AnalysisDepth, VideoAnalysis
@@ -61,9 +63,13 @@ class VideoAnalysisListResponse(BaseModel):
 
 class VideoRecreationRequest(BaseModel):
     """Request to recreate a video from analyzed shots."""
-    candidates: int = Field(default=4, ge=1, le=4)
-    rounds: int = Field(default=1, ge=1, le=2)
+    candidates: int = Field(default=2, ge=1, le=6)
+    rounds: int = Field(default=1, ge=1, le=3)
     shot_ids: list[str] = Field(default_factory=list)  # Empty means all shots
+    #: Fast Preview (540p, model "fast") or the project's final profile.
+    kind: Literal["preview", "final"] = "preview"
+    #: Base seed; candidate n of round r renders with seed + (r-1)*100 + n. None = random.
+    seed: int | None = None
 
 
 class VideoRecreationResponse(BaseModel):

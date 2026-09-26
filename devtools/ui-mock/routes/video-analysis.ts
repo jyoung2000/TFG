@@ -8,7 +8,8 @@
  */
 
 import type { FilmProject } from '../../../frontend/types/film'
-import type { AnalyzedShot, VideoAnalysis } from '../../../frontend/types/video-analysis'
+import { EMPTY_MOTION, type AnalyzedShot, type VideoAnalysis } from '../../../frontend/types/video-analysis'
+import { emptySpec } from '../../../frontend/lib/shotspec/schema'
 import { EMPTY_BRIEF } from '../../../frontend/types/prompts'
 import { MockHttpError, type Router } from '../http'
 import { compilePrompt } from './prompts'
@@ -59,11 +60,32 @@ function emptyShot(index: number, start: number, end: number): AnalyzedShot {
     text: { analyzed: false, visible_text: [], subtitles: [], signs: [], ui_text: [], typography: '', confidence: 0 },
     prompts: { storyboard: '', video: '', cinematography: '', environment: '', character: '', motion: '', negative: '', model_specific: {}, edited: false },
     prompt_lens: { core_prompt: '', deep_description: '', subject: '', environment: '', camera: '', lighting: '', style: '', mood: '', confidence: 0 },
+    motion: { ...EMPTY_MOTION },
+    spec: emptySpec('video_shot'),
     analysis_provider: '',
     analysis_model: '',
     provenance: 'measured',
     evidence_note: '',
     analyzed_at: 0,
+  }
+}
+
+const MOTION_WORDS = ['static camera', 'pan left', 'push in']
+
+/** Deterministic "measured" flow per shot index, so the strip shows variety. */
+function mockMotion(index: number) {
+  const kind = index % 3
+  return {
+    ...EMPTY_MOTION,
+    analyzed: true,
+    model: 'ui-mock-flow',
+    pan: kind === 1 ? 0.008 : 0,
+    zoom: kind === 2 ? 0.006 : 0,
+    magnitude: kind === 0 ? 0.001 : 0.012,
+    subject_motion: 0.003,
+    pacing: kind === 0 ? 'still' : 'slow',
+    frames_sampled: 12,
+    confidence: 0.8,
   }
 }
 
@@ -159,10 +181,15 @@ export function registerVideoAnalysisRoutes(router: Router, store: Store): void 
           approximate_beat: `${duration.toFixed(1)}s`,
           confidence: 0.9,
         }
-        if (offline) return { ...shot, editorial, analysis_provider: 'deterministic', provenance: 'measured' as const }
+        const motion = mockMotion(shot.index)
+        const spec = { ...emptySpec('video_shot'), motion: { dominant: { pan: motion.pan, tilt: motion.tilt, zoom: motion.zoom, roll: motion.roll }, magnitude: motion.magnitude, subject_motion: motion.subject_motion, pacing: motion.pacing }, provenance: { motion: 'flow', measured: 'measured' }, confidence: { motion: 0.8 } }
+        const cinematography = { ...shot.cinematography, camera_movement: MOTION_WORDS[shot.index % MOTION_WORDS.length], is_static: shot.index % 3 === 0, confidence: 0.8 }
+        if (offline) return { ...shot, editorial, motion, spec, cinematography, analysis_provider: 'deterministic', provenance: 'measured' as const }
         return {
           ...shot,
           editorial,
+          motion,
+          spec,
           visual: {
             ...shot.visual,
             description: `Shot ${shot.index + 1} of the imported clip`,
@@ -171,7 +198,7 @@ export function registerVideoAnalysisRoutes(router: Router, store: Store): void 
             lighting: 'available light',
             confidence: 0.55,
           },
-          cinematography: { ...shot.cinematography, camera_movement: 'static camera', confidence: 0.5 },
+          cinematography,
           prompts: shot.prompts.edited
             ? shot.prompts
             : {
