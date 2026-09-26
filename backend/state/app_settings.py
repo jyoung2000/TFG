@@ -138,6 +138,13 @@ class AppSettings(SettingsBaseModel):
     # (e.g. an integrated compositor): set what the app may use and it treats
     # the GPU as having only that much VRAM for compatibility verdicts.
     gpu_vram_budget_gb: float | None = None
+    # Override the free VRAM (MB) the render guard demands per model type,
+    # e.g. {"ltx2_22B_distilled": 7800}. Unlisted models keep the built-in
+    # defaults (services/vram/vram_manager.py RENDER_NEEDS_MB); setting a
+    # model to 0 restores its default (settings patches deep-merge, so keys
+    # cannot be deleted). This is the knob to turn after measuring a real
+    # peak on your card.
+    vram_render_needs_mb: dict[str, int] = Field(default_factory=dict[str, int])
     ltx_api_key: str = ""
     user_prefers_ltx_api_video_generations: bool = False
     use_local_text_encoder: bool = False
@@ -316,6 +323,7 @@ class SettingsResponse(SettingsBaseModel):
     default_video_model: str = ""
     default_image_model: str = ""
     recent_model_ids: list[str] = Field(default_factory=list[str])
+    vram_render_needs_mb: dict[str, int] = Field(default_factory=dict[str, int])
 
     # What TFG may remember about how models behave here. Off switches are
     # honoured when an event is written, not when it is read, so turning

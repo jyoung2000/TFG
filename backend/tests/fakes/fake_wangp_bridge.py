@@ -38,6 +38,15 @@ class FakeWanGPBridge(WanGPBridge):
     def list_model_definitions(self) -> list[dict[str, object]]:
         return list(self.definitions)
 
+    def weights_installed(self, model_type: str) -> bool | None:
+        """The real bridge answers None without a checkout; the fake answers
+        from its `definitions` so tests can simulate missing weights."""
+        for definition in self.definitions:
+            if str(definition.get("id", "")) == model_type:
+                value = definition.get("installed", definition.get("downloaded"))
+                return None if value is None else bool(value)
+        return None
+
     def _run_manifest(self, *, manifest: list[dict[str, object]], media_suffixes: set[str], on_progress: ProgressCallback, is_cancelled: CancelledCallback) -> list[str]:  # type: ignore[override]
         self.manifests.append(manifest)
         on_progress("starting_wangp", 2, None, None)

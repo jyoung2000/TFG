@@ -364,6 +364,29 @@
   _routes/film.py, services/lora_fetcher/requests_fetcher.py, tests/test_film_api.py; devtools/ui-mock/routes/film.ts;
   e2e/assets.spec.ts.
 
+## Post-audit fixes: make image AND video reachable on the 4070 (Hermes findings 1–3)
+- D-051: the VRAM render guard is now genuinely settings-driven and attainable on a 12 GB card. New
+  `vram_render_needs_mb: dict[str,int]` setting (patch deep-merges; a value of 0 restores the default; echoed as
+  `vramRenderNeedsMb`); `VramManager.set_overrides` applied in AppHandler on load and via a settings listener on
+  every save. 12 GB-class defaults lowered from unvalidated 9.5 GB-class figures (which exceeded the ~8.9 GB a
+  Windows 4070 can ever have free, refusing every video render) to 8000 MB (+512 margin) for
+  ltx2_22B_distilled / ltx2-fast / wan2_2_ti2v_5B / qwen_image_edit / flux / default — attainable, leaning on
+  WanGP block offloading; `ltx2_22B` stays at 11000 (genuinely does not fit). Replace with measured peaks via the
+  setting once Hermes runs the real render.
+- D-052: a local render never silently downloads a checkpoint. `WanGPBridge.weights_installed(model_type)`
+  (True/False from defaults+ckpts, None for remote/unknown — None never refuses); both `_generate_via_wangp`
+  paths (video + image) refuse with 409 pointing at the Models tab download (which already runs with
+  progress/cancel via `_start_wangp_download`) before wgp.py could auto-download 19.4 GB mid-"render".
+- D-053: caption failures are loud. `caption_dataset` no longer writes trigger-only captions when Florence fails:
+  failed items keep their captions, and if nothing captioned it raises 502 with the underlying reason
+  (Settings → Vision hint) instead of returning a "captioned" dataset.
+- Files: state/app_settings.py (field + SettingsResponse echo), services/vram/vram_manager.py (honest comment,
+  new defaults, set_overrides), app_handler.py (apply + listener), services/wangp_bridge.py (weights_installed),
+  handlers/{video_generation,image_generation}_handler.py (pre-checks), handlers/training_handler.py (caption),
+  tests/{test_render_guard.py NEW, fakes/fake_wangp_bridge.py, test_vision.py recalibrated to the new thresholds}.
+- Still open (needs the 4070 / a decision): actually downloading the distilled weights + measuring the true peak,
+  and the uv.lock↔Wan2GP dependency split (subprocess bridge vs locking the 81 requirements) from Hermes PR #2.
+
 ## Next step
 Nothing pending in this session. Real-GPU acceptance (docs/RTX_4070_TEST_MATRIX.md) and `pnpm build:win` need the 4070
 machine; a live `hermes mcp test tfg` needs a Hermes install. Watch the PR for review comments. Hermes audit PR #2

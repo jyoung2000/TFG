@@ -749,6 +749,18 @@ class VideoGenerationHandler(StateHandlerBase):
         if self._generation.is_generation_running():
             raise HTTPError(409, "Generation already in progress")
 
+        # A render must never turn into a silent multi-GB checkpoint download
+        # (wgp.py auto-downloads missing weights on load). Refuse with the
+        # explicit path instead: the Models tab downloads with progress/cancel.
+        model_type = self._config.wangp_video_model_type
+        if self._wangp_bridge.weights_installed(model_type) is False:
+            raise HTTPError(
+                409,
+                f"The local video model '{model_type}' has no downloaded weights yet. "
+                "Download it first in the Models tab (Model Library → Local · WanGP models) — "
+                "a render never starts a checkpoint download on its own.",
+            )
+
         generation_id = self._make_generation_id()
         self._generation.start_api_generation(generation_id, job_id=job_id)
 

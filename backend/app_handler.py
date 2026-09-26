@@ -182,6 +182,10 @@ class AppHandler:
         # service can be built around this manager.
         app_data = config.settings_file.parent
         self.vram = VramManager(nvml if nvml is not None else _default_nvml(), http=http)
+        # The render guard's per-model thresholds are settings-driven: apply
+        # the loaded values now and again after every settings save.
+        self.vram.set_overrides(self.state.app_settings.vram_render_needs_mb)
+        self.settings.add_listener(lambda s: self.vram.set_overrides(s.vram_render_needs_mb))
         if vision is None:
             from services.vision.local_vision import LocalVision, VisionConfig
 

@@ -184,6 +184,22 @@ class WanGPBridge:
             )
         return definitions
 
+    def weights_installed(self, model_type: str) -> bool | None:
+        """Whether the model's checkpoint files are present under ``ckpts``.
+
+        ``None`` means "cannot tell" (no local checkout — the remote bridge —
+        or an unknown model id) and callers must not refuse on it. ``False``
+        is the state in which ``wgp.py`` would silently start a multi-GB
+        checkpoint download the moment a render asks for the model; render
+        handlers check this first and point at the Models tab instead, where
+        the same download runs as an explicit job with progress and cancel."""
+        if self._root is None:
+            return None
+        for definition in self.list_model_definitions():
+            if str(definition.get("id", "")) == model_type:
+                return bool(definition.get("installed", False))
+        return None
+
     def generate_video(
         self,
         *,

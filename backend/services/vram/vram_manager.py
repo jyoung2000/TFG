@@ -30,16 +30,24 @@ logger = logging.getLogger(__name__)
 VRAM_CLASS_MB: dict[str, int] = {"S": 1536, "M": 3072, "L": 8192}
 
 #: What a render needs free, by model type, at the default 4070 profiles.
-#: Conservative figures from WanGP's own low-VRAM path; overridable in settings.
+#: Overridden per model by the `vram_render_needs_mb` setting (AppHandler
+#: applies it via `set_overrides` on load and on every settings save).
+#:
+#: The 12 GB-class video figures are chosen to be ATTAINABLE on a 12 GB card
+#: after arbitration (a Windows desktop leaves ~8.9 GB free at best — a
+#: higher bar refuses every render the hardware could attempt) and lean on
+#: WanGP's block offloading rather than measured peaks. Replace them with
+#: measured numbers via the setting once a real run reports its peak.
+#: `ltx2_22B` (non-distilled) genuinely does not fit 12 GB and stays refused.
 RENDER_NEEDS_MB: dict[str, int] = {
-    "ltx2_22B_distilled": 9500,
+    "ltx2_22B_distilled": 8000,
     "ltx2_22B": 11000,
-    "wan2_2_ti2v_5B": 8500,
+    "wan2_2_ti2v_5B": 8000,
     "z_image": 7500,
-    "qwen_image_edit": 9000,
-    "flux": 9000,
-    "ltx2-fast": 9500,
-    "default": 9000,
+    "qwen_image_edit": 8000,
+    "flux": 8000,
+    "ltx2-fast": 8000,
+    "default": 8000,
 }
 #: Keep this much free beyond the model's need for activations and the desktop compositor.
 SAFETY_MARGIN_MB = 512
@@ -144,14 +152,25 @@ class VramManager:
     ) -> None:
         self._probe = probe
         self._http = http
-        self._needs = dict(RENDER_NEEDS_MB)
+        self._base_needs = dict(RENDER_NEEDS_MB)
         if render_needs_mb:
-            self._needs.update(render_needs_mb)
+            self._base_needs.update(render_needs_mb)
+        self._needs = dict(self._base_needs)
         self._lock = threading.RLock()
         self._models: dict[str, LoadedModel] = {}
         self._ollama_root = ""
         self._ollama_model = ""
         self._sample_interval = sample_interval_s
+
+    def set_overrides(self, overrides: dict[str, int]) -> None:
+        """Apply the `vram_render_needs_mb` setting on top of the defaults.
+        Called on settings load and on every save; passing `{}` restores the
+        defaults, so a removed override does not linger."""
+        with self._lock:
+            self._needs = dict(self._base_needs)
+            for model_type, value in overrides.items():
+                if value > 0:
+                    self._needs[model_type] = int(value)
 
     # ---- registry -----------------------------------------------------------
 

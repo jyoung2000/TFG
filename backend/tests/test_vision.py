@@ -67,19 +67,19 @@ class TestFlorencePostProcessing:
 
 class TestVramManager:
     def test_prepare_unloads_lowest_priority_first_and_keeps_florence_when_it_fits(self):
-        nvml = FakeNvml(total_mb=12288, used_mb=12288 - 6000)  # 6 GB free
+        nvml = FakeNvml(total_mb=12288, used_mb=12288 - 5000)  # 5 GB free
         manager = VramManager(nvml)
         unloaded: list[str] = []
         manager.register("dino", "S", 200, lambda: unloaded.append("dino"), priority=20)
         manager.register("clip", "M", 1000, lambda: unloaded.append("clip"), priority=40)
         manager.register("florence", "M", 1700, lambda: unloaded.append("florence"), priority=80)
-        # needs 9.5 GB + margin; 6 GB free → dino + clip (7.2) still short → florence goes too (8.9) → still short
+        # needs 8 GB + margin; 5 GB free → dino + clip (6.2) still short → florence goes too (7.9) → still short
         with pytest.raises(VramError) as excinfo:
             manager.prepare_for_render("ltx2_22B_distilled")
         assert unloaded == ["dino", "clip", "florence"]
         assert "Free" in str(excinfo.value) and "GB" in str(excinfo.value)
 
-        nvml = FakeNvml(total_mb=12288, used_mb=12288 - 9000)  # 9 GB free
+        nvml = FakeNvml(total_mb=12288, used_mb=12288 - 7500)  # 7.5 GB free
         manager = VramManager(nvml)
         unloaded.clear()
         manager.register("dino", "S", 200, lambda: unloaded.append("dino"), priority=20)
@@ -206,7 +206,7 @@ class TestRenderPaths:
         fake_services.nvml.used_mb = 3000
         released: list[str] = []
         test_state.vram.register("clip", "M", 1000, lambda: released.append("clip"), priority=40)
-        fake_services.nvml.used_mb = 12288 - 9100  # 9.1 GB free: short of 9.5 + 0.5 margin until clip (1 GB) goes
+        fake_services.nvml.used_mb = 12288 - 8200  # 8.2 GB free: short of 8 GB + 0.5 margin until clip (1 GB) goes
         r = client.post("/api/generate", json={"prompt": "peak", "duration": "2"})
         assert r.status_code == 200, r.text
         assert released == ["clip"]

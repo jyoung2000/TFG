@@ -358,21 +358,40 @@ class TrainingHandler(StateHandlerBase):
             raise HTTPError(503, "The vision stack is not available; captions can be typed by hand.")
         folder = self._dataset_dir(dataset.id)
         model = ""
+        attempted = 0
+        captioned = 0
+        first_failure = ""
         for item in dataset.items:
             if item.edited and not overwrite_edited:
                 continue
             path = folder / item.file
             if not path.is_file():
                 continue
+            attempted += 1
             try:
                 analysis = self._vision.analyze(str(path), want_regions=False, want_tags=False, want_depth=False)
             except Exception as exc:  # noqa: BLE001 - one bad image must not stop the pass
                 logger.info("Caption failed for %s: %s", path, exc)
+                first_failure = first_failure or str(exc)
                 continue
-            text = analysis.caption.text.strip() if analysis.caption else ""
-            model = analysis.caption.model if analysis.caption else model
-            item.caption = _with_trigger(text, dataset.trigger, dataset.preset)
+            if analysis.caption is None:
+                # Florence failed; the reason is in the analysis notes. Keep
+                # whatever caption the item had — never fabricate a
+                # trigger-only caption from a failure.
+                first_failure = first_failure or analysis.notes.get("caption", "Florence-2 returned no caption")
+                continue
+            captioned += 1
+            model = analysis.caption.model
+            item.caption = _with_trigger(analysis.caption.text.strip(), dataset.trigger, dataset.preset)
             item.edited = False
+        if attempted and not captioned:
+            # Silence here is how a broken vision stack masquerades as a
+            # captioned dataset. Say what actually happened, actionably.
+            raise HTTPError(
+                502,
+                f"Florence-2 could not caption any of the {attempted} image(s): {first_failure or 'unknown error'}. "
+                "Check Settings → Vision (Florence-2 enabled and downloadable) or type captions by hand.",
+            )
         dataset.caption_model = model
         return self._save_dataset(dataset)
 

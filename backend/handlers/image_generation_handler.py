@@ -198,6 +198,18 @@ class ImageGenerationHandler(StateHandlerBase):
         if self._generation.is_generation_running():
             raise HTTPError(409, "Generation already in progress")
 
+        # Same rule as video: missing weights are an explicit Models-tab
+        # download, never a silent side effect of a render (wgp.py would
+        # otherwise auto-download the checkpoint on load).
+        model_type = self._config.wangp_image_model_type
+        if self._wangp_bridge.weights_installed(model_type) is False:
+            raise HTTPError(
+                409,
+                f"The local image model '{model_type}' has no downloaded weights yet. "
+                "Download it first in the Models tab (Model Library → Local · WanGP models) — "
+                "a render never starts a checkpoint download on its own.",
+            )
+
         width = (req.width // 16) * 16
         height = (req.height // 16) * 16
         num_images = max(1, min(12, req.numImages))
