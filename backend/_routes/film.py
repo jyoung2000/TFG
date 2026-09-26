@@ -198,6 +198,17 @@ def route_add_asset_reference(
     return AssetResponse(asset=handler.film.add_asset_reference(project_id, asset_id, req))
 
 
+@router.delete("/projects/{project_id}/assets/{asset_id}/references", response_model=AssetResponse)
+def route_delete_asset_reference(
+    project_id: str,
+    asset_id: str,
+    path: str,
+    handler: AppHandler = Depends(get_state_service),
+) -> AssetResponse:
+    """Remove one reference image (by its relative path) and delete the file."""
+    return AssetResponse(asset=handler.film.delete_asset_reference(project_id, asset_id, path))
+
+
 # ---- Scenes ------------------------------------------------------------
 
 

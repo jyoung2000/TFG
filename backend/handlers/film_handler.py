@@ -349,9 +349,16 @@ class FilmHandler(StateHandlerBase):
             asset = project.asset(asset_id)
             if asset is None:
                 raise HTTPError(404, f"Asset not found: {asset_id}")
-            updates = {key: value for key, value in req.model_dump().items() if value is not None and key != "clear_seed_lock"}
+            updates = {
+                key: value
+                for key, value in req.model_dump().items()
+                if value is not None and key not in ("clear_seed_lock", "style_guide")
+            }
             for key, value in updates.items():
                 setattr(asset, key, value)
+            if req.style_guide is not None:
+                # Assign the model, not its dump, so the field stays typed.
+                asset.style_guide = req.style_guide
             if req.clear_seed_lock:
                 asset.seed_lock = None
             asset.updated_at = now_ms()
@@ -391,6 +398,25 @@ class FilmHandler(StateHandlerBase):
             asset.updated_at = now_ms()
             self._save(project)
             return asset
+
+    def delete_asset_reference(self, project_id: str, asset_id: str, path: str) -> FilmAsset:
+        """Remove one reference image from the asset and delete its file."""
+        with self.lock:
+            project = self._load(project_id)
+            asset = project.asset(asset_id)
+            if asset is None:
+                raise HTTPError(404, f"Asset not found: {asset_id}")
+            if path not in asset.reference_images:
+                raise HTTPError(404, f"Reference not found on {asset.name}: {path}")
+            asset.reference_images = [p for p in asset.reference_images if p != path]
+            asset.updated_at = now_ms()
+            self._save(project)
+        # File IO outside the lock; a missing file is not an error.
+        try:
+            self._store.resolve_media_path(project_id, path).unlink(missing_ok=True)
+        except FilmStoreError:
+            pass
+        return asset
 
     # ---- Scenes ----------------------------------------------------------
 

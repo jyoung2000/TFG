@@ -343,6 +343,28 @@
   (route + tickLoraDownloads), routes/jobs.ts (tickJobs skips lora downloads), server.ts; e2e/train.spec.ts,
   docs/TRAINING.md, skills/tfg/SKILL.md.
 
+## Post-PR follow-up: Assets tab redesign (consistency-first, New-asset wizard)
+- D-050: AssetsPanel is now a view router (`grid | detail | wizard`, local state) over `frontend/views/film/assets/`:
+  pure contract helpers in `consistency.ts` (REF/GUIDE/LORA/SEED, `assetStatus`, sheet-image matching by view token
+  in the filename, `inheritedPrompt` mirroring backend `film_prompt.py` order — continuity_notes is NOT inherited,
+  so the preview omits it), `AssetGrid` (rail filters), `AssetCard` (pips/badges/palette), `AssetDetail` (sheet hero
+  with the single `data-testid="reference-sheet"` button, checklist Consistency Kit keeping every aria-label and the
+  explainer sentence e2e asserts, editable style guide, used-in-shots chips), `NewAssetWizard` +
+  `useNewAssetPipeline` (client-side sequencing of createAsset → addAssetReference → generateAssetStyleGuide →
+  referenceSheet | 4 sample looks for style; per-step retry; cancel deletes or keeps the partial asset). Engine is a
+  read-only indicator from `film.settings.media_provider` — image models are project-global, no fake toggle.
+- Backend deltas (the only two): `UpdateAssetRequest.style_guide` (assigned as a model, not a dump, in
+  `film_handler.update_asset`) and `DELETE /projects/{id}/assets/{id}/references?path=…` (removes the entry, unlinks
+  the file outside the lock). Mock mirrors both; asset kit endpoints got a 250 ms delay so wizard states are visible;
+  mock style-guide now also fills description/appearance and style_prompt for style assets, like the backend.
+- Hermes finding folded in: `RequestsLoraFetcher.download` now refuses redirects that leave https.
+- Files: frontend/views/film/AssetsPanel.tsx + frontend/views/film/assets/{consistency,consistency.test}.ts,
+  {shared,AssetCard,AssetGrid,AssetDetail,StyleGuideEditor,NewAssetWizard}.tsx, useNewAssetPipeline.ts;
+  frontend/lib/film-api.ts (deleteAssetReference); backend film/film_api_types.py, handlers/film_handler.py,
+  _routes/film.py, services/lora_fetcher/requests_fetcher.py, tests/test_film_api.py; devtools/ui-mock/routes/film.ts;
+  e2e/assets.spec.ts.
+
 ## Next step
 Nothing pending in this session. Real-GPU acceptance (docs/RTX_4070_TEST_MATRIX.md) and `pnpm build:win` need the 4070
-machine; a live `hermes mcp test tfg` needs a Hermes install. Watch the PR for review comments.
+machine; a live `hermes mcp test tfg` needs a Hermes install. Watch the PR for review comments. Hermes audit PR #2
+(scoped to 64bb6a3) is open into hermes-review; the LoRA-download feature and this redesign are newer than its scope.

@@ -17,6 +17,7 @@ from film.film_models import (
     CompositionScene,
     FilmAsset,
     FilmAssetKind,
+    FilmAssetStyleGuide,
     FilmPose,
     FilmProject,
     FilmProjectSettings,
@@ -81,6 +82,8 @@ class UpdateAssetRequest(BaseModel):
     prop_details: str | None = None
     style_prompt: str | None = None
     continuity_notes: str | None = None
+    #: Manual style-guide edits (traits/palette/mood/prompt) persist too.
+    style_guide: FilmAssetStyleGuide | None = None
 
 
 class AssetResponse(BaseModel):

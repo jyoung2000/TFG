@@ -16,6 +16,10 @@ import { seedProject } from '../seed'
 
 const now = () => Date.now()
 
+/** A short, visible "the AI is working" pause for the asset-kit endpoints,
+ *  so pipeline spinners and tile states are observable (and e2e-testable). */
+const pipelineDelay = () => new Promise<void>(resolve => setTimeout(resolve, 250))
+
 function findScene(project: FilmProject, sceneId: string): FilmScene {
   const scene = project.scenes.find(s => s.id === sceneId)
   if (!scene) throw new MockHttpError(404, `Scene not found: ${sceneId}`)
@@ -176,8 +180,23 @@ export function registerFilmRoutes(router: Router, store: Store, clipUrl: string
     }),
   )
 
-  router.post('/api/film/projects/:projectId/assets/:assetId/reference-sheet', req =>
-    store.mutate(state => {
+  router.delete('/api/film/projects/:projectId/assets/:assetId/references', req =>
+    store.mutate(() => {
+      const p = project(req.params.projectId)
+      const asset = p.assets.find(a => a.id === req.params.assetId)
+      if (!asset) throw new MockHttpError(404, `Asset not found: ${req.params.assetId}`)
+      const path = req.query.get('path') ?? ''
+      if (!asset.reference_images.includes(path)) throw new MockHttpError(404, `Reference not found on ${asset.name}: ${path}`)
+      asset.reference_images = asset.reference_images.filter(r => r !== path)
+      asset.updated_at = now()
+      touched(p)
+      return { asset }
+    }),
+  )
+
+  router.post('/api/film/projects/:projectId/assets/:assetId/reference-sheet', async req => {
+    await pipelineDelay()
+    return store.mutate(state => {
       const p = project(req.params.projectId)
       const asset = p.assets.find(a => a.id === req.params.assetId)
       if (!asset) throw new MockHttpError(404, `Asset not found: ${req.params.assetId}`)
@@ -192,11 +211,12 @@ export function registerFilmRoutes(router: Router, store: Store, clipUrl: string
       asset.updated_at = now()
       touched(p)
       return { asset, prompts, seed, reference_paths: paths }
-    }),
-  )
+    })
+  })
 
-  router.post('/api/film/projects/:projectId/assets/:assetId/generate-reference', req =>
-    store.mutate(state => {
+  router.post('/api/film/projects/:projectId/assets/:assetId/generate-reference', async req => {
+    await pipelineDelay()
+    return store.mutate(state => {
       const p = project(req.params.projectId)
       const asset = p.assets.find(a => a.id === req.params.assetId)
       if (!asset) throw new MockHttpError(404, `Asset not found: ${req.params.assetId}`)
@@ -218,11 +238,12 @@ export function registerFilmRoutes(router: Router, store: Store, clipUrl: string
         model: (p.settings.image_model || state.settings.defaultImageModel || 'local-image').trim(),
         reference_path: path,
       }
-    }),
-  )
+    })
+  })
 
-  router.post('/api/film/projects/:projectId/assets/:assetId/style-guide', req =>
-    store.mutate(() => {
+  router.post('/api/film/projects/:projectId/assets/:assetId/style-guide', async req => {
+    await pipelineDelay()
+    return store.mutate(() => {
       const p = project(req.params.projectId)
       const asset = p.assets.find(a => a.id === req.params.assetId)
       if (!asset) throw new MockHttpError(404, `Asset not found: ${req.params.assetId}`)
@@ -233,11 +254,15 @@ export function registerFilmRoutes(router: Router, store: Store, clipUrl: string
         mood: 'cinematic, tactile and grounded',
         recommended_prompt: `${asset.name}: ${asset.appearance || asset.description || 'preserve the visible shape, materials and color palette'}`,
       }
+      // Mirror the backend: the vision pass also fills the derived fields.
+      if (!asset.description) asset.description = `${asset.name}, as seen in the reference image`
+      if (asset.kind === 'character' && !asset.appearance) asset.appearance = 'matches the reference image (mock analysis)'
+      if (asset.kind === 'style') asset.style_prompt = asset.style_guide.recommended_prompt
       asset.updated_at = now()
       touched(p)
       return { asset }
-    }),
-  )
+    })
+  })
 
   // ---- Scenes ----
 

@@ -76,6 +76,10 @@ class RequestsLoraFetcher:
         except requests.exceptions.RequestException as exc:
             raise LoraFetchError(f"Download failed to start: {exc}") from exc
         with response:
+            # Redirects are allowed (Civitai/HF hand off to CDNs) but must
+            # stay on https — a hostile link must not bounce us to http.
+            if not str(response.url).lower().startswith("https://"):
+                raise LoraFetchError("The download redirected off https — refusing to fetch it")
             if response.status_code in (401, 403):
                 raise LoraFetchError("The host refused the download (401/403) — this file likely needs an API key; paste one in the key field (it is used once, never saved)")
             if response.status_code >= 400:

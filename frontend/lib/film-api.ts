@@ -155,6 +155,13 @@ export const filmApi = {
       },
     ).then(r => r.asset),
 
+  /** Remove one reference image (by relative path) and delete its file. */
+  deleteAssetReference: (projectId: string, assetId: string, path: string) =>
+    request<{ asset: FilmAsset }>(
+      `/api/film/projects/${enc(projectId)}/assets/${enc(assetId)}/references?path=${enc(path)}`,
+      { method: 'DELETE' },
+    ).then(r => r.asset),
+
   createScene: (projectId: string, data: Partial<FilmScene>) =>
     request<FilmScene>(`/api/film/projects/${enc(projectId)}/scenes`, {
       method: 'POST',
