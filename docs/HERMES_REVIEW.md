@@ -129,7 +129,7 @@ of a 4070 preset are contradicted by the app's own guard. Image generation needs
 - **Path safety.** Every file-serving route funnels through a `*_path` resolver with a membership check plus `is_within`. Traversal probes (`..`, absolute, drive-letter, double-encoded) were all rejected.
 - **Lock discipline.** No lock is held across `pipeline.generate` or a subprocess. The documented lock→validate→heavy→write pattern is real.
 - **The licence guard**, once scoped correctly, is a genuinely good idea.
-- **The gates themselves are well-built** — 827 backend tests, 53 frontend, 28 e2e, and a pyright-strict backend. The problem was never their quality; it was that the documented setup made them unreachable.
+- **The gates themselves are well-built** — 828 backend tests, 53 frontend, 28 e2e, and a pyright-strict backend. The problem was never their quality; it was that the documented setup made them unreachable.
 
 ## Rework (fixable in place)
 
@@ -164,7 +164,7 @@ Seven commits on `review/hermes`, each with the evidence that proved it:
 | Fix | Evidence |
 |---|---|
 | UTF-8 BOM on the two `.ps1` files that failed to parse | `[Parser]::ParseFile` over all 10 scripts: 2 failed before, 0 after; backend boots |
-| `--extra test` in `setup:dev:win` / `.sh` | `python -m pytest` went from `No module named pytest` to running 827 tests |
+| `--extra test` in `setup:dev:win` / `.sh` | `python -m pytest` went from `No module named pytest` to running 828 tests |
 | 12 GB guard uses a server-side VRAM floor | regression test proved red (`assert 200 == 400`) before the fix, green after |
 | Licence guard skips gitignored build dirs | planted a real AGPL header in `backend/` — still fails the test, so the guard is not weakened |
 | pyright resolved from the venv | gate went from `FileNotFoundError` to actually running (0 errors) |
