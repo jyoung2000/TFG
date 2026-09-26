@@ -105,7 +105,7 @@ finding. Do not skip an area because it looks fine.
   the root, symlinks, Windows drive letters.
 - Auth: which paths accept a query token (`app_factory._is_media_path`) —
   is every one read-only and backend-resolved? Is `/mcp` protected? Does
-  `system_shutdown` really only accept loopback, and is exposing it as an
+  `health_shutdown` (POST /api/system/shutdown) really only accept loopback, and is exposing it as an
   MCP tool acceptable (the skill says exclude it — should the server
   refuse it over MCP outright)?
 - Job store terminal states: every handler that opens a History job must
@@ -248,7 +248,7 @@ black-box tester in addition to the source audit:
   and video, 3D storyboard → Deliver, Train → apply LoRA, Consistency Kit)
   on the 4070 and record History metrics into the acceptance matrix.
 - Use your terminal tool for the gates; keep your own notes in
-  `docs/DEBUG_REPORT_hermes.md`. Exclude `system_shutdown` from the server
+  `docs/DEBUG_REPORT_hermes.md`. Exclude `health_shutdown` from the server
   config unless you are testing it deliberately.
 
 ## Adapter: GPT‑6 Sol

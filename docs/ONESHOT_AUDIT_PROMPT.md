@@ -122,7 +122,7 @@ mcp_servers:
     env:
       TFG_BACKEND_URL: "http://127.0.0.1:8000"
     tools:
-      exclude: [system_shutdown]
+      exclude: [health_shutdown]
 ```
 
 Run the gates and record the baseline before changing anything:

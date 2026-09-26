@@ -405,6 +405,10 @@
 - Hermes PR #2 notes for later: Florence-2 fails because `Florence2Processor` needs `tokenizer.image_token`, absent
   in the locked transformers (a transformers/model-version decision); the 4070 preset copy promises a ~1 min clip
   and Florence captions; reproduce-loop scores don't converge and never report missing the 0.9 target.
+- Round-2 audit prompt: docs/HERMES_ROUND2_PROMPT.md (video-first; proves the env split incl. `uv sync` then
+  render; explicit 19.4 GB download consent; measure peak − baseline and set/commit `vram_render_needs_mb`; U2/U3/U4/U6
+  + render halves of U7/U9/U12; audit f4508cb..db98b4a; Florence root cause; 4070 preset copy). Live prompts/ADR 0004
+  now name the real shutdown tool `health_shutdown` (round-1 F-030).
 
 ## Next step
 Nothing pending in this session. Real-GPU acceptance (docs/RTX_4070_TEST_MATRIX.md) and `pnpm build:win` need the 4070

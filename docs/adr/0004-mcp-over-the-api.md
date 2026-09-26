@@ -21,4 +21,4 @@ tools-only method set of spec revision 2025-06-18.
 
 - A new route is a new tool; `test_mcp.py` asserts the count matches.
 - File-serving routes return metadata over MCP, bytes over HTTP.
-- `system_shutdown` is a tool; the skill tells clients to exclude it.
+- `health_shutdown` (from `POST /api/system/shutdown`, tagged `health`) is a tool; the skill tells clients to exclude it. (Originally written as `system_shutdown`, which matched nothing — see the Hermes review, F-030.)

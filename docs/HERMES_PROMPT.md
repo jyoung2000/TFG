@@ -64,7 +64,7 @@ mcp_servers:
     env:
       TFG_BACKEND_URL: "http://127.0.0.1:8000"
     tools:
-      exclude: [system_shutdown]
+      exclude: [health_shutdown]
 ```
 
 Launch the desktop app once too (`pnpm dev`): does the *RTX 4070 · 12 GB*

@@ -21,7 +21,7 @@ predate this snapshot; read them for background, then trust `README.md`,
 
 - `hermes-mcp-config` — add the TFG server to `~/.hermes/config.yaml`
   (stdio: `<repo>\backend\.venv\Scripts\python.exe <repo>\backend\tfg_mcp.py`,
-  env `TFG_BACKEND_URL=http://127.0.0.1:8000`, `tools.exclude: [system_shutdown]`),
+  env `TFG_BACKEND_URL=http://127.0.0.1:8000`, `tools.exclude: [health_shutdown]`),
   then `hermes mcp test tfg` (~214 tools).
 - `hermes-skill-installation` — install `<repo>\skills\tfg` from the local
   clone (the GitHub shortcut reads the default branch, which lacks it).
@@ -107,7 +107,7 @@ predate this snapshot; read them for background, then trust `README.md`,
   Python process lifecycle.
 - `code-audit` / `codebase-audit` / `security-and-hardening` — the source
   sweeps listed in the audit prompt: path policy on every file-serving
-  route, auth exemptions, upload limits, `system_shutdown` over MCP,
+  route, auth exemptions, upload limits, `health_shutdown` over MCP,
   locks held across renders/subprocesses/HTTP, History jobs without a
   terminal state.
 - `api-and-interface-design` and `documentation-and-adrs` — the
