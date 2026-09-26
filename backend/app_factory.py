@@ -17,6 +17,7 @@ from _routes._errors import HTTPError
 from _routes.film import router as film_router
 from _routes.film_director import router as film_director_router
 from _routes.knowledge import router as knowledge_router
+from _routes.jobs import router as jobs_router
 from _routes.prompts import router as prompts_router
 from _routes.shot_library import router as shot_library_router
 from _routes.timeline import router as timeline_router
@@ -53,6 +54,9 @@ def _is_media_path(path: str) -> bool:
     file the backend resolved itself — never a path the caller supplied.
     """
     if path == "/api/film/output":
+        return True
+    # EventSource cannot send headers either; the job feed is read-only.
+    if path == "/api/jobs/events":
         return True
     if path.startswith("/api/shot-library/") and path.endswith("/preview"):
         return True
@@ -152,6 +156,7 @@ def create_app(
     app.include_router(film_director_router)
     app.include_router(video_analysis_router)
     app.include_router(knowledge_router)
+    app.include_router(jobs_router)
     app.include_router(prompts_router)
     app.include_router(shot_library_router)
     app.include_router(timeline_router)

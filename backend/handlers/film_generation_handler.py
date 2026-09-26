@@ -55,6 +55,7 @@ from handlers.base import StateHandlerBase
 from handlers.film_handler import FilmHandler
 from handlers.knowledge_handler import KnowledgeHandler
 from handlers.generation_handler import GenerationHandler
+from handlers.jobs_handler import JobsHandler
 from handlers.image_generation_handler import ImageGenerationHandler
 from handlers.video_generation_handler import VideoGenerationHandler, get_allowed_durations
 from runtime_config.model_download_specs import MODEL_FILE_ORDER, resolve_required_model_types
@@ -204,6 +205,8 @@ class _QueuedShotJob:
     shot_title: str
     kind: VersionKind
     version_number: int
+    #: History job id ("" when the jobs handler is not attached).
+    job_id: str = ""
 
     def to_payload(self, status: str) -> QueuedJob:
         return QueuedJob(
@@ -232,8 +235,10 @@ class FilmGenerationHandler(StateHandlerBase):
         wangp_bridge: WanGPBridge | None = None,
         media_runner: MediaRunner | None = None,
         image_generation_handler: ImageGenerationHandler | None = None,
+        jobs: JobsHandler | None = None,
     ) -> None:
         super().__init__(state, lock)
+        self._jobs = jobs
         self._film = film_handler
         self._video_generation = video_generation_handler
         self._generation = generation_handler
@@ -326,12 +331,36 @@ class FilmGenerationHandler(StateHandlerBase):
                 shot_title=shot.title,
                 kind=req.kind,
                 version_number=version.number,
+                job_id=self._open_history_job(project, shot, version),
             )
             self._queue.append(job)
             self._ensure_worker()
             return QueueShotResponse(
                 status="queued", version_number=version.number, warnings=warnings
             )
+
+    def _open_history_job(self, project: FilmProject, shot: FilmShot, version: ShotVersion) -> str:
+        if self._jobs is None:
+            return ""
+        return self._jobs.queue(
+            "video_gen",
+            title=f"{shot.title or 'Shot'} · v{version.number} ({version.kind})",
+            model=version.model,
+            provider=self._media_selection(project.id)[0],
+            seed=version.seed,
+            prompt=version.prompt,
+            negative_prompt=version.negative_prompt,
+            params={
+                "kind": version.kind,
+                "resolution": version.resolution,
+                "fps": version.fps,
+                "duration_seconds": version.duration_seconds,
+                "version_number": version.number,
+            },
+            inputs={"capture_path": shot.capture_path} if shot.capture_path else {},
+            project_id=project.id,
+            shot_id=shot.id,
+        ).id
 
     def queue_batch(self, project_id: str, req: BatchGenerateRequest) -> BatchGenerateResponse:
         with self.lock:
@@ -635,7 +664,7 @@ class FilmGenerationHandler(StateHandlerBase):
                 settings.locked_seed = seed
         started = time.perf_counter()
         try:
-            response = self._video_generation.generate(request)
+            response = self._video_generation.generate(request, job_id=job.job_id or None, seed=seed)
         except HTTPError as exc:
             self._finish_version(job, status="failed", error=str(exc.detail), telemetry=self._telemetry(started))
             return
@@ -783,6 +812,9 @@ class FilmGenerationHandler(StateHandlerBase):
             settings = self.state.app_settings.model_copy(deep=True)
             self._hosted_cancel = False
             self._hosted_progress = (0, f"Preparing {provider} job")
+        if job.job_id and self._jobs is not None:
+            self._jobs.annotate(job.job_id, provider=provider, model=model, seed=seed)
+            self._jobs.mark_running(job.job_id, phase=f"Preparing {provider} job")
         api_key = settings.media_api_key(provider)
         started = time.perf_counter()
         if not api_key:
@@ -848,6 +880,9 @@ class FilmGenerationHandler(StateHandlerBase):
     def _report_hosted_progress(self, percent: int, phase: str) -> None:
         with self.lock:
             self._hosted_progress = (percent, phase)
+            active = self._active
+        if active is not None and active.job_id and self._jobs is not None:
+            self._jobs.progress(active.job_id, percent, phase)
 
     def _clear_hosted(self) -> None:
         with self.lock:
@@ -993,6 +1028,24 @@ class FilmGenerationHandler(StateHandlerBase):
                 version.negative_prompt,
                 version.generation_seconds,
             )
+            job_metrics: dict[str, object] = {}
+            if version.generation_seconds is not None:
+                job_metrics["seconds"] = version.generation_seconds
+            if version.peak_vram_gb is not None:
+                job_metrics["peak_vram_mb"] = round(version.peak_vram_gb * 1024)
+            if version.gpu_name:
+                job_metrics["gpu_name"] = version.gpu_name
+
+        if job.job_id and self._jobs is not None:
+            metrics = {k: v for k, v in job_metrics.items()}
+            if status == "complete" and output_path:
+                self._jobs.complete(job.job_id, [output_path], metrics=metrics)
+                if seed_used is not None:
+                    self._jobs.annotate(job.job_id, seed=seed_used)
+            elif status == "cancelled":
+                self._jobs.mark_cancelled(job.job_id, reason=error or "Cancelled")
+            else:
+                self._jobs.fail(job.job_id, error or "Generation failed", metrics=metrics)
 
         # Outside the lock: learning is advisory and must never hold up a render
         # or fail one. The handler itself declines if the user switched it off.

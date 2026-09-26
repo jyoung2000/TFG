@@ -70,6 +70,7 @@ from film.prompt_brief import brief_from_analysis
 from film.prompt_compiler import compile_for
 from film.video_analysis_store import VideoAnalysisStore, VideoAnalysisStoreError
 from handlers.base import StateHandlerBase
+from handlers.jobs_handler import JobsHandler
 from server_utils.path_policy import PathPolicyError, require_absolute_file
 from services.media_probe.media_probe import MediaProbe
 from services.interfaces import TaskRunner
@@ -100,8 +101,11 @@ class VideoAnalysisHandler(StateHandlerBase):
         probe: MediaProbe,
         task_runner: TaskRunner,
         film_store: FilmStore,
+        jobs: JobsHandler | None = None,
     ) -> None:
         super().__init__(state, lock)
+        self._jobs = jobs
+        self._analysis_jobs: dict[str, str] = {}
         self._store = VideoAnalysisStore(root)
         self._probe = probe
         self._tasks = task_runner
@@ -213,6 +217,32 @@ class VideoAnalysisHandler(StateHandlerBase):
 
     # ---- stage 2: detect shots ------------------------------------------
 
+    def _open_job(self, analysis: VideoAnalysis, phase: str) -> None:
+        if self._jobs is None:
+            return
+        job = self._jobs.start(
+            "analysis",
+            title=f"{phase.capitalize()}: {analysis.title}",
+            model=analysis.model,
+            inputs={"analysis_id": analysis.id, "video_path": analysis.source.path},
+            params={"depth": analysis.depth, "sensitivity": analysis.sensitivity, "phase": phase},
+        )
+        self._analysis_jobs[analysis.id] = job.id
+
+    def _close_job(self, analysis: VideoAnalysis) -> None:
+        job_id = self._analysis_jobs.pop(analysis.id, "")
+        if not job_id or self._jobs is None:
+            return
+        if analysis.stage == "cancelled":
+            self._jobs.mark_cancelled(job_id)
+        elif analysis.stage == "failed":
+            self._jobs.fail(job_id, analysis.error or analysis.message)
+        else:
+            root = self._store.directory(analysis.id)
+            frames = [str(root / shot.frames[0].path) for shot in analysis.shots if shot.frames]
+            self._jobs.annotate(job_id, model=analysis.model, inputs={"shots": len(analysis.shots)})
+            self._jobs.complete(job_id, frames[:12])
+
     def detect(self, analysis_id: str) -> VideoAnalysis:
         """Find shot boundaries and extract a still for each. Deterministic."""
         analysis = self._load(analysis_id)
@@ -222,6 +252,14 @@ class VideoAnalysisHandler(StateHandlerBase):
         analysis.error = ""
         analysis.message = "Reading the video"
         self._save(analysis)
+        self._open_job(analysis, "detect")
+        try:
+            return self._detect(analysis)
+        finally:
+            self._close_job(analysis)
+
+    def _detect(self, analysis: VideoAnalysis) -> VideoAnalysis:
+        analysis_id = analysis.id
 
         try:
             signatures = self._probe.sample_signatures(
@@ -324,7 +362,14 @@ class VideoAnalysisHandler(StateHandlerBase):
         analysis.progress = 0.0
         analysis.error = ""
         self._save(analysis)
+        self._open_job(analysis, "analyze")
+        try:
+            return self._analyze(analysis, provider)
+        finally:
+            self._close_job(analysis)
 
+    def _analyze(self, analysis: VideoAnalysis, provider: LLMProvider | None) -> VideoAnalysis:
+        analysis_id = analysis.id
         total = len(analysis.shots)
         used_model = ""
         for position, shot in enumerate(analysis.shots):
@@ -768,6 +813,9 @@ class VideoAnalysisHandler(StateHandlerBase):
         analysis.progress = round(max(0.0, min(1.0, progress)), 3)
         analysis.message = message
         self._save(analysis)
+        job_id = self._analysis_jobs.get(analysis.id, "")
+        if job_id and self._jobs is not None:
+            self._jobs.progress(job_id, analysis.progress * 100, message)
 
     def recover_interrupted(self) -> int:
         """Turn jobs left running by a dead process into failures, at startup."""

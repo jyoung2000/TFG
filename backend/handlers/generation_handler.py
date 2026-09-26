@@ -7,6 +7,7 @@ from typing import Literal
 
 from api_types import CancelResponse, GenerationProgressResponse
 from handlers.base import StateHandlerBase, with_state_lock
+from handlers.jobs_handler import JobsHandler
 from state.app_state_types import (
     GenerationCancelled,
     GenerationComplete,
@@ -22,8 +23,19 @@ GenerationSlot = Literal["gpu", "api"]
 
 
 class GenerationHandler(StateHandlerBase):
+    """The one generation-at-a-time state machine, shared by every local and
+    hosted render path. When a generation carries a History job id, every
+    transition is forwarded to the jobs handler — after the app lock is
+    released, because the job store does its own (cheap) locking and thumbnail
+    work on completion must never run under the app lock."""
+
+    _jobs: JobsHandler | None = None
+
+    def attach_jobs(self, jobs: JobsHandler) -> None:
+        self._jobs = jobs
+
     @with_state_lock
-    def start_generation(self, generation_id: str) -> None:
+    def start_generation(self, generation_id: str, job_id: str = "") -> None:
         if self.is_generation_running():
             raise RuntimeError("Generation already in progress")
         if self.state.gpu_slot is None:
@@ -32,17 +44,32 @@ class GenerationHandler(StateHandlerBase):
         self.state.gpu_slot.generation = GenerationRunning(
             id=generation_id,
             progress=GenerationProgress(phase="", progress=0, current_step=0, total_steps=0),
+            job_id=job_id,
         )
 
     @with_state_lock
-    def start_api_generation(self, generation_id: str) -> None:
+    def start_api_generation(self, generation_id: str, job_id: str = "") -> None:
         if self.is_generation_running():
             raise RuntimeError("Generation already in progress")
 
         self.state.api_generation = GenerationRunning(
             id=generation_id,
             progress=GenerationProgress(phase="", progress=0, current_step=None, total_steps=None),
+            job_id=job_id,
         )
+
+    @with_state_lock
+    def running_job_id(self) -> str:
+        match self.state.gpu_slot:
+            case GpuSlot(generation=GenerationRunning(job_id=job_id)) if job_id:
+                return job_id
+            case _:
+                pass
+        match self.state.api_generation:
+            case GenerationRunning(job_id=job_id):
+                return job_id
+            case _:
+                return ""
 
     @with_state_lock
     def _gpu_generation(self) -> GenerationState | None:
@@ -83,8 +110,20 @@ class GenerationHandler(StateHandlerBase):
             case _:
                 return isinstance(self.state.api_generation, GenerationCancelled)
 
-    @with_state_lock
     def update_progress(
+        self,
+        phase: str,
+        progress: int,
+        current_step: int | None = None,
+        total_steps: int | None = None,
+    ) -> None:
+        job_id = self.running_job_id()
+        self._update_progress_locked(phase, progress, current_step, total_steps)
+        if job_id and self._jobs is not None:
+            self._jobs.progress(job_id, progress, phase)
+
+    @with_state_lock
+    def _update_progress_locked(
         self,
         phase: str,
         progress: int,
@@ -113,8 +152,15 @@ class GenerationHandler(StateHandlerBase):
             case _:
                 return
 
-    @with_state_lock
     def cancel_generation(self) -> CancelResponse:
+        job_id = self.running_job_id()
+        response = self._cancel_generation_locked()
+        if job_id and self._jobs is not None and response.status == "cancelling":
+            self._jobs.mark_cancelled(job_id)
+        return response
+
+    @with_state_lock
+    def _cancel_generation_locked(self) -> CancelResponse:
         match self._running_slot():
             case "gpu":
                 match self.state.gpu_slot:
@@ -149,8 +195,15 @@ class GenerationHandler(StateHandlerBase):
 
         return CancelResponse(status="no_active_generation")
 
-    @with_state_lock
     def complete_generation(self, result: str | list[str]) -> None:
+        job_id = self.running_job_id()
+        self._complete_generation_locked(result)
+        if job_id and self._jobs is not None:
+            outputs = [result] if isinstance(result, str) else list(result)
+            self._jobs.complete(job_id, outputs)
+
+    @with_state_lock
+    def _complete_generation_locked(self, result: str | list[str]) -> None:
         match self._running_slot():
             case "gpu":
                 match self.state.gpu_slot:
@@ -167,8 +220,14 @@ class GenerationHandler(StateHandlerBase):
             case _:
                 return
 
-    @with_state_lock
     def fail_generation(self, error: str) -> None:
+        job_id = self.running_job_id()
+        self._fail_generation_locked(error)
+        if job_id and self._jobs is not None:
+            self._jobs.fail(job_id, error)
+
+    @with_state_lock
+    def _fail_generation_locked(self, error: str) -> None:
         match self._running_slot():
             case "gpu":
                 match self.state.gpu_slot:

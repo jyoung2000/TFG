@@ -11,6 +11,7 @@ import time
 from api_types import RetakeRequest, RetakeResponse
 from _routes._errors import HTTPError
 from handlers.base import StateHandlerBase
+from handlers.jobs_handler import JobsHandler
 from handlers.generation_handler import GenerationHandler
 from handlers.pipelines_handler import PipelinesHandler
 from handlers.text_handler import TextHandler
@@ -32,8 +33,10 @@ class RetakeHandler(StateHandlerBase):
         pipelines_handler: PipelinesHandler,
         text_handler: TextHandler,
         outputs_dir: Path,
+        jobs: JobsHandler | None = None,
     ) -> None:
         super().__init__(state, lock)
+        self._jobs = jobs
         self._ltx_api_client = ltx_api_client
         self._config = config
         self._generation = generation_handler
@@ -140,10 +143,22 @@ class RetakeHandler(StateHandlerBase):
         seed = self._resolve_seed()
         output_path = self._outputs_dir / f"retake_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{generation_id}.mp4"
         regenerate_video, regenerate_audio = self._resolve_retake_mode(mode)
+        job_id = ""
+        if self._jobs is not None:
+            job_id = self._jobs.start(
+                "video_gen",
+                title=f"Retake: {prompt[:70]}",
+                model="ltx2-retake",
+                provider="local",
+                seed=seed,
+                prompt=prompt,
+                params={"mode": mode, "start_time": start_time, "end_time": end_time},
+                inputs={"video_path": str(video_file)},
+            ).id
 
         try:
             pipeline_state = self._pipelines.load_retake_pipeline(distilled=True)
-            self._generation.start_generation(generation_id)
+            self._generation.start_generation(generation_id, job_id=job_id)
             self._generation.update_progress("loading_model", 5, 0, 1)
             self._generation.update_progress("inference", 15, 0, 1)
 
@@ -171,15 +186,21 @@ class RetakeHandler(StateHandlerBase):
             self._generation.update_progress("complete", 100, 1, 1)
             self._generation.complete_generation(str(output_path))
             return RetakeResponse(status="complete", video_path=str(output_path))
-        except HTTPError:
+        except HTTPError as exc:
             self._generation.fail_generation("Retake generation failed")
+            if job_id and self._jobs is not None:
+                self._jobs.fail(job_id, str(exc.detail))
             raise
         except Exception as exc:
             if self._generation.is_generation_cancelled() or "cancelled" in str(exc).lower():
                 # A cancelled run must not surface as an error in the state machine:
                 self._generation.cancel_generation()
+                if job_id and self._jobs is not None:
+                    self._jobs.mark_cancelled(job_id)
                 return RetakeResponse(status="cancelled")
             self._generation.fail_generation(str(exc))
+            if job_id and self._jobs is not None:
+                self._jobs.fail(job_id, str(exc))
             raise HTTPError(500, f"Generation error: {exc}") from exc
         finally:
             self._text.clear_api_embeddings()

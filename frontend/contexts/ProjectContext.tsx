@@ -1,5 +1,12 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react'
 import type { Project, Asset, AssetTake, ViewType, ProjectTab, Timeline } from '../types/project'
+
+export interface QuickPreset {
+  prompt: string
+  negativePrompt: string
+  params: Record<string, unknown>
+  seed: number | null
+}
 import { createDefaultTimeline } from '../types/project'
 import { logger } from '../lib/logger'
 
@@ -44,6 +51,16 @@ interface ProjectContextType {
   openQuickMode: () => void
   /** Analyse an existing video into an editable storyboard. */
   openAnalyzeVideo: () => void
+  /** The unified History tab. */
+  openHistory: () => void
+  /** Open Reproduce for an image or video analysis; an empty id opens the view without a selection. */
+  openAnalysis: (kind: 'image' | 'video', id: string) => void
+  /** Set by openAnalysis, consumed (and cleared) by the analysis view that mounts next. */
+  pendingAnalysis: { kind: 'image' | 'video'; id: string } | null
+  clearPendingAnalysis: () => void
+  /** Prompt + parameters handed to Quick mode from History ("open in Quick"). */
+  quickPreset: QuickPreset | null
+  setQuickPreset: (preset: QuickPreset | null) => void
   
   // Cross-view communication (editor → gen space)
   genSpaceEditImageUrl: string | null
@@ -531,6 +548,20 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
     setCurrentProjectId(null)
     setCurrentView('analyze')
   }, [])
+
+  const openHistory = useCallback(() => {
+    setCurrentProjectId(null)
+    setCurrentView('history')
+  }, [])
+
+  const [pendingAnalysis, setPendingAnalysis] = useState<{ kind: 'image' | 'video'; id: string } | null>(null)
+  const openAnalysis = useCallback((kind: 'image' | 'video', id: string) => {
+    setPendingAnalysis(id ? { kind, id } : null)
+    setCurrentProjectId(null)
+    setCurrentView(kind === 'image' ? 'analyze-image' : 'analyze')
+  }, [])
+  const clearPendingAnalysis = useCallback(() => setPendingAnalysis(null), [])
+  const [quickPreset, setQuickPreset] = useState<QuickPreset | null>(null)
   
   return (
     <ProjectContext.Provider value={{
@@ -564,6 +595,12 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
       openPlayground,
       openQuickMode,
       openAnalyzeVideo,
+      openHistory,
+      openAnalysis,
+      pendingAnalysis,
+      clearPendingAnalysis,
+      quickPreset,
+      setQuickPreset,
       genSpaceEditImageUrl,
       setGenSpaceEditImageUrl,
       genSpaceEditMode,

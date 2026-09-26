@@ -15,6 +15,7 @@ import { Playground } from './views/Playground'
 import { QuickMode } from './views/QuickMode'
 import { AnalyzeVideo } from './views/AnalyzeVideo'
 import { AnalyzeImage } from './views/AnalyzeImage'
+import { HistoryView } from './views/history/HistoryView'
 import { LaunchGate } from './components/FirstRunSetup'
 import { PythonSetup } from './components/PythonSetup'
 import { ProcessingDashboard } from './components/ProcessingDashboard'
@@ -443,6 +444,8 @@ function AppContent() {
         return <AnalyzeVideo />
       case 'analyze-image':
         return <AnalyzeImage />
+      case 'history':
+        return <HistoryView />
       default:
         return <Home />
     }

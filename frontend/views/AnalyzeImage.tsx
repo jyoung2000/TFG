@@ -18,7 +18,7 @@ function Preview({ id, path, alt }: { id: string; path: string; alt: string }) {
 }
 
 export function AnalyzeImage() {
-  const { goHome } = useProjects()
+  const { goHome, pendingAnalysis, clearPendingAnalysis } = useProjects()
   const [items, setItems] = useState<ImageAnalysis[]>([])
   const [job, setJob] = useState<ImageAnalysis | null>(null)
   const [busy, setBusy] = useState('')
@@ -28,6 +28,13 @@ export function AnalyzeImage() {
   useEffect(() => { setDraft(job?.prompt || '') }, [job?.id, job?.prompt])
   const refresh = useCallback(async () => setItems(await imageAnalysisApi.list()), [])
   useEffect(() => { void refresh().catch(() => undefined) }, [refresh])
+  // Opened from History with a specific analysis: load it, then forget the request.
+  useEffect(() => {
+    if (!pendingAnalysis || pendingAnalysis.kind !== 'image') return
+    const id = pendingAnalysis.id
+    clearPendingAnalysis()
+    void imageAnalysisApi.get(id).then(setJob).catch(err => setError(err instanceof Error ? err.message : String(err)))
+  }, [pendingAnalysis, clearPendingAnalysis])
   const run = async (name: string, task: () => Promise<ImageAnalysis>) => {
     setBusy(name)
     setError('')

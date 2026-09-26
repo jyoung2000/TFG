@@ -431,3 +431,28 @@ class IcLoraGenerateRequest(BaseModel):
     cfg_guidance_scale: float = 1.0
     negative_prompt: str = ""
     images: list[IcLoraImageInput] = Field(default_factory=_default_ic_lora_images)
+
+
+# ============================================================
+# Jobs / History
+# ============================================================
+
+
+class LegacyQuickEntry(BaseModel):
+    """One entry of the pre-1.0 Quick-mode history that lived in localStorage."""
+
+    prompt: str
+    negative_prompt: str = ""
+    seed: int | None = None
+    video_path: str
+    created_at: int = 0
+    params: dict[str, object] = Field(default_factory=dict)
+
+
+class ImportJobsRequest(BaseModel):
+    entries: list[LegacyQuickEntry]
+
+
+class ImportJobsResponse(BaseModel):
+    imported: int
+    skipped: int

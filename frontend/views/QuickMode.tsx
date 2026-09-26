@@ -34,12 +34,13 @@ import { LtxLogo } from '../components/LtxLogo'
 import { Button } from '../components/ui/button'
 import { requestSettings } from '../lib/error-messages'
 import { toFileUrl } from '../lib/file-url'
+import { filmOutputUrl } from '../lib/film-api'
+import { importLegacyQuickHistory, jobsApi } from '../lib/jobs-api'
 import type { GenerationSettings } from '../components/SettingsPanel'
 import type { DirectorChatMessage, DirectorContextDetails } from '../types/film'
 
 const LOCAL_RESOLUTIONS = ['540p', '720p', '1080p'] as const
 const LOCAL_MAX_DURATION: Record<string, number> = { '540p': 20, '720p': 10, '1080p': 5 }
-const HISTORY_KEY = 'ltx-quick-history'
 const HISTORY_LIMIT = 24
 
 interface QuickSettings {
@@ -81,23 +82,38 @@ const DEFAULT_QUICK_SETTINGS: QuickSettings = {
   audio: false,
 }
 
-function loadHistory(): QuickResult[] {
-  try {
-    const raw = localStorage.getItem(HISTORY_KEY)
-    if (!raw) return []
-    const parsed: unknown = JSON.parse(raw)
-    return Array.isArray(parsed) ? (parsed as QuickResult[]).filter(r => r && typeof r.videoPath === 'string') : []
-  } catch {
-    return []
+/** Recent quick videos come from the unified job store; nothing lives in localStorage any more. */
+async function loadHistory(): Promise<QuickResult[]> {
+  const { jobs } = await jobsApi.list({ kind: 'video_gen', status: 'complete', limit: HISTORY_LIMIT * 2 })
+  const results: QuickResult[] = []
+  for (const job of jobs) {
+    if (job.project_id) continue // film shots belong to their storyboard
+    const first = job.outputs.find(o => o.kind === 'video') ?? job.outputs[0]
+    if (!first) continue
+    const params = job.params
+    const settings: QuickSettings = {
+      model: params.model === 'pro' ? 'pro' : 'fast',
+      duration: Number(params.duration) || DEFAULT_QUICK_SETTINGS.duration,
+      videoResolution: typeof params.resolution === 'string' && params.resolution ? params.resolution : DEFAULT_QUICK_SETTINGS.videoResolution,
+      fps: Number(params.fps) || DEFAULT_QUICK_SETTINGS.fps,
+      aspectRatio: params.aspectRatio === '9:16' ? '9:16' : '16:9',
+      audio: params.audio === 'true' || params.audio === true,
+    }
+    const imagePath = typeof job.inputs.image_path === 'string' ? job.inputs.image_path : ''
+    results.push({
+      id: job.id,
+      prompt: job.prompt,
+      negativePrompt: job.negative_prompt,
+      settings,
+      seed: job.seed,
+      videoPath: first.path,
+      videoUrl: await filmOutputUrl(first.path),
+      createdAt: job.created_at,
+      referenceImage: imagePath ? toFileUrl(imagePath) : null,
+    })
+    if (results.length >= HISTORY_LIMIT) break
   }
-}
-
-function saveHistory(items: QuickResult[]) {
-  try {
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(items.slice(0, HISTORY_LIMIT)))
-  } catch (e) {
-    logger.warn(`Could not persist quick history: ${e}`)
-  }
+  return results
 }
 
 function toGenerationSettings(quick: QuickSettings): GenerationSettings {
@@ -129,7 +145,7 @@ function projectNameFromPrompt(prompt: string): string {
  * as Scene 1 / Shot 1 / version 1.
  */
 export function QuickMode() {
-  const { goHome, createProject, addAsset, updateAsset, openProject, projects } = useProjects()
+  const { goHome, createProject, addAsset, updateAsset, openProject, projects, openHistory, quickPreset, setQuickPreset } = useProjects()
   const { shouldVideoGenerateWithLtxApi, hasDirectorProvider } = useAppSettings()
   const generation = useGeneration()
 
@@ -140,7 +156,20 @@ export function QuickMode() {
   const [chatInput, setChatInput] = useState('')
   const [chatBusy, setChatBusy] = useState(false)
   const [showContext, setShowContext] = useState<number | null>(null)
-  const [history, setHistory] = useState<QuickResult[]>(() => loadHistory())
+  const [history, setHistory] = useState<QuickResult[]>([])
+  const reloadHistory = useCallback(async () => {
+    try {
+      setHistory(await loadHistory())
+    } catch (e) {
+      logger.warn(`Could not load quick history: ${e}`)
+    }
+  }, [])
+  useEffect(() => {
+    void (async () => {
+      try { await importLegacyQuickHistory() } catch (e) { logger.warn(`Legacy history import skipped: ${e}`) }
+      await reloadHistory()
+    })()
+  }, [reloadHistory])
   const [result, setResult] = useState<QuickResult | null>(null)
   const [actionBusy, setActionBusy] = useState<string | null>(null)
   const [actionNote, setActionNote] = useState('')
@@ -202,13 +231,9 @@ export function QuickMode() {
       referenceImage: submitted?.referenceImage ?? null,
     }
     setResult(entry)
-    setHistory(prev => {
-      const next = [entry, ...prev].slice(0, HISTORY_LIMIT)
-      saveHistory(next)
-      return next
-    })
+    void reloadHistory()
     setActionNote('')
-  }, [generation.isGenerating, generation.videoUrl, generation.videoPath, generation.videoSeed, prompt, negativePrompt, effectiveSettings])
+  }, [generation.isGenerating, generation.videoUrl, generation.videoPath, generation.videoSeed, prompt, negativePrompt, effectiveSettings, reloadHistory])
 
   const runGeneration = useCallback(
     async (overridePrompt?: string, overrideSettings?: QuickSettings, overrideNegative?: string, overrideReference?: string | null) => {
@@ -366,6 +391,23 @@ export function QuickMode() {
     },
     [],
   )
+
+  // "Open in Quick" from History hands over a prompt and its parameters.
+  useEffect(() => {
+    if (!quickPreset) return
+    setPrompt(quickPreset.prompt)
+    setNegativePrompt(quickPreset.negativePrompt)
+    const params = quickPreset.params
+    setSettings(s => ({
+      ...s,
+      model: params.model === 'pro' ? 'pro' : 'fast',
+      duration: Number(params.duration) || s.duration,
+      videoResolution: typeof params.resolution === 'string' && params.resolution ? params.resolution : s.videoResolution,
+      fps: Number(params.fps) || s.fps,
+      aspectRatio: params.aspectRatio === '9:16' ? '9:16' : '16:9',
+    }))
+    setQuickPreset(null)
+  }, [quickPreset, setQuickPreset])
 
   const selectClass =
     'bg-zinc-800 border border-zinc-700 rounded-lg px-2 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-violet-600'
@@ -601,13 +643,10 @@ export function QuickMode() {
               <div className="flex items-center gap-2 text-[10px] text-zinc-500 uppercase tracking-wide">
                 <History className="h-3 w-3" /> Recent quick videos
                 <button
-                  onClick={() => {
-                    setHistory([])
-                    saveHistory([])
-                  }}
-                  className="ml-auto text-zinc-600 hover:text-red-400 normal-case tracking-normal"
+                  onClick={openHistory}
+                  className="ml-auto text-zinc-500 hover:text-violet-300 normal-case tracking-normal"
                 >
-                  clear
+                  open History
                 </button>
               </div>
               <div className="space-y-1">

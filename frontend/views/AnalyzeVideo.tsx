@@ -39,7 +39,7 @@ import {
  * with no provider at all, so the first three steps never wait on a key.
  */
 export function AnalyzeVideo() {
-  const { setCurrentView, openProject } = useProjects()
+  const { setCurrentView, openProject, pendingAnalysis, clearPendingAnalysis } = useProjects()
   const { setCurrentProjectId } = useProjects()
   const { refresh } = useFilm()
   const { settings } = useAppSettings()
@@ -79,6 +79,14 @@ export function AnalyzeVideo() {
   useEffect(() => {
     void loadList()
   }, [loadList])
+
+  // Opened from History with a specific analysis: load it, then forget the request.
+  useEffect(() => {
+    if (!pendingAnalysis || pendingAnalysis.kind !== 'video') return
+    const id = pendingAnalysis.id
+    clearPendingAnalysis()
+    void videoAnalysisApi.get(id).then(setCurrent).catch(e => logger.warn(`Could not open analysis ${id}: ${e}`))
+  }, [pendingAnalysis, clearPendingAnalysis])
 
   // While a stage is running the backend owns the truth, so poll it rather
   // than guessing progress on this side.

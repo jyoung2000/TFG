@@ -1,6 +1,6 @@
 import { APP_NAME } from "../lib/brand";
 import { useState } from 'react'
-import { Clapperboard, FileVideo, Image as ImageIcon, Plus, Folder, MoreVertical, Trash2, Pencil, Sparkles, Zap } from 'lucide-react'
+import { Clapperboard, FileVideo, Image as ImageIcon, Plus, Folder, MoreVertical, Trash2, Pencil, Sparkles, Zap, History } from 'lucide-react'
 import { useProjects } from '../contexts/ProjectContext'
 import { LtxLogo } from '../components/LtxLogo'
 import { Button } from '../components/ui/button'
@@ -110,7 +110,7 @@ function ProjectCard({ project, onOpen, onDelete, onRename }: {
 export function Home() {
   const { projects, createProject, deleteProject, renameProject, openProject, openPlayground, openQuickMode, openAnalyzeVideo } =
     useProjects()
-  const { setCurrentView } = useProjects()
+  const { setCurrentView, openHistory } = useProjects()
   const [isCreating, setIsCreating] = useState(false)
   const [createTarget, setCreateTarget] = useState<ProjectTab>('gen-space')
   const [newProjectName, setNewProjectName] = useState('')
@@ -209,6 +209,13 @@ export function Home() {
             >
               <Sparkles className="h-4 w-4" />
               Playground
+            </button>
+            <button
+              onClick={openHistory}
+              className="w-full px-3 py-2 rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-white text-left text-sm flex items-center gap-2 transition-colors"
+            >
+              <History className="h-4 w-4" />
+              History
             </button>
           </div>
           

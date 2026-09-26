@@ -50,6 +50,7 @@ from film.media_providers import (
     media_provider,
 )
 from handlers.base import StateHandlerBase
+from handlers.jobs_handler import JobsHandler
 from runtime_config.model_download_specs import MODEL_FILE_ORDER
 from runtime_config.runtime_config import RuntimeConfig
 from services.interfaces import GpuInfo, HTTPClient, HttpTimeoutError, ModelDownloader, TaskRunner
@@ -102,6 +103,7 @@ class _Download:
     message: str = ""
     cancel_requested: bool = False
     started_ms: int = field(default_factory=now_ms)
+    job_id: str = ""
 
 
 class ModelLibraryHandler(StateHandlerBase):
@@ -117,8 +119,10 @@ class ModelLibraryHandler(StateHandlerBase):
         gpu_info: GpuInfo,
         task_runner: TaskRunner,
         model_downloader: ModelDownloader,
+        jobs: JobsHandler | None = None,
     ) -> None:
         super().__init__(state, lock)
+        self._jobs = jobs
         self._config = config
         self._wangp = wangp_bridge
         self._http = http
@@ -716,6 +720,7 @@ class ModelLibraryHandler(StateHandlerBase):
         chosen = quantised or targets
         destination = root / "ckpts"
         state = _Download(provider="wangp", model_id=model_id, files_total=len(chosen), message="Starting…")
+        state.job_id = self._open_download_job(state, [f"{repo}/{path}" for repo, path in chosen])
         with self.lock:
             self._download = state
         self._task_runner.run_background(
@@ -733,6 +738,7 @@ class ModelLibraryHandler(StateHandlerBase):
                 if state.cancel_requested:
                     state.status = "cancelled"
                     state.message = "Cancelled"
+                    self._close_download_job(state)
                     return
                 state.message = f"Downloading {filename}"
 
@@ -740,6 +746,9 @@ class ModelLibraryHandler(StateHandlerBase):
                 with self.lock:
                     state.downloaded_bytes = _base + downloaded
                     state.total_bytes = max(state.total_bytes, _base + total)
+                    done, whole, message = state.downloaded_bytes, state.total_bytes, state.message
+                if state.job_id and self._jobs is not None and whole > 0:
+                    self._jobs.progress(state.job_id, done / whole * 100, message)
 
             try:
                 self._downloader.download_file(
@@ -758,6 +767,7 @@ class ModelLibraryHandler(StateHandlerBase):
             state.status = "complete"
             state.message = f"{state.model_id} installed"
             state.total_bytes = max(state.total_bytes, state.downloaded_bytes)
+        self._close_download_job(state, [str(destination / filename) for _, filename in targets])
         self._cache.pop("wangp", None)
         self.remember("wangp", state.model_id)
 
@@ -767,6 +777,7 @@ class ModelLibraryHandler(StateHandlerBase):
         if not root:
             raise HTTPError(400, "Set the local endpoint base URL (for example http://127.0.0.1:11434/v1) first")
         state = _Download(provider="ollama", model_id=model_id, files_total=1, message=f"Pulling {model_id}…")
+        state.job_id = self._open_download_job(state, [model_id])
         with self.lock:
             self._download = state
         self._task_runner.run_background(
@@ -797,6 +808,7 @@ class ModelLibraryHandler(StateHandlerBase):
             state.status = "complete"
             state.files_done = 1
             state.message = f"{model_id} pulled"
+        self._close_download_job(state)
         self._cache.clear()
         self.remember("ollama", model_id)
 
@@ -805,6 +817,30 @@ class ModelLibraryHandler(StateHandlerBase):
         with self.lock:
             state.status = "failed"
             state.error = error
+        self._close_download_job(state)
+
+    def _open_download_job(self, state: _Download, files: list[str]) -> str:
+        if self._jobs is None:
+            return ""
+        return self._jobs.start(
+            "download",
+            title=state.model_id,
+            model=state.model_id,
+            provider=state.provider,
+            params={"files": files},
+        ).id
+
+    def _close_download_job(self, state: _Download, outputs: list[str] | None = None) -> None:
+        if not state.job_id or self._jobs is None:
+            return
+        with self.lock:
+            status, error = state.status, state.error
+        if status == "complete":
+            self._jobs.complete(state.job_id, outputs or [])
+        elif status == "cancelled":
+            self._jobs.mark_cancelled(state.job_id)
+        else:
+            self._jobs.fail(state.job_id, error or "Download failed")
 
 
 def _wangp_task(architecture: str) -> LibraryTask | None:

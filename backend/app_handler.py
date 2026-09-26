@@ -32,6 +32,7 @@ from handlers import (
 )
 from film.media_runner import MediaRunner
 from film.image_recreation import ImageRecreation
+from handlers.jobs_handler import JobsHandler
 from runtime_config.runtime_config import RuntimeConfig
 from services.wangp_bridge import WanGPBridge
 from services.media_probe import MediaProbe
@@ -52,6 +53,9 @@ from services.interfaces import (
     TextEncoder,
     VideoProcessor,
 )
+from _routes._errors import HTTPError
+from api_types import GenerateImageRequest, GenerateVideoRequest
+from services.job_store.job_models import Job
 from state.app_state_types import AppState, StartupPending, TextEncoderState
 
 
@@ -138,6 +142,15 @@ class AppHandler:
         )
         self.settings.load_settings(default_settings)
 
+        # The unified job store: every handler below that does work reports
+        # to it, and the History tab reads nothing else.
+        self.jobs = JobsHandler(
+            database=config.settings_file.parent / "jobs.sqlite",
+            thumbs_dir=config.outputs_dir / "jobs" / "thumbs",
+            outputs_dir=config.outputs_dir,
+            probe=media_probe,
+        )
+
         self.models = ModelsHandler(
             state=self.state,
             lock=self._lock,
@@ -152,6 +165,7 @@ class AppHandler:
             model_downloader=model_downloader,
             task_runner=task_runner,
             config=config,
+            jobs=self.jobs,
         )
 
         self.text = TextHandler(
@@ -176,6 +190,7 @@ class AppHandler:
         )
 
         self.generation = GenerationHandler(state=self.state, lock=self._lock)
+        self.generation.attach_jobs(self.jobs)
 
         self.video_generation = VideoGenerationHandler(
             state=self.state,
@@ -189,6 +204,7 @@ class AppHandler:
             camera_motion_prompts=config.camera_motion_prompts,
             default_negative_prompt=config.default_negative_prompt,
             wangp_bridge=self.wangp_bridge,
+            jobs=self.jobs,
         )
 
         self.image_generation = ImageGenerationHandler(
@@ -200,6 +216,7 @@ class AppHandler:
             config=config,
             zit_api_client=zit_api_client,
             wangp_bridge=self.wangp_bridge,
+            jobs=self.jobs,
         )
 
         self.health = HealthHandler(
@@ -222,6 +239,7 @@ class AppHandler:
             gpu_info=gpu_info,
             task_runner=task_runner,
             model_downloader=model_downloader,
+            jobs=self.jobs,
         )
 
         self.runtime_policy = RuntimePolicyHandler(config=config)
@@ -241,6 +259,7 @@ class AppHandler:
             pipelines_handler=self.pipelines,
             text_handler=self.text,
             outputs_dir=config.outputs_dir,
+            jobs=self.jobs,
         )
 
         self.ic_lora = IcLoraHandler(
@@ -253,6 +272,7 @@ class AppHandler:
             ic_lora_model_downloader=ic_lora_model_downloader,
             ic_lora_dir=config.ic_lora_dir,
             outputs_dir=config.outputs_dir,
+            jobs=self.jobs,
         )
 
         self.film = FilmHandler(
@@ -274,6 +294,7 @@ class AppHandler:
             probe=media_probe,
             task_runner=task_runner,
             film_store=self.film.store,
+            jobs=self.jobs,
         )
 
         self.timeline = TimelineHandler(
@@ -309,6 +330,7 @@ class AppHandler:
             wangp_bridge=self.wangp_bridge,
             media_runner=MediaRunner(http),
             image_generation_handler=self.image_generation,
+            jobs=self.jobs,
         )
         # The queue reports render outcomes to the knowledge engine; the film
         # handler reports what the user did with them.
@@ -328,10 +350,56 @@ class AppHandler:
             root=config.outputs_dir / "image_analyses",
             image_generation=self.image_generation,
             image_model=config.wangp_image_model_type if config.wangp_enabled else "Z-Image",
+            jobs=self.jobs,
         )
+
+        # History controls: cancel and re-run per job kind. Film-queued shots
+        # cancel through the queue; everything else through the single-slot
+        # generation state machine.
+        def _cancel_video(job: Job) -> bool:
+            if job.project_id and job.shot_id:
+                try:
+                    self.film_generation.cancel_job(job.shot_id)
+                    return True
+                except HTTPError:
+                    pass
+            return self.generation.cancel_generation().status == "cancelling"
+
+        def _cancel_generation(_: Job) -> bool:
+            return self.generation.cancel_generation().status == "cancelling"
+
+        def _cancel_download(job: Job) -> bool:
+            status = self.model_library.download_status()
+            if status.active:
+                self.model_library.cancel_download()
+                return True
+            return False
+
+        def _cancel_analysis(job: Job) -> bool:
+            analysis_id = str(job.inputs.get("analysis_id", ""))
+            if analysis_id:
+                self.video_analysis.cancel(analysis_id)
+                return True
+            return False
+
+        def _rerun_video(job: Job) -> None:
+            self.video_generation.generate(GenerateVideoRequest.model_validate(job.params), job_id=job.id, seed=job.seed)
+
+        def _rerun_image(job: Job) -> None:
+            self.image_generation.generate(GenerateImageRequest.model_validate(job.params), job_id=job.id, seed=job.seed)
+
+        self.jobs.register_canceller("video_gen", _cancel_video)
+        self.jobs.register_canceller("image_gen", _cancel_generation)
+        self.jobs.register_canceller("image_reproduce", _cancel_generation)
+        self.jobs.register_canceller("video_reproduce", _cancel_generation)
+        self.jobs.register_canceller("download", _cancel_download)
+        self.jobs.register_canceller("analysis", _cancel_analysis)
+        self.jobs.register_rerunner("video_gen", _rerun_video)
+        self.jobs.register_rerunner("image_gen", _rerun_image)
 
         self.downloads.cleanup_downloading_dir()
         self.models.refresh_available_files()
+        self.jobs.recover_interrupted()
         self.film_generation.recover_interrupted_jobs()
 
 

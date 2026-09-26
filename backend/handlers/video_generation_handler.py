@@ -17,6 +17,7 @@ from PIL import Image
 from api_types import GenerateVideoRequest, GenerateVideoResponse, ImageConditioningInput, VideoCameraMotion
 from _routes._errors import HTTPError
 from handlers.base import StateHandlerBase
+from handlers.jobs_handler import JobsHandler
 from handlers.generation_handler import GenerationHandler
 from handlers.pipelines_handler import PipelinesHandler
 from handlers.text_handler import TextHandler
@@ -69,8 +70,10 @@ class VideoGenerationHandler(StateHandlerBase):
         camera_motion_prompts: dict[str, str],
         default_negative_prompt: str,
         wangp_bridge: WanGPBridge,
+        jobs: JobsHandler | None = None,
     ) -> None:
         super().__init__(state, lock)
+        self._jobs = jobs
         self._generation = generation_handler
         self._pipelines = pipelines_handler
         self._text = text_handler
@@ -81,15 +84,91 @@ class VideoGenerationHandler(StateHandlerBase):
         self._default_negative_prompt = default_negative_prompt
         self._wangp_bridge = wangp_bridge
 
-    def generate(self, req: GenerateVideoRequest) -> GenerateVideoResponse:
+    def generate(
+        self,
+        req: GenerateVideoRequest,
+        *,
+        job_id: str | None = None,
+        seed: int | None = None,
+    ) -> GenerateVideoResponse:
+        """Render one video. `job_id` reuses a History job another handler
+        already opened (the film queue); `seed` pins the seed for a re-run."""
+        if self._generation.is_generation_running():
+            raise HTTPError(409, "Generation already in progress")
+        tracked = self._open_job(req, job_id, seed)
+        try:
+            response = self._dispatch(req, tracked, seed)
+        except HTTPError as exc:
+            self._close_job(tracked, error=str(exc.detail))
+            raise
+        except Exception as exc:
+            self._close_job(tracked, error=str(exc))
+            raise
+        self._close_job(tracked, response=response)
+        return response
+
+    def _open_job(self, req: GenerateVideoRequest, job_id: str | None, seed: int | None) -> str:
+        if self._jobs is None:
+            return ""
         if self._config.wangp_enabled:
-            return self._generate_via_wangp(req)
+            provider, model = "wangp", self._config.wangp_video_model_type
+        elif should_video_generate_with_ltx_api(
+            force_api_generations=self._config.force_api_generations, settings=self.state.app_settings
+        ):
+            provider, model = "ltx-api", FORCED_API_MODEL_MAP.get(req.model.strip().lower(), req.model)
+        else:
+            provider, model = "local", f"ltx2-{req.model}"
+        params = req.model_dump()
+        inputs = {k: v for k, v in (("image_path", req.imagePath), ("audio_path", req.audioPath)) if v}
+        if job_id:
+            self._jobs.annotate(
+                job_id, model=model, provider=provider, prompt=req.prompt, negative_prompt=req.negativePrompt,
+                params=params, inputs=inputs, seed=seed,
+            )
+            self._jobs.mark_running(job_id, phase="starting")
+            return job_id
+        job = self._jobs.start(
+            "video_gen",
+            title=req.prompt[:80],
+            model=model,
+            provider=provider,
+            seed=seed,
+            prompt=req.prompt,
+            negative_prompt=req.negativePrompt,
+            params=params,
+            inputs=inputs,
+        )
+        return job.id
+
+    def _close_job(self, job_id: str, *, response: GenerateVideoResponse | None = None, error: str = "") -> None:
+        """Guarantee a terminal state whatever path the render took."""
+        if not job_id or self._jobs is None:
+            return
+        if response is not None:
+            if response.status == "complete" and response.video_path:
+                self._jobs.complete(job_id, [response.video_path])
+            elif response.status == "cancelled":
+                self._jobs.mark_cancelled(job_id)
+            else:
+                self._jobs.fail(job_id, f"Generation ended with status {response.status}")
+            if response.seed is not None:
+                self._jobs.annotate(job_id, seed=response.seed)
+        else:
+            self._jobs.fail(job_id, error or "Generation failed")
+
+    def _note_seed(self, job_id: str, seed: int) -> None:
+        if job_id and self._jobs is not None:
+            self._jobs.annotate(job_id, seed=seed)
+
+    def _dispatch(self, req: GenerateVideoRequest, job_id: str, seed_override: int | None) -> GenerateVideoResponse:
+        if self._config.wangp_enabled:
+            return self._generate_via_wangp(req, job_id=job_id, seed_override=seed_override)
 
         if should_video_generate_with_ltx_api(
             force_api_generations=self._config.force_api_generations,
             settings=self.state.app_settings,
         ):
-            return self._generate_forced_api(req)
+            return self._generate_forced_api(req, job_id=job_id)
 
         if self._generation.is_generation_running():
             raise HTTPError(409, "Generation already in progress")
@@ -101,7 +180,7 @@ class VideoGenerationHandler(StateHandlerBase):
 
         audio_path = normalize_optional_path(req.audioPath)
         if audio_path:
-            return self._generate_a2v(req, duration, fps, audio_path=audio_path)
+            return self._generate_a2v(req, duration, fps, audio_path=audio_path, job_id=job_id, seed_override=seed_override)
 
         logger.info("Resolution %s - using fast pipeline", resolution)
 
@@ -133,11 +212,12 @@ class VideoGenerationHandler(StateHandlerBase):
             logger.info("Image: %s -> %sx%s", image_path, width, height)
 
         generation_id = self._make_generation_id()
-        seed = self._resolve_seed()
+        seed = seed_override if seed_override is not None else self._resolve_seed()
+        self._note_seed(job_id, seed)
 
         try:
             self._pipelines.load_gpu_pipeline("fast", should_warm=False)
-            self._generation.start_generation(generation_id)
+            self._generation.start_generation(generation_id, job_id=job_id)
 
             output_path = self.generate_video(
                 prompt=req.prompt,
@@ -260,7 +340,14 @@ class VideoGenerationHandler(StateHandlerBase):
                 os.unlink(temp_image_path)
 
     def _generate_a2v(
-        self, req: GenerateVideoRequest, duration: int, fps: int, *, audio_path: str
+        self,
+        req: GenerateVideoRequest,
+        duration: int,
+        fps: int,
+        *,
+        audio_path: str,
+        job_id: str = "",
+        seed_override: int | None = None,
     ) -> GenerateVideoResponse:
         if req.model != "pro":
             logger.warning("A2V local requested with model=%s; A2V always uses pro pipeline", req.model)
@@ -282,13 +369,14 @@ class VideoGenerationHandler(StateHandlerBase):
         if image_path:
             image = self._prepare_image(image_path, width, height)
 
-        seed = self._resolve_seed()
+        seed = seed_override if seed_override is not None else self._resolve_seed()
+        self._note_seed(job_id, seed)
 
         generation_id = self._make_generation_id()
 
         try:
             a2v_state = self._pipelines.load_a2v_pipeline()
-            self._generation.start_generation(generation_id)
+            self._generation.start_generation(generation_id, job_id=job_id)
 
             enhanced_prompt = req.prompt + self._camera_motion_prompts.get(req.cameraMotion, "")
             neg = req.negativePrompt if req.negativePrompt else self._default_negative_prompt
@@ -396,12 +484,12 @@ class VideoGenerationHandler(StateHandlerBase):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         return self._outputs_dir / f"ltx2_video_{timestamp}_{self._make_generation_id()}.mp4"
 
-    def _generate_forced_api(self, req: GenerateVideoRequest) -> GenerateVideoResponse:
+    def _generate_forced_api(self, req: GenerateVideoRequest, *, job_id: str = "") -> GenerateVideoResponse:
         if self._generation.is_generation_running():
             raise HTTPError(409, "Generation already in progress")
 
         generation_id = self._make_generation_id()
-        self._generation.start_api_generation(generation_id)
+        self._generation.start_api_generation(generation_id, job_id=job_id)
 
         audio_path = normalize_optional_path(req.audioPath)
         image_path = normalize_optional_path(req.imagePath)
@@ -553,12 +641,14 @@ class VideoGenerationHandler(StateHandlerBase):
         output_path.write_bytes(video_bytes)
         return output_path
 
-    def _generate_via_wangp(self, req: GenerateVideoRequest) -> GenerateVideoResponse:
+    def _generate_via_wangp(
+        self, req: GenerateVideoRequest, *, job_id: str = "", seed_override: int | None = None
+    ) -> GenerateVideoResponse:
         if self._generation.is_generation_running():
             raise HTTPError(409, "Generation already in progress")
 
         generation_id = self._make_generation_id()
-        self._generation.start_api_generation(generation_id)
+        self._generation.start_api_generation(generation_id, job_id=job_id)
 
         duration = self._parse_forced_numeric_field(req.duration, "INVALID_DURATION")
         fps = self._parse_forced_numeric_field(req.fps, "INVALID_FPS")
@@ -571,7 +661,8 @@ class VideoGenerationHandler(StateHandlerBase):
 
             settings = self.state.app_settings.model_copy(deep=True)
             steps = 8 if req.model.strip().lower() == "fast" else max(1, settings.pro_model.steps)
-            seed = self._resolve_seed()
+            seed = seed_override if seed_override is not None else self._resolve_seed()
+            self._note_seed(job_id, seed)
 
             output_path = self._wangp_bridge.generate_video(
                 prompt=req.prompt,

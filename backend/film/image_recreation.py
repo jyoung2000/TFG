@@ -135,10 +135,43 @@ def score_images(reference: Image.Image, candidate: Image.Image) -> float:
 
 
 class ImageRecreation:
-    def __init__(self, root: Path, image_generation: Any, image_model: str) -> None:
+    def __init__(self, root: Path, image_generation: Any, image_model: str, jobs: Any = None) -> None:
         self.root = root
         self._image_generation = image_generation
         self.image_model = image_model
+        #: JobsHandler when History tracking is wired (typed loosely to keep this module light).
+        self._jobs = jobs
+
+    def _track(self, job: ImageAnalysis, title: str, candidates: int, rounds: int) -> str:
+        if self._jobs is None:
+            return ""
+        return self._jobs.start(
+            "image_reproduce",
+            title=f"{title}: {job.title or job.id}",
+            model=job.image_model,
+            prompt=job.prompt,
+            params={"candidates": candidates, "rounds": rounds},
+            inputs={"analysis_id": job.id, "reference": str(self._dir(job.id) / job.source_path)},
+        ).id
+
+    def _tracked(self, job_id: str, work: Any) -> ImageAnalysis:
+        """Run `work()` as `job_id`; child image jobs inherit the lineage."""
+        if not job_id or self._jobs is None:
+            return work()
+        try:
+            with self._jobs.parent(job_id):
+                result: ImageAnalysis = work()
+        except HTTPError as exc:
+            self._jobs.fail(job_id, str(exc.detail))
+            raise
+        except Exception as exc:
+            self._jobs.fail(job_id, str(exc))
+            raise
+        best = next((c for c in result.candidates if c.id == result.best_candidate_id), None)
+        outputs = [str(self._dir(result.id) / best.path)] if best else []
+        self._jobs.annotate(job_id, prompt=result.prompt, metrics={"best_score": best.score if best else 0.0})
+        self._jobs.complete(job_id, outputs, metrics={"candidates": len(result.candidates)})
+        return result
 
     def _dir(self, id: str) -> Path:
         if not id.startswith("ia-") or len(id) > 64 or not all(c.isalnum() or c == "-" for c in id):
@@ -279,14 +312,24 @@ class ImageRecreation:
         job = self.get(id)
         if len(job.candidates) >= 9:
             raise HTTPError(400, "Candidate budget exhausted")
-        job = self._render(job, job.prompt, min(candidates, 9 - len(job.candidates)))
-        if rounds > 1:
-            if provider is None:
-                raise HTTPError(400, "Vision provider required for comparison and refinement")
-            job = self.refine(id, candidates, provider)
-        return job
+        if rounds > 1 and provider is None:
+            raise HTTPError(400, "Vision provider required for comparison and refinement")
+        tracking = self._track(job, "Reproduce", candidates, rounds)
+
+        def work() -> ImageAnalysis:
+            current = self._render(job, job.prompt, min(candidates, 9 - len(job.candidates)))
+            if rounds > 1:
+                current = self._refine(id, candidates, provider)
+            return current
+
+        return self._tracked(tracking, work)
 
     def refine(self, id: str, candidates: int, provider: LLMProvider | None) -> ImageAnalysis:
+        job = self.get(id)
+        tracking = self._track(job, "Refine", candidates, 1)
+        return self._tracked(tracking, lambda: self._refine(id, candidates, provider))
+
+    def _refine(self, id: str, candidates: int, provider: LLMProvider | None) -> ImageAnalysis:
         job = self.get(id)
         if not job.best_candidate_id:
             raise HTTPError(400, "Render a candidate before refining")

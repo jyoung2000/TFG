@@ -93,10 +93,14 @@ async function collectMedia(page: Page): Promise<MediaReport> {
       let ok = decoded
       if (!decoded && !h264 && v.error?.code === 4 && src) {
         try {
-          const head = await fetch(src, { method: 'HEAD' })
-          const type = head.headers.get('content-type') ?? ''
-          ok = head.ok && type.startsWith('video/')
+          // GET rather than HEAD: mock servers and redirects often serve only GET.
+          // Abort as soon as the headers are in; the body is not needed.
+          const controller = new AbortController()
+          const response = await fetch(src, { method: 'GET', signal: controller.signal })
+          const type = response.headers.get('content-type') ?? ''
+          ok = response.ok && type.startsWith('video/')
           codecLimited = ok
+          controller.abort()
         } catch {
           ok = false
         }

@@ -16,9 +16,11 @@ import type { LibraryShot } from '../../frontend/types/shot-library'
 import type { DirectorAction } from '../../frontend/types/timeline'
 import type { AppSettings, ClearableKeyProvider } from '../../frontend/types/settings'
 import type { LibraryDownloadStatus } from '../../frontend/types/models'
+import type { Job } from '../../frontend/types/jobs'
 import { DEMO_PROJECT_ID, emptyProject, seedProject, seedSettings } from './seed'
 import { seedKnowledge } from './routes/knowledge'
 import { seedShotLibrary } from './routes/shot-library'
+import { seedJobs } from './routes/jobs'
 
 /** One simulated render, advanced by wall-clock time rather than a timer. */
 export interface MockJob extends QueuedJob {
@@ -65,6 +67,8 @@ export interface MockState {
   shotLibrary: LibraryShot[]
   /** Timeline edit history per project, each carrying its undo snapshot. */
   timelineHistory: Record<string, StoredTimelineAction[]>
+  /** The unified job store behind the History tab. */
+  historyJobs: Job[]
 }
 
 export const EMPTY_LIBRARY_DOWNLOAD: LibraryDownloadStatus = {
@@ -110,6 +114,7 @@ export function freshState(): MockState {
       project.name,
     ),
     timelineHistory: {},
+    historyJobs: seedJobs(),
     learning: { enabled: true, generation: true, approval: true, editing: true, feedback: true },
   }
 }
@@ -176,7 +181,7 @@ export class Store {
         // Stored state from an older shape would break the UI in confusing
         // ways; a missing project map is the cheapest reliable signal.
         if (parsed && typeof parsed === 'object' && parsed.projects) {
-          return { ...freshState(), ...parsed, analyses: parsed.analyses ?? {} }
+          return { ...freshState(), ...parsed, analyses: parsed.analyses ?? {}, historyJobs: parsed.historyJobs ?? seedJobs() }
         }
       }
     } catch {
