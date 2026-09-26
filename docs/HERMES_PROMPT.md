@@ -2,7 +2,7 @@
 
 Paste everything below the line into Hermes Agent as the task. The only
 other thing it needs is the repository:
-`https://github.com/jyoung2000/TFG` (branch `production`).
+`https://github.com/jyoung2000/TFG` (branch **`hermes-review`**, the frozen snapshot cut for this review).
 
 ---
 
@@ -25,7 +25,8 @@ worked that you did not observe; if you could not test a feature, say why.
 ```powershell
 git clone https://github.com/jyoung2000/TFG.git
 cd TFG
-git checkout production
+git checkout hermes-review
+powershell -ExecutionPolicy Bypass -File scripts\verify-hermes-ready.ps1   # every line must say ok
 corepack enable; corepack prepare pnpm@latest --activate   # Node 18+ required
 pnpm setup:dev:win        # installs deps, backend venv (uv), clones Wan2GP into .\Wan2GP
 ```
@@ -54,9 +55,10 @@ mcp_servers:
       exclude: [system_shutdown]
 ```
 
-`hermes mcp test tfg` must list ~214 tools. Install the skill:
-`hermes skills install jyoung2000/TFG/skills/tfg` (or the local path
-`<repo>\skills\tfg`). If anything in this setup step fails or is unclear,
+`hermes mcp test tfg` must list ~214 tools. Install the skill from your
+clone: `hermes skills install <repo>\skills\tfg` (the GitHub shortcut
+`jyoung2000/TFG/skills/tfg` reads the repository's default branch, which
+does not carry this snapshot yet — use the local path). If anything in this setup step fails or is unclear,
 that is your **first finding** — a user hits it before anything else.
 
 Also launch the desktop app once (`pnpm dev`) and note the first-run
@@ -121,7 +123,7 @@ Then an overall section:
 ## 4. Report
 
 Write `docs/HERMES_REVIEW.md` in the repository (commit on a branch
-`review/hermes` and open a PR into `production`; do not merge). Structure:
+`review/hermes` and open a PR into `hermes-review`; do not merge). Structure:
 
 1. Setup experience (with what failed, if anything).
 2. Scenario table (U1–U16: grade, verdict, seconds, peak VRAM, notes).

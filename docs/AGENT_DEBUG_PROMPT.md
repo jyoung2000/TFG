@@ -11,7 +11,7 @@ passes over the same code find more than one; merge their reports at the end.
 ## Shared brief (paste verbatim)
 
 You are auditing and fixing **TFG** (repo `jyoung2000/TFG`, branch
-`production`): an Electron + React + FastAPI desktop app for local AI image
+`hermes-review`, the frozen snapshot; `production` tracks the same history): an Electron + React + FastAPI desktop app for local AI image
 and video generation on an RTX 4070 (12 GB), with Reproduce (image/video →
 ShotSpec → render/score/refine), a 3D storyboard, LoRA training, a unified
 History, a container stack, a remote-backend mode, tiered provider
