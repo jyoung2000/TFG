@@ -35,6 +35,17 @@
 - VF-004: ui-mock persists state in `node_modules/.cache/ui-mock/state.json`; e2e resets via `POST /api/__ui_mock/reset` per test.
 
 ## Decisions
+- D-012 (phase 3): ShotSpec (`film/shot_spec.py` ↔ `frontend/types/shotspec.ts`) is the only analysis→generation
+  contract; fusion precedence measured/depth/flow > florence > clip > vlm, `user` locks absolute.
+- D-013: new compile targets `ltx2`, `wan22`, `z_image` (own tagged target, no longer an sdxl alias),
+  `qwen_image_edit`, `cloud_generic`; styles `weighted|json|negative_only`; `compile_from_spec` returns
+  prompt + 4070-safe params (`_TARGET_DEFAULTS`) + conditioning (start_frame/refs/depth).
+- D-014: knowledge hints require ≥3 winning events with ≥0.3 spec-key Jaccard overlap on the same target;
+  phrases = comma segments shared by ≥2 winners; params = median steps/guidance of winners.
+- D-015: imex-next has no LICENSE file but declares MIT in its README; only design + small pure functions ported,
+  recorded honestly in INTEGRATED_UPSTREAMS.md.
+- D-016: Open-Generative-AI catalog (499 models) extracted to `backend/film/data/model_catalog.json` (~200 KB)
+  as capability facts only; used by `capabilities_for()` and phase-9 tiering.
 - D-008 (phase 2, ADR 0001): vision runs **in-process by default** behind `VisionService`; the sidecar
   (`backend/vision_worker.py`, own env) is selected when `TFG_VISION_URL` answers `/health`. Reason: transformers 4.57
   loads Florence-2/CLIP/Depth-Anything/DINOv2 natively (no trust_remote_code), WanGP pins could not be inspected here.
@@ -91,5 +102,14 @@
   server.ts; e2e/settings.spec.ts; scripts/ensure-vision.{ps1,sh}, scripts/make-samples.py, samples/; docs/adr/0001-*.md,
   docs/INTEGRATED_UPSTREAMS.md, NOTICES.md
 
+## Files touched (phase 3)
+- backend/film/{shot_spec,shot_spec_fusion,prompt_templates}.py, film/shot_vocabulary.py (lens/aperture/vocab tables,
+  describe_camera), film/prompt_compiler.py (targets, styles, compile_from_spec, PromptHints), film/prompt_api_types.py,
+  film/knowledge_{models,store,api_types}.py (candidate kinds, seed/target/spec_keys/metrics, schema v2),
+  handlers/{knowledge,prompt}_handler.py, _routes/{knowledge,prompts}.py, film/media_providers.py (catalog),
+  film/data/model_catalog.json, app_handler.py (TemplateStore), tests/test_shot_spec.py (14), tests/test_prompt_compiler.py
+- frontend/types/shotspec.ts, lib/shotspec/{schema,formatters,fusion}.ts (+ formatters.test.ts), types/knowledge.ts
+- scripts/extract-model-catalog.mjs; docs/INTEGRATED_UPSTREAMS.md, NOTICES.md
+
 ## Next step
-Phase 3: film/shot_spec.py + frontend/types/shotspec.ts (§4 contract), film/shot_spec_fusion.py, prompt_compiler.compile_from_spec + targets z_image/qwen_image_edit/cloud_generic + styles weighted/json/negative_only (film/prompt_templates.py), shot_vocabulary merge + describe_camera, knowledge loop (KnowledgeEvent per candidate, hints_for), curated_models seed.
+Phase 4: handlers/reproduce_handler.py (spec → compile → N candidate jobs → composite score → refine loop), services/similarity/ (CLIP-I/DINO/SSIM/ΔE2000/IoU), services/image_ops.py, FixCanvas.tsx, ImageReproduce.tsx (blocks editor, metrics, rounds, why panel), mock routes + e2e.

@@ -102,6 +102,15 @@ The filmmaking features adapt designs and code from the following projects
   EXIF) adapted in `backend/services/vision/deterministic.py` and
   `frontend/lib/shotspec/deterministic.ts`.
 
+- **promptlens** — https://github.com/wildbyteai/promptlens — MIT License.
+  Built-in prompt templates and the custom-template shape were adapted in
+  `backend/film/prompt_templates.py`.
+
+- **Open-Generative-AI** — https://github.com/Anil-matcha/Open-Generative-AI —
+  MIT License. Cinema vocabulary tables adapted in
+  `backend/film/shot_vocabulary.py`; the hosted model catalog was extracted
+  into `backend/film/data/model_catalog.json`.
+
 ---
 
 ## License Texts

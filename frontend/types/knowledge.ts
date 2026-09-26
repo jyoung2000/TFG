@@ -18,6 +18,8 @@ export type EventKind =
   | 'timeline_changed'
   | 'rating'
   | 'feedback'
+  | 'candidate_scored'
+  | 'candidate_picked'
 
 export type EventCategory = 'generation' | 'approval' | 'editing' | 'feedback'
 
@@ -55,6 +57,11 @@ export interface KnowledgeEvent {
   error: string
   rating: number | null
   note: string
+  /** Reproduce evidence (phase 3+). */
+  seed?: number | null
+  target?: string
+  spec_keys?: string[]
+  metrics?: Record<string, number>
 }
 
 export interface Observation {

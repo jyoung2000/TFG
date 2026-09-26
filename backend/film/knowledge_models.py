@@ -41,6 +41,9 @@ EventKind = Literal[
     "timeline_changed",
     "rating",
     "feedback",
+    # Reproduce loop (phase 3+): every scored candidate and every pick.
+    "candidate_scored",
+    "candidate_picked",
 ]
 
 #: Which switch in Settings governs an event. Learning can be turned off
@@ -64,6 +67,8 @@ EVENT_CATEGORIES: dict[str, EventCategory] = {
     "timeline_changed": "editing",
     "rating": "feedback",
     "feedback": "feedback",
+    "candidate_scored": "generation",
+    "candidate_picked": "approval",
 }
 
 #: How much weight a statement deserves. The order matters: the UI sorts by it
@@ -115,6 +120,14 @@ class KnowledgeEvent(BaseModel):
     #: 1..5 when the user rated the result.
     rating: int | None = None
     note: str = ""
+    # ---- Reproduce evidence (phase 3+) ----
+    seed: int | None = None
+    #: The compile target the prompt was written for (ltx2, z_image, …).
+    target: str = ""
+    #: `section.field=value` keys from the ShotSpec the prompt was compiled from.
+    spec_keys: list[str] = Field(default_factory=list[str])
+    #: Similarity scores etc. ("composite", "clip", "dino", …).
+    metrics: dict[str, float] = Field(default_factory=dict[str, float])
 
 
 class Observation(BaseModel):

@@ -14,8 +14,11 @@ from film.knowledge_api_types import (
     RecommendRequest,
     RecommendResponse,
     RecordFeedbackRequest,
+    PromptHintsRequest,
+    RecordCandidateRequest,
 )
 from film.knowledge_models import KnowledgeEvent, KnowledgeExport, LearningSettings
+from film.prompt_compiler import PromptHints
 from state import get_state_service
 
 router = APIRouter(prefix="/api/knowledge", tags=["knowledge"])
@@ -102,3 +105,29 @@ def route_reset(
 ) -> StatusResponse:
     removed = handler.knowledge.reset(model=req.model, project_id=req.project_id)
     return StatusResponse(status=f"removed {removed}")
+
+
+@router.post("/hints", response_model=PromptHints)
+def route_hints(req: PromptHintsRequest, handler: AppHandler = Depends(get_state_service)) -> PromptHints:
+    """What has worked for shots like this one on this target."""
+    return handler.knowledge.hints_for(req.spec_keys, req.target, model=req.model, limit=req.limit)
+
+
+@router.post("/candidate", response_model=StatusResponse)
+def route_candidate(req: RecordCandidateRequest, handler: AppHandler = Depends(get_state_service)) -> StatusResponse:
+    """Record a scored or picked Reproduce candidate."""
+    handler.knowledge.record_candidate(
+        picked=req.picked,
+        model=req.model,
+        provider=req.provider,
+        target=req.target,
+        prompt=req.prompt,
+        negative_prompt=req.negative_prompt,
+        seed=req.seed,
+        spec_keys=req.spec_keys,
+        metrics=req.metrics,
+        project_id=req.project_id,
+        shot_id=req.shot_id,
+        note=req.note,
+    )
+    return StatusResponse(status="ok")

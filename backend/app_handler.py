@@ -34,6 +34,7 @@ from film.media_runner import MediaRunner
 from film.image_recreation import ImageRecreation
 from handlers.jobs_handler import JobsHandler
 from handlers.vision_handler import VisionHandler
+from film.prompt_templates import TemplateStore
 from services.vision.protocol import VisionService
 from services.vram.vram_manager import NvmlProbe, VramManager
 from runtime_config.runtime_config import RuntimeConfig
@@ -344,6 +345,8 @@ class AppHandler:
             lock=self._lock,
             film_handler=self.film,
             analysis_store=self.video_analysis.store,
+            templates=TemplateStore(config.settings_file.parent / "prompt_templates.json"),
+            knowledge=self.knowledge,
         )
 
         self.film_generation = FilmGenerationHandler(

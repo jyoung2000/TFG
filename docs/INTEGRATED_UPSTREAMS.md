@@ -104,10 +104,25 @@ what was inspected and adapted, from which commits, under which licenses.
   not installed (dormant since 2023); BLIP is not used — Florence captions
   seed `chain()`.
 
-## macchant/imex-next (deterministic image stats)
+## macchant/imex-next (deterministic image stats, ShotSpec design)
 
 - **URL**: https://github.com/macchant/imex-next
-- **License**: MIT
+- **Commit inspected**: `e682df2adf71`
+- **License**: MIT as declared in the README ("MIT — see LICENSE"); the LICENSE
+  file itself is absent from the repository at that commit, so this record
+  relies on the author's declaration. Only design and small pure functions
+  were ported; nothing was vendored verbatim.
+- **What was adapted (phase 3 part)**: `types/schema.ts` (one canonical
+  schema with per-field confidence + sources) → `backend/film/shot_spec.py`,
+  `frontend/types/shotspec.ts`, `frontend/lib/shotspec/schema.ts`;
+  `pipeline/fusion.ts` (deterministic beats VLM for physical properties,
+  tagger/VLM agreement bumps confidence, disagreement caps it, medium
+  inference, negative injection) → `backend/film/shot_spec_fusion.py`,
+  `frontend/lib/shotspec/fusion.ts`; `pipeline/synthesize.ts` (per-model
+  formatters, weighted tags) → the `weighted`/`json` styles in
+  `backend/film/prompt_compiler.py` and `frontend/lib/shotspec/formatters.ts`;
+  `pipeline/vocab.ts` (style/linework/mood lists) → `backend/film/shot_vocabulary.py`.
+  `vlm.ts` and SigLIP are not used.
 - **What was adapted (phase 2 part)**: `pipeline/color.ts` + `pipeline/analyze.ts`
   — CIELAB k-means palette, border-ring background isolation, vector-likeness,
   Sobel edge density, aspect snapping, EXIF → `backend/services/vision/
@@ -130,3 +145,30 @@ what was inspected and adapted, from which commits, under which licenses.
 - No Swift source is portable to this Electron app; the layer/mask/adjustment
   concepts inform `FixCanvas` (phase 4). `test_licenses.py` rejects `.swift`
   files.
+
+
+## wildbyteai/promptlens (prompt templates)
+
+- **URL**: https://github.com/wildbyteai/promptlens
+- **Commit inspected**: `41c053939450`
+- **License**: MIT
+- **Ported**: `templates.js` built-in Detailed / Natural / Tags / Concise
+  instructions and the custom-template shape (id, name, description,
+  instruction, profile, 4000-character limit, 50 custom max) →
+  `backend/film/prompt_templates.py` (+ `/api/prompts/templates`). The
+  marketing template, IndexedDB history and provider adapters are not used.
+
+## Anil-matcha/Open-Generative-AI (model catalog, cinema vocabulary)
+
+- **URL**: https://github.com/Anil-matcha/Open-Generative-AI
+- **Commit inspected**: `9d939bc8f29a`
+- **License**: MIT
+- **Ported**: `packages/studio/src/components/CinemaStudio.jsx` camera body /
+  lens / focal-length / aperture phrase tables → `backend/film/shot_vocabulary.py`;
+  `packages/studio/src/models.js` (499 hosted model definitions) → extracted by
+  `scripts/extract-model-catalog.mjs` into `backend/film/data/model_catalog.json`
+  (id, name, vendor, task, accepted inputs, aspect ratios, resolutions,
+  durations only — muapi endpoints and marketing fields stripped), read by
+  `backend/film/media_providers.py::capabilities_for`. The Next.js components,
+  Workflow Studio and the Wan2GP HTTP client (phase 9) are not part of this
+  phase.

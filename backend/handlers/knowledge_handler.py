@@ -22,6 +22,7 @@ from threading import RLock
 
 from _routes._errors import HTTPError
 from film.film_models import now_ms
+from film.prompt_compiler import PromptHints
 from film.knowledge_models import (
     EVENT_CATEGORIES,
     KnowledgeEvent,
@@ -47,6 +48,20 @@ _MAX_EVIDENCE = 8
 
 #: Uses below which a prompt phrase gets no verdict at all.
 _PHRASE_MIN_USES = 3
+#: Reproduce hints: winners needed before advice, minimum spec-key overlap, minimum score.
+_HINT_MIN_WINS = 3
+_HINT_MIN_OVERLAP = 0.3
+_HINT_MIN_SCORE = 0.5
+
+
+def _phrases_of(prompt: str) -> list[str]:
+    """Comma/semicolon-separated phrases of a prompt, normalised; short and long noise dropped."""
+    out: list[str] = []
+    for raw in prompt.replace(";", ",").replace(".", ",").split(","):
+        phrase = " ".join(raw.strip().lower().split())
+        if 3 <= len(phrase) <= 48 and not phrase.startswith("must match"):
+            out.append(phrase)
+    return out
 #: Events scanned per model when extracting prompt patterns. Bounded so a long
 #: render history cannot make opening Settings slow.
 _PHRASE_EVENT_LIMIT = 500
@@ -166,6 +181,92 @@ class KnowledgeHandler(StateHandlerBase):
                 duration_seconds=duration_seconds,
                 error=error[:500],
             )
+        )
+
+    # ---- Reproduce evidence ----------------------------------------------
+
+    def record_candidate(
+        self,
+        *,
+        picked: bool,
+        model: str,
+        provider: str,
+        target: str,
+        prompt: str,
+        negative_prompt: str = "",
+        seed: int | None = None,
+        spec_keys: list[str] | None = None,
+        metrics: dict[str, float] | None = None,
+        project_id: str = "",
+        shot_id: str = "",
+        note: str = "",
+    ) -> KnowledgeEvent | None:
+        """One scored candidate (`candidate_scored`) or the user's choice
+        (`candidate_picked`). The spec keys are what `hints_for` matches on."""
+        return self.record(
+            KnowledgeEvent(
+                kind="candidate_picked" if picked else "candidate_scored",
+                project_id=project_id,
+                shot_id=shot_id,
+                model=model,
+                provider=provider,
+                task="image",
+                execution_mode=provider,
+                prompt=prompt[:2000],
+                negative_prompt=negative_prompt[:1000],
+                outcome="success",
+                seed=seed,
+                target=target,
+                spec_keys=sorted(set(spec_keys or [])),
+                metrics={k: float(v) for k, v in (metrics or {}).items()},
+                note=note,
+            )
+        )
+
+    def hints_for(self, spec_keys: list[str], target: str, *, model: str = "", limit: int = 8) -> PromptHints:
+        """Top phrase sets and parameters from candidates that won on shots like
+        this one. Empty until at least `_HINT_MIN_WINS` winning events exist,
+        so a single lucky render never becomes advice."""
+        wanted = set(spec_keys)
+        events = self._store.events(model=model, kinds=("candidate_picked", "candidate_scored"), target=target, limit=_PHRASE_EVENT_LIMIT)
+        winners: list[tuple[float, KnowledgeEvent]] = []
+        for event in events:
+            keys = set(event.spec_keys)
+            if wanted and keys:
+                overlap = len(wanted & keys) / len(wanted | keys)
+                if overlap < _HINT_MIN_OVERLAP:
+                    continue
+            elif wanted and not keys:
+                continue
+            score = float(event.metrics.get("composite", event.metrics.get("score", 0.0)))
+            if event.kind == "candidate_picked":
+                score += 1.0
+            elif score < _HINT_MIN_SCORE:
+                continue
+            winners.append((score, event))
+        if len(winners) < _HINT_MIN_WINS:
+            return PromptHints(sample=len(winners))
+        winners.sort(key=lambda item: -item[0])
+        top = winners[: max(limit, 3)]
+        phrase_counts: dict[str, int] = {}
+        for _, event in top:
+            for phrase in _phrases_of(event.prompt):
+                phrase_counts[phrase] = phrase_counts.get(phrase, 0) + 1
+        ranked = sorted(phrase_counts.items(), key=lambda item: (-item[1], item[0]))
+        threshold = 2 if len(top) >= 3 else 1
+        phrases = [phrase for phrase, count in ranked if count >= threshold][:limit]
+        params: dict[str, float | int] = {}
+        steps = [int(e.metrics["steps"]) for _, e in top if "steps" in e.metrics]
+        guidance = [float(e.metrics["guidance"]) for _, e in top if "guidance" in e.metrics]
+        if steps:
+            params["steps"] = sorted(steps)[len(steps) // 2]
+        if guidance:
+            params["guidance"] = round(sorted(guidance)[len(guidance) // 2], 2)
+        return PromptHints(
+            phrases=phrases,
+            params=params,
+            evidence=[f"{e.kind} {e.id} composite={e.metrics.get('composite', 0.0):.2f}" for _, e in top[:5]],
+            sample=len(winners),
         )
 
     # ---- derivation ------------------------------------------------------
