@@ -20,6 +20,7 @@ from film.video_analysis_api_types import (
     VideoRecreationResponse,
 )
 from film.film_models import FilmProject
+from film.scene_api_types import ShotSpecUpdateRequest, Storyboard3DRequest
 from film.video_analysis_models import VideoAnalysis
 from server_utils.path_policy import PathPolicyError, resolve_within
 from state import get_state_service
@@ -134,6 +135,27 @@ def route_reconstruct(
 ) -> FilmProject:
     """Build an editable film project from the analysis."""
     return handler.video_analysis.reconstruct(analysis_id, project_id=req.project_id, name=req.name)
+
+
+@router.post("/{analysis_id}/storyboard3d", response_model=FilmProject)
+def route_storyboard3d(
+    analysis_id: str,
+    req: Storyboard3DRequest,
+    handler: AppHandler = Depends(get_state_service),
+) -> FilmProject:
+    """A film project whose shots open the composer pre-seeded from their 3D layouts."""
+    return handler.scene.storyboard3d(analysis_id, project_id=req.project_id, name=req.name)
+
+
+@router.put("/{analysis_id}/shots/{shot_id}/spec", response_model=VideoAnalysis)
+def route_update_shot_spec(
+    analysis_id: str,
+    shot_id: str,
+    req: ShotSpecUpdateRequest,
+    handler: AppHandler = Depends(get_state_service),
+) -> VideoAnalysis:
+    """Edit a shot's ShotSpec sections (or fold a composer scene back into it)."""
+    return handler.scene.update_shot_spec(analysis_id, shot_id, req)
 
 
 @router.post("/{analysis_id}/recreate", response_model=VideoRecreationResponse)

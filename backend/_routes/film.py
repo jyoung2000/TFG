@@ -38,6 +38,8 @@ from film.film_api_types import (
     UpdateSceneRequest,
     UpdateScriptRequest,
     UpdateShotRequest,
+    DeliverRequest,
+    DeliverResponse,
 )
 from film.film_models import FilmScene, FilmShot
 from state import get_state_service
@@ -283,6 +285,21 @@ def route_duplicate_shot(
     handler: AppHandler = Depends(get_state_service),
 ) -> FilmShot:
     return handler.film.duplicate_shot(project_id, scene_id, shot_id)
+
+
+@router.post(
+    "/projects/{project_id}/scenes/{scene_id}/shots/{shot_id}/deliver",
+    response_model=DeliverResponse,
+)
+def route_deliver_shot(
+    project_id: str,
+    scene_id: str,
+    shot_id: str,
+    req: DeliverRequest,
+    handler: AppHandler = Depends(get_state_service),
+) -> DeliverResponse:
+    """Deliver package: rendered passes → mp4s in the project, wired as control signals."""
+    return handler.film.deliver(project_id, scene_id, shot_id, req, handler.stitcher)
 
 
 @router.post(

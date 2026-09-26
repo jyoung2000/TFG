@@ -37,6 +37,7 @@ from handlers.vision_handler import VisionHandler
 from film.prompt_templates import TemplateStore
 from handlers.reproduce_handler import ReproduceHandler
 from handlers.video_reproduce_handler import VideoReproduceHandler
+from handlers.scene_handler import SceneHandler
 from services.vision.protocol import VisionService
 from services.motion.motion_analyzer import MotionAnalyzer
 from services.stitcher.video_stitcher import VideoStitcher
@@ -186,6 +187,8 @@ class AppHandler:
             stitcher = FfmpegStitcher()
         self._motion = motion
         self._stitcher = stitcher
+        #: Exposed for routes that encode media (Deliver).
+        self.stitcher = stitcher
 
         # The unified job store: every handler below that does work reports
         # to it, and the History tab reads nothing else.
@@ -435,6 +438,13 @@ class AppHandler:
             knowledge=self.knowledge,
         )
         self.video_analysis.attach_reproduce(self.video_reproduce)
+        self.scene = SceneHandler(
+            state=self.state,
+            lock=self._lock,
+            video_analysis=self.video_analysis,
+            film=self.film,
+            jobs=self.jobs,
+        )
 
         # History controls: cancel and re-run per job kind. Film-queued shots
         # cancel through the queue; everything else through the single-slot

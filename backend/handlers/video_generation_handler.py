@@ -51,6 +51,14 @@ FORCED_API_ALLOWED_ASPECT_RATIOS = {"16:9", "9:16"}
 FORCED_API_ALLOWED_FPS = {24, 25, 48, 50}
 
 
+def _existing_file(path: str | None) -> str | None:
+    """A control-signal path only when it names an existing file; never raises."""
+    if not path:
+        return None
+    candidate = Path(path)
+    return str(candidate.resolve()) if candidate.is_absolute() and candidate.is_file() else None
+
+
 def get_allowed_durations(model_id: str, resolution_label: str, fps: int) -> set[int]:
     if model_id == "ltx-2-3-fast" and resolution_label == "1080p" and fps in {24, 25}:
         return {6, 8, 10, 12, 14, 16, 18, 20}
@@ -697,6 +705,8 @@ class VideoGenerationHandler(StateHandlerBase):
                 audio_path=validated_audio_path,
                 on_progress=self._generation.update_progress,
                 is_cancelled=self._generation.is_generation_cancelled,
+                control_video_path=_existing_file(req.controlVideoPath),
+                depth_video_path=_existing_file(req.depthVideoPath),
             )
 
             self._generation.complete_generation(output_path)

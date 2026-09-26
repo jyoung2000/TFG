@@ -172,3 +172,44 @@ what was inspected and adapted, from which commits, under which licenses.
   `backend/film/media_providers.py::capabilities_for`. The Next.js components,
   Workflow Studio and the Wan2GP HTTP client (phase 9) are not part of this
   phase.
+
+## wassermanproductions/blockout (previs engine, camera-move library, Deliver)
+
+- **URL**: https://github.com/wassermanproductions/blockout
+- **Commit inspected**: `3f2d0564fd575f70fc28e9bfaa7e94b05e3955d9`
+- **License**: Apache-2.0 (`LICENSE` and the upstream `NOTICE` reproduced at
+  `frontend/views/film/composer/blockout/`; NOTICE also in `NOTICES.md` —
+  credit "Sam Wasserman (wassermanproductions.com)" is kept per §4(d))
+- **Vendored unchanged** (upstream headers kept) → `composer/blockout/engine/`:
+  `types.ts`, `easing.ts`, `path.ts`, `camera.ts` (sensors, lens set, shot
+  sizes, auto-framing), `camera-moves.ts` (39 classic moves), `rigs.ts`,
+  `random.ts`, `gaits.ts`, `assets.ts`, `evaluate.ts` (`state(t)`),
+  `profiles.ts` (generator profiles), `prompt.ts`, `ids.ts`, `strings.ts`.
+- **Adapted** (`# Adapted from` headers): the Deliver pipeline concept →
+  `composer/blockout/deliver.ts` (timeline stepped at the shot fps, clean /
+  depth / normal passes + stills as PNG; encoding moved to the backend
+  `services/stitcher`, output lands in the film project as
+  `generation.control_video` / `depth_video`); `ReferenceUnderlay` concept →
+  `composer/blockout/underlay.ts` (plain three.js plane on the shot camera,
+  viewfinder-only); the move library is bridged to the composer's
+  `CameraMove` presets in `composer/blockout/moves.ts` (Blockout marks →
+  `CompositionKeyframe`s).
+- **Not used**: the React/Zustand shell, Electron main/preload, the
+  choreography/motion/action-preset engines, sequences/schema, glTF export,
+  the ComfyUI workflow writer, `ffmpeg-static` and the GPL FFmpeg builds
+  (this app encodes through its existing `imageio-ffmpeg` dependency or a
+  user-supplied `TFG_FFMPEG`).
+
+## mangerik/Blocking-Room (keyframe utilities, walk cycle, bounded undo)
+
+- **URL**: https://github.com/mangerik/Blocking-Room
+- **Commit inspected**: `3472ad47ae60e3a74433864e4d7436443867c387`
+- **License**: MIT (Copyright (c) 2026 mangerik; text in `NOTICES.md`)
+- **Ported** (`Adapted from` headers): `src/model.js` `sample`/`putKey`/
+  `validateProject` rules → `composer/keyframes.ts` (shortest-arc rotation
+  sampling, 0.1 s snapping, finite/range/unique-time validation, used before
+  save, capture and Deliver); `src/spatial.js` `gait()` → `figure.ts`
+  `walkSwing`/`applyWalkCycle` (distance-tied stride with 0.15 s envelopes,
+  applied during motion preview); `src/history.js` → `composer/history.ts`
+  (bounded snapshot undo with drag grouping, Ctrl+Z / Ctrl+Shift+Z).
+- **Not used**: rooms/doorways, the MediaRecorder export, the UI.

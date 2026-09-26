@@ -719,6 +719,10 @@ class VideoAnalysisHandler(StateHandlerBase):
 
     # ---- stage 4: reverse prompts ----------------------------------------
 
+    def compose_prompts(self, analysis: VideoAnalysis, shot: AnalyzedShot) -> ReversePrompts:
+        """Recompose a shot's prompts from its current analysis (used after spec edits)."""
+        return self._compose_prompts(analysis, shot)
+
     def _compose_prompts(self, analysis: VideoAnalysis, shot: AnalyzedShot) -> ReversePrompts:
         """Turn the analysis into prompts. Never overwrites a human's edit."""
         if shot.prompts.edited:

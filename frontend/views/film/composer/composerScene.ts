@@ -27,7 +27,11 @@ import type {
   Vec3,
 } from '../../../types/film'
 import { buildCameraMove, sampleCameraTrack } from './cameraMotion'
-import { applyPose, buildFigure, readPose, type FigureRig } from './figure'
+import { applyPose, applyWalkCycle, buildFigure, readPose, type FigureRig } from './figure'
+import { travelAlong } from './keyframes'
+import { ReferenceUnderlay } from './blockout/underlay'
+import { keyframesFromPreset, presetById } from './blockout/moves'
+import type { DeliverPass } from './blockout/deliver'
 import { applySolvedShot, getCharacterAnchors, solveShot } from './shotSolver'
 
 const FIGURE_COLORS = ['#7f9cc4', '#c4907f', '#8fc47f', '#b98fc4', '#c4b97f', '#7fc4b9']
@@ -91,9 +95,14 @@ export class ComposerScene {
   private liveTransforms: Map<string, TransformSnapshot> | null = null
   private liveCamera: { position: Vec3; rotation: Vec3; fov: number } | null = null
 
+  /** Reference underlay behind the viewfinder (analysed frame / depth map). */
+  readonly underlay: ReferenceUnderlay
+
   onSelect: (id: string | null) => void = () => {}
   /** Any object transform/pose changed (gizmo, drag, sliders, keyframes). */
   onTransformChange: () => void = () => {}
+  /** A gizmo drag started (true) or ended (false) — one undo step per drag. */
+  onDragStateChange: (dragging: boolean) => void = () => {}
   /** The shot camera was moved by hand (gizmo / numeric input) → manual mode. */
   onCameraManualChange: () => void = () => {}
 
@@ -117,6 +126,7 @@ export class ComposerScene {
     this.cameraHelper = new THREE.CameraHelper(this.shotCamera)
     this.cameraHelper.visible = true
     this.scene.add(this.cameraHelper)
+    this.underlay = new ReferenceUnderlay(this.shotCamera)
 
     this.controls = new OrbitControls(this.editorCamera, canvas)
     this.controls.target.set(0, 1, 0)
@@ -130,7 +140,9 @@ export class ComposerScene {
     this.gizmo = new TransformControls(this.editorCamera, canvas)
     this.gizmo.setSize(0.8)
     this.gizmo.addEventListener('dragging-changed', event => {
-      this.controls.enabled = !(event as unknown as { value: boolean }).value
+      const dragging = (event as unknown as { value: boolean }).value
+      this.controls.enabled = !dragging
+      this.onDragStateChange(dragging)
     })
     this.gizmo.addEventListener('objectChange', () => {
       const target = this.gizmo.object
@@ -716,7 +728,88 @@ export class ComposerScene {
         entity.node.position.fromArray(objectSample.position)
         entity.node.rotation.set(...objectSample.rotation)
       }
+      if (entity.rig) {
+        // Figures walk their keyframed path: stride tied to distance, faded at the ends of a leg.
+        const { distance, speed } = travelAlong(entity.data.keyframes, time)
+        applyWalkCycle(entity.rig, entity.data.pose, distance, speed)
+      }
     }
+  }
+
+  /** A library move (Blockout presets) around the first figure — or the origin. */
+  applyLibraryMove(presetId: string, durationSeconds: number): boolean {
+    const preset = presetById(presetId)
+    if (!preset) return false
+    this.endPreview()
+    const first = this.firstFigureId()
+    const entity = first ? this.entities.get(first) : null
+    const subject = entity
+      ? { position: entity.node.position.clone(), heading: entity.node.rotation.y, height: entity.rig?.height ?? 1.7 }
+      : { position: new THREE.Vector3(0, 0, 0), heading: 0, height: 1.7 }
+    this.cameraKeyframes = keyframesFromPreset(preset, this.shotCamera, subject, durationSeconds)
+    this.onTransformChange()
+    return true
+  }
+
+  /**
+   * One Deliver frame: the scene at `time` through the shot camera as a
+   * clean, depth or normal pass. Helpers, gizmo and the underlay never leak
+   * into a pass. Returns base64 PNG bytes (no data: prefix).
+   */
+  renderPassAt(time: number, pass: DeliverPass, width: number, height: number): string {
+    this.setPreviewTime(time)
+    const previousSize = new THREE.Vector2()
+    this.renderer.getSize(previousSize)
+    const previousPixelRatio = this.renderer.getPixelRatio()
+    const gizmoHelper = this.gizmo.getHelper()
+    const visible = { helper: this.cameraHelper.visible, ring: this.selectionRing.visible, gizmo: gizmoHelper.visible, underlay: this.underlay.visible }
+    this.cameraHelper.visible = false
+    this.selectionRing.visible = false
+    gizmoHelper.visible = false
+    this.underlay.mesh.visible = false
+    const previousOverride = this.scene.overrideMaterial
+    const previousBackground = this.scene.background
+    const previousFog = this.scene.fog
+    let override: THREE.Material | null = null
+    if (pass === 'depth') {
+      override = new THREE.MeshDepthMaterial({ depthPacking: THREE.BasicDepthPacking })
+      this.scene.background = new THREE.Color('#000000')
+      this.scene.fog = null
+    } else if (pass === 'normal') {
+      override = new THREE.MeshNormalMaterial()
+      this.scene.background = new THREE.Color('#8080ff')
+      this.scene.fog = null
+    }
+    this.scene.overrideMaterial = override
+    this.renderer.setPixelRatio(1)
+    this.renderer.setSize(width, height, false)
+    this.shotCamera.aspect = width / height
+    // Depth is normalised over a fixed near/far so it does not pump across the shot.
+    const savedNear = this.shotCamera.near
+    const savedFar = this.shotCamera.far
+    if (pass === 'depth') {
+      this.shotCamera.near = 0.5
+      this.shotCamera.far = 40
+    }
+    this.shotCamera.updateProjectionMatrix()
+    this.renderer.setViewport(0, 0, width, height)
+    this.renderer.setScissorTest(false)
+    this.renderer.render(this.scene, this.shotCamera)
+    const dataUrl = this.canvas.toDataURL('image/png')
+    this.shotCamera.near = savedNear
+    this.shotCamera.far = savedFar
+    this.shotCamera.updateProjectionMatrix()
+    this.scene.overrideMaterial = previousOverride
+    this.scene.background = previousBackground
+    this.scene.fog = previousFog
+    override?.dispose()
+    this.renderer.setPixelRatio(previousPixelRatio)
+    this.renderer.setSize(previousSize.x, previousSize.y, false)
+    this.cameraHelper.visible = visible.helper
+    this.selectionRing.visible = visible.ring
+    gizmoHelper.visible = visible.gizmo
+    this.underlay.mesh.visible = visible.underlay
+    return dataUrl.replace(/^data:image\/png;base64,/, '')
   }
 
   get isPreviewing(): boolean {
@@ -731,6 +824,7 @@ export class ComposerScene {
         entity.node.position.fromArray(snapshot.position)
         entity.node.rotation.set(...snapshot.rotation)
         entity.node.scale.fromArray(snapshot.scale)
+        if (entity.rig && entity.data.keyframes.length > 0) applyPose(entity.rig, entity.data.pose)
       }
       this.liveTransforms = null
     }
@@ -833,9 +927,11 @@ export class ComposerScene {
     const ringWasVisible = this.selectionRing.visible
     const gizmoHelper = this.gizmo.getHelper()
     const gizmoWasVisible = gizmoHelper.visible
+    const underlayWasVisible = this.underlay.visible
     this.cameraHelper.visible = false
     this.selectionRing.visible = false
     gizmoHelper.visible = false
+    this.underlay.mesh.visible = false // the capture is the I2V reference; the real frame must not leak into it
     this.renderer.setPixelRatio(1)
     this.renderer.setSize(width, height, false)
     this.shotCamera.aspect = width / height
@@ -844,6 +940,7 @@ export class ComposerScene {
     this.renderer.setScissorTest(false)
     this.renderer.render(this.scene, this.shotCamera)
     const dataUrl = this.canvas.toDataURL('image/png')
+    this.underlay.mesh.visible = underlayWasVisible
     this.renderer.setPixelRatio(previousPixelRatio)
     this.renderer.setSize(previousSize.x, previousSize.y, false)
     this.cameraHelper.visible = helperWasVisible
@@ -893,7 +990,10 @@ export class ComposerScene {
     this.editorCamera.updateProjectionMatrix()
     this.cameraHelper.visible = true
     gizmoHelper.visible = this.gizmo.object !== undefined && this.gizmo.object !== null
+    const underlayOn = this.underlay.visible
+    this.underlay.mesh.visible = false
     this.renderer.render(this.scene, this.editorCamera)
+    this.underlay.mesh.visible = underlayOn
 
     // Picture-in-picture viewfinder through the shot camera (bottom-right).
     const pipWidth = Math.round(Math.min(width * 0.32, 420))
@@ -907,6 +1007,7 @@ export class ComposerScene {
     this.renderer.setViewport(width - pipWidth - pad, pad, pipWidth, pipHeight)
     this.shotCamera.aspect = 16 / 9
     this.shotCamera.updateProjectionMatrix()
+    if (underlayOn) this.underlay.fit()
     this.renderer.render(this.scene, this.shotCamera)
     this.renderer.setScissorTest(false)
   }
@@ -922,6 +1023,7 @@ export class ComposerScene {
     this.controls.dispose()
     for (const id of [...this.entities.keys()]) this.removeObject(id)
     for (const disposable of this.disposables) disposable.dispose()
+    this.underlay.dispose()
     this.renderer.dispose()
   }
 }

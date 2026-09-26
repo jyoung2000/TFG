@@ -181,6 +181,22 @@ def apply_depth(spec: ShotSpec, analysis: VisionAnalysis) -> None:
             spec.camera.dof = spec.camera.dof if spec.camera.dof in DOF_VOCAB else ""
 
 
+def apply_layout(spec: ShotSpec) -> None:
+    """Subjects × depth × FOV → `layout3d` (phase 6), keeping the depth map path.
+    Provenance `depth` (it ranks with measured); a locked layout is left alone."""
+    if spec.is_locked("layout3d") or not any(len(s.bbox) == 4 for s in spec.subjects):
+        return
+    from film.scene_solver import layout_from_spec
+
+    try:
+        layout = layout_from_spec(spec)
+    except (ValueError, ZeroDivisionError):
+        return
+    layout.depth_map_path = spec.layout3d.depth_map_path
+    spec.layout3d = layout
+    _write(spec, "layout3d", "depth", 0.6, force=True)
+
+
 def apply_flow(spec: ShotSpec, *, pan: float, tilt: float, zoom: float, roll: float, magnitude: float, subject_motion: float, handheld: bool, pacing: str, fps: float | None = None) -> None:
     """Optical-flow results (phase 5) own `motion` and the camera move."""
     if _write(spec, "motion", "flow", 0.8, force=True):
@@ -345,6 +361,7 @@ def spec_from_vision(analysis: VisionAnalysis, *, kind: str = "image", base: Sho
     apply_florence(spec, analysis)
     apply_clip(spec, analysis)
     apply_depth(spec, analysis)
+    apply_layout(spec)
     if spec.style.medium == "" and not spec.is_locked("style"):
         medium, confidence = infer_medium(0.0, spec.measured.edge_density, spec.style.tags)
         if medium:

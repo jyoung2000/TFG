@@ -270,6 +270,11 @@ class GenerateVideoRequest(BaseModel):
     imagePath: str | None = None
     audioPath: str | None = None
     aspectRatio: Literal["16:9", "9:16"] = "16:9"
+    #: Control signals from a Deliver export (absolute paths). The local LTX
+    #: pipeline has no control input and ignores them with a log line; WanGP
+    #: receives them as its guide video (key per docs/VIDEO_REPRODUCE.md, VF-011).
+    controlVideoPath: str | None = None
+    depthVideoPath: str | None = None
 
 
 class GenerateImageRequest(BaseModel):

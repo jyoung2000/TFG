@@ -98,6 +98,7 @@ function shot(
     prompt_locked: false,
     composition: null,
     capture_path: '',
+    blockout_path: '',
     generation: {
       model: '',
       resolution: '',
@@ -107,6 +108,8 @@ function shot(
       use_capture_as_reference: true,
       continue_from_previous: false,
       quality_preset: 'project',
+      control_video: '',
+      depth_video: '',
     },
     versions: [],
     current_version: null,

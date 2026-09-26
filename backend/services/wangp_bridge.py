@@ -200,6 +200,8 @@ class WanGPBridge:
         audio_path: str | None,
         on_progress: ProgressCallback,
         is_cancelled: CancelledCallback,
+        control_video_path: str | None = None,
+        depth_video_path: str | None = None,
     ) -> str:
         resolution = self._map_video_resolution(resolution_label, aspect_ratio)
         merged_prompt = prompt + self._camera_motion_prompts.get(camera_motion, "")
@@ -226,6 +228,15 @@ class WanGPBridge:
         if audio_path:
             settings["audio_prompt_type"] = "A"
             settings["audio_guide"] = str(Path(audio_path).resolve())
+        # Control video (VACE / depth) from a Deliver export. `video_guide` +
+        # `video_prompt_type` are WanGP's documented settings keys for a guide
+        # video; the exact per-model semantics could not be verified in this
+        # build (session-notes VF-011), so the depth pass is preferred when the
+        # model type is a VACE/control variant and the clean pass otherwise.
+        guide = depth_video_path if (depth_video_path and "vace" in self._video_model_type.lower()) else (control_video_path or depth_video_path)
+        if guide:
+            settings["video_prompt_type"] = "V"
+            settings["video_guide"] = str(Path(guide).resolve())
 
         outputs = self._run_manifest(
             manifest=[{"id": 1, "params": settings, "plugin_data": {}}],

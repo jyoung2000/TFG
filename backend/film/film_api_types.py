@@ -231,6 +231,32 @@ class ShotCaptureRequest(BaseModel):
     composition: CompositionScene
 
 
+class DeliverRequest(BaseModel):
+    """A Deliver export from the Shot Composer: rendered PNG frames per pass
+    (base64, in order, all the same size) plus the prompt and metadata the
+    composer wrote. Passes without frames are skipped."""
+
+    fps: int = 24
+    width: int = 0
+    height: int = 0
+    clean: list[str] = Field(default_factory=list[str])
+    depth: list[str] = Field(default_factory=list[str])
+    normal: list[str] = Field(default_factory=list[str])
+    stills: list[str] = Field(default_factory=list[str])
+    prompt: str = ""
+    metadata: dict[str, object] = Field(default_factory=dict[str, object])
+    composition: CompositionScene | None = None
+
+
+class DeliverResponse(BaseModel):
+    package_dir: str
+    #: Project-relative paths of what was written.
+    files: list[str] = Field(default_factory=list[str])
+    control_video: str = ""
+    depth_video: str = ""
+    shot: FilmShot
+
+
 class SavePoseRequest(BaseModel):
     name: str
     category: str = "custom"

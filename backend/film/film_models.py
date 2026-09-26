@@ -309,6 +309,10 @@ class ShotGenerationSettings(BaseModel):
     # "project" inherits FilmProjectSettings.default_quality_preset; an explicit
     # model/resolution on the shot always wins (treated as custom).
     quality_preset: Literal["project", "fast_preview", "balanced", "quality", "custom"] = "project"
+    #: Project-relative Deliver passes used as control signals (phase 6): the
+    #: clean reference render and the depth pass. "" = none.
+    control_video: str = ""
+    depth_video: str = ""
 
 
 class ShotVersion(BaseModel):
@@ -396,6 +400,8 @@ class FilmShot(BaseModel):
 
     composition: CompositionScene | None = None
     capture_path: str = ""  # relative path of captured reference PNG ('' = none)
+    #: Relative path of the isometric blockout thumbnail written by a 3D storyboard build ('' = none).
+    blockout_path: str = ""
 
     generation: ShotGenerationSettings = Field(default_factory=ShotGenerationSettings)
     versions: list[ShotVersion] = Field(default_factory=list[ShotVersion])

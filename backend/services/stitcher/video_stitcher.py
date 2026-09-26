@@ -26,6 +26,10 @@ class StitchError(RuntimeError):
 class VideoStitcher(Protocol):
     def concat(self, inputs: Sequence[Path], output: Path) -> Path: ...
 
+    def encode_frames(self, frames: Sequence[Path], fps: int, output: Path) -> Path:
+        """PNG frames (in order) → an H.264 mp4 at `fps`."""
+        ...
+
 
 def find_ffmpeg() -> str | None:
     override = os.environ.get("TFG_FFMPEG", "").strip()
@@ -74,12 +78,48 @@ class FfmpegStitcher:
             listing.unlink(missing_ok=True)
 
 
+    def encode_frames(self, frames: Sequence[Path], fps: int, output: Path) -> Path:
+        paths = [Path(p) for p in frames]
+        if not paths:
+            raise StitchError("No frames to encode.")
+        ffmpeg = self._ffmpeg or find_ffmpeg()
+        if not ffmpeg:
+            raise StitchError("ffmpeg was not found (set TFG_FFMPEG or install imageio-ffmpeg).")
+        output.parent.mkdir(parents=True, exist_ok=True)
+        listing = output.with_suffix(".frames.txt")
+        frame_time = 1.0 / max(1, fps)
+        lines = "".join(f"file '{p.as_posix()}'\nduration {frame_time:.6f}\n" for p in paths) + f"file '{paths[-1].as_posix()}'\n"
+        listing.write_text(lines, encoding="utf-8")
+        try:
+            result = subprocess.run(
+                [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-f", "concat", "-safe", "0", "-i", str(listing), "-vsync", "vfr", "-r", str(fps), "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "veryfast", "-crf", "18", "-movflags", "+faststart", str(output)],
+                capture_output=True, text=True, check=False,
+            )
+            if result.returncode != 0 or not output.is_file():
+                raise StitchError(f"ffmpeg could not encode the frames: {result.stderr.strip()[:400]}")
+            return output
+        finally:
+            listing.unlink(missing_ok=True)
+
+
 class FakeStitcher:
     """Writes the inputs' bytes back to back; records every call."""
 
     def __init__(self) -> None:
         self.calls: list[tuple[list[Path], Path]] = []
+        self.encoded: list[tuple[list[Path], int, Path]] = []
         self.fail_with: Exception | None = None
+
+    def encode_frames(self, frames: Sequence[Path], fps: int, output: Path) -> Path:
+        paths = [Path(p) for p in frames]
+        self.encoded.append((paths, fps, Path(output)))
+        if self.fail_with is not None:
+            raise self.fail_with
+        if not paths:
+            raise StitchError("No frames to encode.")
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_bytes(b"fake-frames-mp4:" + str(len(paths)).encode() + b"@" + str(fps).encode())
+        return output
 
     def concat(self, inputs: Sequence[Path], output: Path) -> Path:
         paths = [Path(p) for p in inputs]

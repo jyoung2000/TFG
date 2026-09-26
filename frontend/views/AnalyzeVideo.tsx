@@ -19,6 +19,7 @@ import { filmApi } from '../lib/film-api'
 import type { FilmModelCapability } from '../types/film'
 import { analysisFrameUrl, videoAnalysisApi } from '../lib/video-analysis-api'
 import { videoReproduceApi } from '../lib/video-reproduce-api'
+import { sceneApi } from '../lib/scene-api'
 import type { VideoReproduceJob } from '../types/video-reproduce'
 import { VideoReproducePanel } from './reproduce/VideoReproduce'
 import { logger } from '../lib/logger'
@@ -164,6 +165,22 @@ export function AnalyzeVideo() {
         const project = await videoAnalysisApi.reconstruct(current.id, {
           name: current.title ? `${current.title} (from video)` : '',
         })
+        setCurrentProjectId(project.id)
+        await refresh()
+        openProject(project.id, 'storyboard')
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e))
+      } finally {
+        setBusy('')
+      }
+    }, [current, openProject, refresh, setCurrentProjectId])
+
+    const buildStoryboard3d = useCallback(async () => {
+      if (!current) return
+      setBusy('storyboard3d')
+      setError('')
+      try {
+        const project = await sceneApi.storyboard3d(current.id, { name: current.title ? `${current.title} (3D storyboard)` : '' })
         setCurrentProjectId(project.id)
         await refresh()
         openProject(project.id, 'storyboard')
@@ -332,6 +349,15 @@ export function AnalyzeVideo() {
                                 {busy === 'reconstruct' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Clapperboard className="h-3.5 w-3.5" />}
                                 Create storyboard
                               </button>
+                              <button
+                                onClick={() => void buildStoryboard3d()}
+                                disabled={busy !== '' || current.shots.length === 0 || current.stage !== 'complete'}
+                                title="A film project whose shot cards carry 3D blockouts and open the composer pre-seeded from the analysis"
+                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 border border-zinc-700 text-xs hover:bg-zinc-700 disabled:opacity-40"
+                              >
+                                {busy === 'storyboard3d' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Clapperboard className="h-3.5 w-3.5" />}
+                                Build 3D storyboard
+                              </button>
                               <span className="text-[11px] text-zinc-400" data-testid="video-model-recommendation">
                                 Vision: {settings.directorProvider === 'openai_compatible' && settings.openaiCompatibleModel ? settings.openaiCompatibleModel : 'connect qwen2.5vl:7b (recommended) in Settings'}
                                 {' · '}Recommended render model: {videoModels.find(m => m.is_active)?.label || videoModels[0]?.label || 'no local video model detected'}
@@ -357,7 +383,7 @@ export function AnalyzeVideo() {
                         )}
             
                         {reproduce && (
-                          <VideoReproducePanel analysis={current} job={reproduce} onJob={setReproduce} onClose={() => setReproduce(null)} />
+                          <VideoReproducePanel analysis={current} job={reproduce} onJob={setReproduce} onClose={() => setReproduce(null)} onBuild3D={() => void buildStoryboard3d()} />
                         )}
                       </>
                     )}

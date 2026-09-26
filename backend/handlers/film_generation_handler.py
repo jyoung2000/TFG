@@ -938,6 +938,8 @@ class FilmGenerationHandler(StateHandlerBase):
 
             camera_motion = _CAMERA_MOVE_TO_HOST.get(shot.camera_move, "none")
             aspect_ratio = shot.generation.aspect_ratio
+            control_video = self._deliver_pass(job.project_id, shot.generation.control_video)
+            depth_video = self._deliver_pass(job.project_id, shot.generation.depth_video)
 
         request = GenerateVideoRequest(
             prompt=version.prompt,
@@ -951,8 +953,20 @@ class FilmGenerationHandler(StateHandlerBase):
             imagePath=image_path,
             audioPath=None,
             aspectRatio=aspect_ratio,
+            controlVideoPath=control_video,
+            depthVideoPath=depth_video,
         )
         return request, version.seed
+
+    def _deliver_pass(self, project_id: str, relative: str) -> str | None:
+        """Absolute path of a Deliver pass inside the project, or None."""
+        if not relative:
+            return None
+        try:
+            path = self._film.store.resolve_media_path(project_id, relative)
+        except Exception:  # noqa: BLE001 - a stale or escaping path is simply not a control signal
+            return None
+        return str(path) if path.is_file() else None
 
     def _extract_previous_frame(
         self, project: FilmProject, shot: FilmShot, job: _QueuedShotJob

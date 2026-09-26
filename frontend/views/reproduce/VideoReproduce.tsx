@@ -11,7 +11,7 @@ import { chosenCandidate, type ReproduceShot, type VideoCandidate, type VideoRep
  * to the chosen candidate — with per-shot scores, pick / redo, and Stitch.
  * Every clip plays through the authenticated media route.
  */
-export function VideoReproducePanel({ analysis, job, onJob, onClose }: { analysis: VideoAnalysis; job: VideoReproduceJob; onJob: (job: VideoReproduceJob) => void; onClose: () => void }) {
+export function VideoReproducePanel({ analysis, job, onJob, onClose, onBuild3D }: { analysis: VideoAnalysis; job: VideoReproduceJob; onJob: (job: VideoReproduceJob) => void; onClose: () => void; onBuild3D?: () => void }) {
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const running = job.status === 'running'
@@ -47,6 +47,7 @@ export function VideoReproducePanel({ analysis, job, onJob, onClose }: { analysi
           ) : (
             <button onClick={() => void run('Stitching', () => videoReproduceApi.stitch(analysis.id))} disabled={!!busy || rendered === 0} className="btn-chip">{busy === 'Stitching' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Scissors className="h-3.5 w-3.5" />} Stitch picks</button>
           )}
+          {onBuild3D && !running && <button onClick={onBuild3D} className="btn-chip" title="Storyboard whose shots open the composer pre-seeded from this analysis">Build 3D storyboard</button>}
           <button onClick={onClose} aria-label="Close video reproduce" className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-white"><X className="h-4 w-4" /></button>
         </span>
       </div>

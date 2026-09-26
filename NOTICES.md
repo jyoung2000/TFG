@@ -111,7 +111,37 @@ The filmmaking features adapt designs and code from the following projects
   `backend/film/shot_vocabulary.py`; the hosted model catalog was extracted
   into `backend/film/data/model_catalog.json`.
 
+- **Blockout** — https://github.com/wassermanproductions/blockout —
+  Copyright 2026 Sam Wasserman — Apache License 2.0. The pure-TypeScript
+  previs engine (`state(t)` evaluator, camera optics, the camera-move library,
+  rigs, gaits, generator profiles) is vendored unchanged under
+  `frontend/views/film/composer/blockout/engine/`; the Deliver and
+  reference-underlay designs are adapted beside it. Created by Sam Wasserman
+  (wassermanproductions.com). The upstream NOTICE is reproduced below.
+
+- **Blocking-Room** — https://github.com/mangerik/Blocking-Room —
+  Copyright (c) 2026 mangerik — MIT License. Keyframe interpolation and
+  validation, the distance-tied walk cycle and the bounded snapshot undo are
+  ported into the Shot Composer (`composer/keyframes.ts`, `figure.ts`,
+  `composer/history.ts`).
+
 ---
+
+## Upstream NOTICE files
+
+### Blockout (Apache-2.0 §4(d))
+
+```
+Blockout — a previs tool for AI-native filmmaking
+Copyright 2026 Sam Wasserman
+https://wassermanproductions.com · https://wasserman.ai
+
+This product was created by Sam Wasserman. If you use, fork, or
+redistribute this software or derivative works, you must retain this
+NOTICE file and credit "Sam Wasserman (wassermanproductions.com)" in
+your documentation and any about/credits surface, per Section 4(d) of
+the Apache License 2.0.
+```
 
 ## License Texts
 

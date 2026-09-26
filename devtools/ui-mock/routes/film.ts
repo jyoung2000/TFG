@@ -295,6 +295,7 @@ export function registerFilmRoutes(router: Router, store: Store, clipUrl: string
         visual_prompt: '',
         composition: null,
         capture_path: '',
+        blockout_path: '',
         versions: [],
         current_version: null,
         status: 'draft',
@@ -383,6 +384,30 @@ export function registerFilmRoutes(router: Router, store: Store, clipUrl: string
       renumber(scene.shots)
       touched(p)
       return copy
+    }),
+  )
+
+  router.post('/api/film/projects/:projectId/scenes/:sceneId/shots/:shotId/deliver', req =>
+    store.mutate(() => {
+      const p = project(req.params.projectId)
+      const shot = findShot(findScene(p, req.params.sceneId), req.params.shotId)
+      const clean = Array.isArray(req.body.clean) ? (req.body.clean as string[]) : []
+      const depth = Array.isArray(req.body.depth) ? (req.body.depth as string[]) : []
+      const normal = Array.isArray(req.body.normal) ? (req.body.normal as string[]) : []
+      if (!clean.length && !depth.length && !normal.length) throw new MockHttpError(400, 'Nothing to deliver: render at least one pass.')
+      const version = Math.max(0, ...shot.versions.map(v => v.number)) + 1
+      const dir = `deliver/${shot.id}/v${version}`
+      const files: string[] = []
+      if (clean.length) files.push(`${dir}/reference.mp4`)
+      if (depth.length) files.push(`${dir}/depth.mp4`)
+      if (normal.length) files.push(`${dir}/normal.mp4`)
+      files.push(`${dir}/metadata.json`)
+      if (req.body.composition) syncComposition(shot, req.body.composition as CompositionScene)
+      shot.generation.control_video = clean.length ? `${dir}/reference.mp4` : ''
+      shot.generation.depth_video = depth.length ? `${dir}/depth.mp4` : ''
+      shot.updated_at = now()
+      touched(p)
+      return { package_dir: dir, files, control_video: shot.generation.control_video, depth_video: shot.generation.depth_video, shot }
     }),
   )
 

@@ -25,6 +25,7 @@ from _routes.shot_library import router as shot_library_router
 from _routes.timeline import router as timeline_router
 from _routes.video_analysis import router as video_analysis_router
 from _routes.video_reproduce import router as video_reproduce_router
+from _routes.scene import router as scene_router
 from _routes.film_generation import router as film_generation_router
 from _routes.generation import router as generation_router
 from _routes.health import router as health_router
@@ -163,6 +164,7 @@ def create_app(
     app.include_router(film_director_router)
     app.include_router(video_analysis_router)
     app.include_router(video_reproduce_router)
+    app.include_router(scene_router)
     app.include_router(knowledge_router)
     app.include_router(jobs_router)
     app.include_router(vision_router)

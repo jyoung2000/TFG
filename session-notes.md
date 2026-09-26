@@ -5,8 +5,8 @@
 4 Image Reproduce v2 · 5 Motion + Video Reproduce v2 · 6 3D storyboard · 7 LoRA Train · 8 front door/4070 preset ·
 9 containers/remote/tiering · 10 acceptance/docs/PR
 
-**Current phase:** 5 (committing)
-**Last passing gate:** Gate 5 (tsc 0 · pyright 0 · vitest 45/45 · pytest 753 · e2e 20/20)
+**Current phase:** 6 (committing)
+**Last passing gate:** Gate 6 (tsc 0 · pyright 0 · vitest 53/53 · pytest 766 · e2e 21/21)
 
 ## Environment (this session)
 - Cloud Linux container (not the Windows 4070 box the prompt assumes). No GPU, no nvidia-smi.
@@ -43,8 +43,20 @@
   `OpticalFlowAnalyzer` and `FfmpegStitcher` are exercised on `samples/clip-01.mp4` in tests (no GPU needed).
 - VF-011: WanGP VACE/depth-control keys for the reference clip could not be verified here (no checkout); Video
   Reproduce conditions on the start frame only and records `spec.layout3d.depth_map_path` for phase 6.
+- VF-012 (phase 6): blockout `3f2d056` is Apache-2.0 with a NOTICE requiring credit to Sam Wasserman; its engine is
+  pure TS on three 0.170 (same as this app) and vendored unchanged; its React shell, GPL FFmpeg builds and
+  ffmpeg-static are not used. Blocking-Room `3472ad4` is MIT (130 lines of JS, ported).
+- VF-013: WanGP's `video_guide` / `video_prompt_type="V"` settings keys are the documented guide-video inputs; the
+  per-model (VACE vs depth) semantics could not be verified here — the bridge sends the depth pass for `*vace*`
+  model types and the clean pass otherwise, and the request keys are covered by tests.
 
 ## Decisions
+- D-025 (phase 6): the layout solver places grounded objects exactly on their bottom ray's floor hit, so
+  reprojection is exact by construction and the round trip is the test (tolerance 0.05 of the frame).
+- D-026: blockout thumbnails are deterministic isometric SVGs written server-side (no headless WebGL); the composer
+  capture replaces them once a shot is captured or rendered.
+- D-027: Deliver renders in the browser (three.js passes) and encodes in the backend (ffmpeg via the stitcher
+  service) — no renderer-side ffmpeg; passes are project-relative and travel as `controlVideoPath`/`depthVideoPath`.
 - D-021 (phase 5): Video Reproduce reuses the film queue (`queue_shot` with explicit duration / capture / seed on
   `GenerateShotRequest`), waits on the version, scores, stitches; no parallel engine. One `video_gen` child per
   candidate under a `video_reproduce` parent (`jobs.parent()` scope).
@@ -161,5 +173,19 @@
 - devtools/ui-mock/routes/{video-analysis (motion/spec),video-reproduce}.ts, state.ts, server.ts;
   e2e/video-reproduce.spec.ts; docs/VIDEO_REPRODUCE.md, docs/VIDEO_ANALYSIS.md
 
+## Files touched (phase 6)
+- backend/film/{scene_solver,scene_api_types}.py, handlers/scene_handler.py, _routes/scene.py, _routes/video_analysis.py
+  (storyboard3d, shot spec), _routes/film.py (deliver), handlers/film_handler.py (deliver), film/film_api_types.py
+  (GenerateShotRequest extras, Deliver DTOs), film/film_models.py (blockout_path, control/depth video),
+  film/shot_spec_fusion.py (apply_layout), api_types.py (control paths), services/wangp_bridge.py (video_guide),
+  handlers/{video_generation,film_generation}_handler.py, services/stitcher (encode_frames), app_handler.py,
+  app_factory.py, tests/test_scene.py (13)
+- frontend/views/film/composer/blockout/{engine/* (vendored), moves,underlay,deliver}.ts + NOTICE + LICENSE,
+  composer/{keyframes,history,sceneFromAnalysis(+test)}.ts, composer/{composerScene,figure,ShotComposer}.tsx|ts,
+  views/film/ShotCard.tsx (blockout thumb), views/AnalyzeVideo.tsx + reproduce/VideoReproduce.tsx (Build 3D
+  storyboard), lib/{scene-api,film-api}.ts, types/film.ts (ShotSourceRef, blockout_path, control videos)
+- devtools/ui-mock/routes/{scene,video-analysis,film}.ts, server.ts, seed.ts; e2e/storyboard3d.spec.ts;
+  docs/{STORYBOARD_3D,SHOT_COMPOSER,INTEGRATED_UPSTREAMS}.md, NOTICES.md
+
 ## Next step
-Phase 6: 3D shot analysis → editable storyboard (blockout Apache-2.0 engine + Deliver, Blocking-Room MIT utilities, CozyClay concepts only): depth → layout3d, ScenePanel, composer keyframes from spec.motion, scene_build jobs.
+Phase 7: LoRA Train tab + Consistency Kit (D14): dataset builder from analyses/candidates, training service behind a Protocol with fake, VRAM-classed configs for the 4070, training jobs in History, consistency kit (character sheets, reference packs).
