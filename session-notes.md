@@ -5,7 +5,7 @@
 4 Image Reproduce v2 · 5 Motion + Video Reproduce v2 · 6 3D storyboard · 7 LoRA Train · 8 front door/4070 preset ·
 9 containers/remote/tiering · 10 acceptance/docs/PR
 
-**Current phase:** 10 (acceptance docs, API reference, PR)
+**Current phase:** done — PR https://github.com/jyoung2000/TFG/pull/1 (feat/production-oneshot → feat/video-recreation-and-assets-gallery)
 **Last passing gate:** Gate 9 (tsc 0 · pyright 0 · vitest 53/53 · pytest 829 · e2e 28/28 · main chunk 308 kB); compose build + container /health + desktop↔stack: BLOCKED — ENVIRONMENT (no Docker daemon / GPU here)
 
 ## Environment (this session)
@@ -329,4 +329,5 @@
   (`python backend/generate_api_docs.py` → backend/generated/, 205 endpoints) but that folder is gitignored by design.
 
 ## Next step
-PR from feat/production-oneshot into feat/video-recreation-and-assets-gallery (no main) via GitHub MCP; then done.
+Nothing pending in this session. Real-GPU acceptance (docs/RTX_4070_TEST_MATRIX.md) and `pnpm build:win` need the 4070
+machine; a live `hermes mcp test tfg` needs a Hermes install. Watch the PR for review comments.
