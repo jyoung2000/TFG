@@ -14,12 +14,15 @@ from io import BytesIO
 from pathlib import Path
 from typing import Any, cast
 
-from PIL import Image, ImageChops, ImageStat, UnidentifiedImageError
+from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel, Field
 
 from _routes._errors import HTTPError
 from film.llm_providers import LLMMessage, LLMProvider
 from server_utils.path_policy import PathPolicyError, require_absolute_file
+from services.similarity.composite import CompositeScorer, ImageFeatures
+from services.similarity.metrics import luma_array
+from services.vision.deterministic import measure_image
 
 SUPPORTED = {".png": "PNG", ".jpg": "JPEG", ".jpeg": "JPEG", ".webp": "WEBP"}
 MAX_BYTES = 20 * 1024 * 1024
@@ -129,17 +132,20 @@ def _image_data_url(image: Image.Image) -> str:
     return "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
 
 
-def score_images(reference: Image.Image, candidate: Image.Image) -> float:
-    """Pixel/color + spatial-grid likeness in [0, 1]; scores are not calibrated."""
-    ref = reference.convert("RGB").resize((256, 256), Image.Resampling.LANCZOS)
-    comp = candidate.convert("RGB").resize((256, 256), Image.Resampling.LANCZOS)
-    global_error = sum(ImageStat.Stat(ImageChops.difference(ref, comp)).mean) / (3 * 255)
-    regions: list[float] = []
-    for y in range(0, 256, 64):
-        for x in range(0, 256, 64):
-            box = (x, y, x + 64, y + 64)
-            regions.append(sum(ImageStat.Stat(ImageChops.difference(ref.crop(box), comp.crop(box))).mean) / (3 * 255))
-    return round(max(0.0, min(1.0, 1 - (global_error + sum(regions) / len(regions)) / 2)), 4)
+def composite_score(reference: Image.Image, candidate: Image.Image) -> float:
+    """Phase-4 composite over what two bare images offer: SSIM(luma) + palette ΔE2000, renormalised.
+
+    Embedding components need the vision service and are added by
+    `ReproduceHandler`; this keeps the legacy v1 endpoints on the same scale.
+    """
+
+    def features(image: Image.Image) -> ImageFeatures:
+        result = ImageFeatures()
+        result.luma = luma_array(image)
+        result.palette = [(entry.hex, entry.share) for entry in measure_image(image).palette]
+        return result
+
+    return CompositeScorer().score(features(reference), features(candidate)).composite
 
 
 class ImageRecreation:
@@ -398,7 +404,7 @@ class ImageRecreation:
                 dest = self._dir(job.id) / name
                 shutil.copyfile(generated, dest)
                 with Image.open(dest) as candidate:
-                    score = score_images(ref, candidate)
+                    score = composite_score(ref, candidate)
                 row = Candidate(id=name.rsplit(".", 1)[0], path=name, prompt=prompt,
                                 score=score, round=1 + len(job.revisions), model=job.image_model)
                 job.candidates.append(row)
@@ -464,3 +470,8 @@ class ImageRecreation:
         job.prompt = prompt
         self._save(job)
         return self._render(job, job.prompt, candidates)
+
+
+# Public names for the Reproduce v2 handler (same helpers, no copies).
+read_json = _read_json
+image_data_url = _image_data_url

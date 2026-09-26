@@ -30,6 +30,7 @@ import { registerProjectOpsRoutes } from './routes/project-ops'
 import { registerQueueRoutes, tickQueue } from './routes/queue'
 import { registerJobRoutes, tickJobs } from './routes/jobs'
 import { registerVisionRoutes } from './routes/vision'
+import { registerReproduceRoutes, tickReproduce } from './routes/reproduce'
 import { registerSettingsRoutes } from './routes/settings'
 import { registerVideoAnalysisRoutes } from './routes/video-analysis'
 import { registerImageAnalysisRoutes } from './routes/image-analysis'
@@ -71,6 +72,7 @@ export function createMockBackend(options: MockBackendOptions = {}): MockBackend
   registerTimelineRoutes(router, store)
   registerJobRoutes(router, store)
   registerVisionRoutes(router, store)
+  registerReproduceRoutes(router, store)
 
   // Local files the renderer would open with a `file://` URL under Electron.
   router.get('/api/__ui_mock/file', req => {
@@ -98,6 +100,7 @@ export function createMockBackend(options: MockBackendOptions = {}): MockBackend
       tickQueue(state)
       tickGeneration(state)
       tickJobs(state)
+      tickReproduce(state)
     })
 
     const request: MockRequest = {

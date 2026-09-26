@@ -35,6 +35,7 @@ from film.image_recreation import ImageRecreation
 from handlers.jobs_handler import JobsHandler
 from handlers.vision_handler import VisionHandler
 from film.prompt_templates import TemplateStore
+from handlers.reproduce_handler import ReproduceHandler
 from services.vision.protocol import VisionService
 from services.vram.vram_manager import NvmlProbe, VramManager
 from runtime_config.runtime_config import RuntimeConfig
@@ -386,6 +387,19 @@ class AppHandler:
             vision=self.vision,
         )
 
+        self.reproduce = ReproduceHandler(
+            state=self.state,
+            lock=self._lock,
+            root=config.outputs_dir / "image_analyses",
+            image_generation=self.image_generation,
+            vision=self.vision,
+            jobs=self.jobs,
+            knowledge=self.knowledge,
+            task_runner=task_runner,
+            image_model=config.wangp_image_model_type if config.wangp_enabled else "Z-Image",
+            wangp_enabled=config.wangp_enabled,
+        )
+
         # History controls: cancel and re-run per job kind. Film-queued shots
         # cancel through the queue; everything else through the single-slot
         # generation state machine.
@@ -423,7 +437,17 @@ class AppHandler:
 
         self.jobs.register_canceller("video_gen", _cancel_video)
         self.jobs.register_canceller("image_gen", _cancel_generation)
-        self.jobs.register_canceller("image_reproduce", _cancel_generation)
+        def _cancel_reproduce(job: Job) -> bool:
+            analysis_id = str(job.inputs.get("analysis_id", ""))
+            if analysis_id:
+                try:
+                    self.reproduce.cancel(analysis_id)
+                    return True
+                except HTTPError:
+                    pass
+            return _cancel_generation(job)
+
+        self.jobs.register_canceller("image_reproduce", _cancel_reproduce)
         self.jobs.register_canceller("video_reproduce", _cancel_generation)
         self.jobs.register_canceller("download", _cancel_download)
         self.jobs.register_canceller("analysis", _cancel_analysis)

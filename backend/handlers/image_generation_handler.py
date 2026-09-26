@@ -10,6 +10,8 @@ from pathlib import Path
 from threading import RLock
 from typing import TYPE_CHECKING
 
+from PIL import Image
+
 from _routes._errors import HTTPError
 from api_types import GenerateImageRequest, GenerateImageResponse
 from handlers.base import StateHandlerBase
@@ -81,6 +83,23 @@ class ImageGenerationHandler(StateHandlerBase):
             self._jobs.annotate(tracked, metrics={"peak_vram_mb": peak_mb})
         self._close_job(tracked, response=response)
         return response
+
+    def cancel_current(self) -> None:
+        """Cancel whatever image generation is running (used by the Reproduce loop)."""
+        self._generation.cancel_generation()
+
+    def edit(self, req: GenerateImageRequest, *, reference: Image.Image, mask_png: bytes) -> GenerateImageResponse:
+        """Edit `reference` inside `mask_png` with the edit-capable WanGP image model.
+
+        The exact WanGP keys for reference images and masks depend on the
+        checkout (`wgp.py` / `shared/api.py`) and could not be verified in
+        this build; the bridge method raises with a clear message until they
+        are confirmed (see session-notes VF-008).
+        """
+        if not self._config.wangp_enabled:
+            raise HTTPError(400, "Image editing needs the WanGP edit model (Qwen-Image-Edit / Flux Kontext)")
+        del reference, mask_png
+        raise HTTPError(501, "Image editing with WanGP is not wired yet: the reference/mask parameter names must be confirmed against the local checkout")
 
     def _open_job(self, req: GenerateImageRequest, job_id: str | None, seed: int | None) -> str:
         if self._jobs is None:

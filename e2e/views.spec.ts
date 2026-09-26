@@ -51,10 +51,10 @@ test.describe('views', () => {
     await backHome(page)
   })
 
-  test('Recreate from image', async ({ page }) => {
+  test('Reproduce image', async ({ page }) => {
     const guard = await openHome(page)
-    await page.getByRole('button', { name: /Recreate from image/i }).first().click()
-    await expect(page.getByRole('heading', { name: 'Recreate from image' })).toBeVisible()
+    await page.getByRole('button', { name: /Reproduce image/i }).first().click()
+    await expect(page.getByRole('heading', { name: 'Reproduce image' })).toBeVisible()
     await settle(page)
     await expectMediaIntact(page, guard)
     await backHome(page)

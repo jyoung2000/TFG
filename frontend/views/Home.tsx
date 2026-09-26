@@ -201,7 +201,7 @@ export function Home() {
             </button>
             <button onClick={() => setCurrentView('analyze-image')}
               className="w-full px-3 py-2 rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-white text-left text-sm flex items-center gap-2 transition-colors">
-              <ImageIcon className="h-4 w-4" /> Recreate from image
+              <ImageIcon className="h-4 w-4" /> Reproduce image
             </button>
             <button
               onClick={openPlayground}
@@ -365,7 +365,7 @@ export function Home() {
             </button>
             <button onClick={() => setCurrentView('analyze-image')}
               className="group text-left rounded-xl border border-zinc-800 bg-zinc-900 hover:border-teal-500 p-5 transition-colors">
-              <div className="flex items-center gap-2 mb-2"><span className="p-2 rounded-lg bg-teal-600/20 text-teal-300"><ImageIcon className="h-5 w-5" /></span><span className="text-base font-semibold text-white">Recreate from image</span></div>
+              <div className="flex items-center gap-2 mb-2"><span className="p-2 rounded-lg bg-teal-600/20 text-teal-300"><ImageIcon className="h-5 w-5" /></span><span className="text-base font-semibold text-white">Reproduce image</span></div>
               <p className="text-sm text-zinc-400 leading-relaxed">Analyze a reference, generate candidates, compare them side by side and refine the prompt using visible differences.</p>
               <span className="inline-block mt-3 text-xs text-teal-300 group-hover:text-teal-200">Choose an image →</span>
             </button>

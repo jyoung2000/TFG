@@ -14,7 +14,7 @@ import { Project } from './views/Project'
 import { Playground } from './views/Playground'
 import { QuickMode } from './views/QuickMode'
 import { AnalyzeVideo } from './views/AnalyzeVideo'
-import { AnalyzeImage } from './views/AnalyzeImage'
+import { ImageReproduce } from './views/reproduce/ImageReproduce'
 import { HistoryView } from './views/history/HistoryView'
 import { LaunchGate } from './components/FirstRunSetup'
 import { PythonSetup } from './components/PythonSetup'
@@ -443,7 +443,7 @@ function AppContent() {
       case 'analyze':
         return <AnalyzeVideo />
       case 'analyze-image':
-        return <AnalyzeImage />
+        return <ImageReproduce />
       case 'history':
         return <HistoryView />
       default:

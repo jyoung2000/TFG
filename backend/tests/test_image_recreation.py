@@ -78,7 +78,7 @@ def test_bad_image_and_bounded_budget(client, test_state, tmp_path, monkeypatch)
 
 
 def test_comparison_is_spatial_not_just_average_color():
-    from film.image_recreation import score_images
+    from film.image_recreation import composite_score
     ref = Image.new("RGB", (64, 64), "#191928")
     good = ref.copy()
     bad = ref.copy()
@@ -87,8 +87,8 @@ def test_comparison_is_spatial_not_just_average_color():
             ref.putpixel((x,y), (255,0,0))
             good.putpixel((x,y), (230,0,0))
             bad.putpixel((x+32,y+32), (255,0,0))
-    assert score_images(ref, good) > score_images(ref, bad)
-    assert score_images(ref, ref) == 1.0
+    assert composite_score(ref, good) > composite_score(ref, bad)
+    assert composite_score(ref, ref) == 1.0
 
 
 def test_refine_accepts_structured_differences_from_small_vision_models():

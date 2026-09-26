@@ -19,6 +19,7 @@ from _routes.film_director import router as film_director_router
 from _routes.knowledge import router as knowledge_router
 from _routes.jobs import router as jobs_router
 from _routes.vision import router as vision_router
+from _routes.reproduce import router as reproduce_router
 from _routes.prompts import router as prompts_router
 from _routes.shot_library import router as shot_library_router
 from _routes.timeline import router as timeline_router
@@ -65,6 +66,8 @@ def _is_media_path(path: str) -> bool:
     if path.startswith("/api/video-analysis/") and path.endswith("/frame"):
         return True
     if path.startswith("/api/image-analysis/") and path.endswith("/media"):
+        return True
+    if path.startswith("/api/reproduce/") and path.endswith("/media"):
         return True
     return path.startswith("/api/film/projects/") and path.endswith("/media")
 
@@ -159,6 +162,7 @@ def create_app(
     app.include_router(knowledge_router)
     app.include_router(jobs_router)
     app.include_router(vision_router)
+    app.include_router(reproduce_router)
     app.include_router(prompts_router)
     app.include_router(shot_library_router)
     app.include_router(timeline_router)

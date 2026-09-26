@@ -5,8 +5,8 @@
 4 Image Reproduce v2 · 5 Motion + Video Reproduce v2 · 6 3D storyboard · 7 LoRA Train · 8 front door/4070 preset ·
 9 containers/remote/tiering · 10 acceptance/docs/PR
 
-**Current phase:** 2
-**Last passing gate:** Gate 1 (tsc 0 · pyright 0 · vitest 35/35 · pytest 679 passed + 1 strict xfail · e2e 12/12)
+**Current phase:** 4 (committing)
+**Last passing gate:** Gate 3 (tsc 0 · pyright 0 · vitest 45/45 · pytest 717 + 1 strict xfail · e2e 13/13)
 
 ## Environment (this session)
 - Cloud Linux container (not the Windows 4070 box the prompt assumes). No GPU, no nvidia-smi.
@@ -34,7 +34,21 @@
 - VF-003: `@playwright/test` 1.63 expects Chromium 1243; config falls back to `PW_CHROMIUM_PATH` / `/opt/pw-browsers/chromium`.
 - VF-004: ui-mock persists state in `node_modules/.cache/ui-mock/state.json`; e2e resets via `POST /api/__ui_mock/reset` per test.
 
+- VF-008 (phase 4): the WanGP keys for reference image + mask on the edit models (Qwen-Image-Edit / Flux Kontext)
+  could not be verified here (no WanGP checkout reachable); `ImageGenerationHandler.edit()` and reproduce `_inpaint`
+  raise an actionable error until confirmed. Adjustments + patch-from-reference are fully local and tested.
+- VF-009: `uv run pytest` re-syncs the lock (pulls torch cu128 → egress 403). Use `backend/.venv/bin/python -m pytest`
+  in this container; CI uses `pnpm backend:test` with network.
+
 ## Decisions
+- D-017 (phase 4): composite score = 0.35 CLIP-I + 0.25 DINOv2 + 0.15 SSIM + 0.15 palette ΔE2000 + 0.10 layout,
+  renormalised over available components (fakes → SSIM/palette/layout only). Seeds `seed0 + (round-1)*100 + n`.
+- D-018: Fix canvas is plain Canvas 2D (no Konva/Fabric): mask + adjustment maths mirrored in `services/image_ops.py`
+  so the server commit equals the client preview. Inpaint stays behind VF-008.
+- D-019: reproduce jobs live in `<outputs>/image_analyses/<id>/` (same folder as the v1 tab) and v1 JSON migrates
+  on read; the old `AnalyzeImage.tsx` view is no longer mounted (History "Open in Reproduce" targets the new one).
+- D-020: ui-mock `routes/reproduce.ts` compiles prompts with the renderer's own `previewPrompt` so the mock cannot
+  drift from `frontend/types/shotspec.ts`; the loop advances on wall clock (one round / 2.5 s).
 - D-012 (phase 3): ShotSpec (`film/shot_spec.py` ↔ `frontend/types/shotspec.ts`) is the only analysis→generation
   contract; fusion precedence measured/depth/flow > florence > clip > vlm, `user` locks absolute.
 - D-013: new compile targets `ltx2`, `wan22`, `z_image` (own tagged target, no longer an sdxl alias),
@@ -111,5 +125,16 @@
 - frontend/types/shotspec.ts, lib/shotspec/{schema,formatters,fusion}.ts (+ formatters.test.ts), types/knowledge.ts
 - scripts/extract-model-catalog.mjs; docs/INTEGRATED_UPSTREAMS.md, NOTICES.md
 
+## Files touched (phase 4)
+- backend/services/similarity/{metrics,composite}.py, services/image_ops.py, film/reproduce_models.py,
+  handlers/reproduce_handler.py, _routes/reproduce.py, app_factory.py (media query token), app_handler.py (wiring,
+  canceller), handlers/image_generation_handler.py (cancel_current, edit stub), film/image_recreation.py (public
+  helpers), tests/test_reproduce.py (14)
+- frontend/types/reproduce.ts, lib/reproduce-api.ts, views/reproduce/{ImageReproduce,SpecBlocks,CandidateCompare,
+  WhyPanel,FixCanvas,MediaImage}.tsx, App.tsx (analyze-image → ImageReproduce), views/Home.tsx (label)
+- devtools/ui-mock/routes/reproduce.ts, state.ts (reproduceJobs), server.ts; e2e/reproduce.spec.ts (5),
+  e2e/views.spec.ts (label); docs/REPRODUCE.md
+
 ## Next step
-Phase 4: handlers/reproduce_handler.py (spec → compile → N candidate jobs → composite score → refine loop), services/similarity/ (CLIP-I/DINO/SSIM/ΔE2000/IoU), services/image_ops.py, FixCanvas.tsx, ImageReproduce.tsx (blocks editor, metrics, rounds, why panel), mock routes + e2e.
+Phase 5: motion analysis (`services/vision/motion.py` optical-flow → SpecMotion, shot boundaries), Video Reproduce v2
+(per-shot ShotSpec, LTX-2/Wan 2.2 targets, temporal scoring), replace the 501 in `video_analysis_handler.recreate_video`.
