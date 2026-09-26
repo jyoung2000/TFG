@@ -707,6 +707,9 @@ class VideoGenerationHandler(StateHandlerBase):
                 is_cancelled=self._generation.is_generation_cancelled,
                 control_video_path=_existing_file(req.controlVideoPath),
                 depth_video_path=_existing_file(req.depthVideoPath),
+                loras=[(lora.name, lora.multiplier) for lora in req.loras if _existing_file(lora.name)],
+                reference_images=[p for p in (_existing_file(r) for r in req.referenceImagePaths) if p],
+                end_frame_path=_existing_file(req.endFramePath),
             )
 
             self._generation.complete_generation(output_path)

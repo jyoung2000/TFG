@@ -8,6 +8,8 @@ from fastapi import APIRouter, Depends, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+from api_types import LoraUse
+
 from app_handler import AppHandler
 from film.prompt_compiler import PromptStyle
 from film.reproduce_models import ReproduceBudget, ReproduceJob
@@ -41,6 +43,8 @@ class StartRequest(BaseModel):
     seed: int | None = None
     #: Ask the VLM to compare on plateaus (needs a vision-capable model).
     use_vlm: bool = False
+    #: LoRAs applied to every candidate (from the registry picker).
+    loras: list[LoraUse] = Field(default_factory=list[LoraUse])
 
 
 class FixRequest(BaseModel):
@@ -99,7 +103,7 @@ def route_prompt(job_id: str, req: PromptRequest, handler: AppHandler = Depends(
 
 @router.post("/{job_id}/start", response_model=ReproduceJob)
 def route_start(job_id: str, req: StartRequest, handler: AppHandler = Depends(get_state_service)) -> ReproduceJob:
-    return handler.reproduce.start(job_id, req.budget, seed=req.seed, provider=_vlm(handler) if req.use_vlm else None)
+    return handler.reproduce.start(job_id, req.budget, seed=req.seed, provider=_vlm(handler) if req.use_vlm else None, loras=req.loras)
 
 
 @router.post("/{job_id}/cancel", response_model=ReproduceJob)

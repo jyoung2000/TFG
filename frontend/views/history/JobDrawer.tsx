@@ -6,6 +6,7 @@ import { jobsApi } from '../../lib/jobs-api'
 import { logger } from '../../lib/logger'
 import { JOB_KIND_LABEL, isActive, type Job } from '../../types/jobs'
 import { formatSeconds, formatWhen, statusTone } from './JobCard'
+import { LossSparkline } from '../train/LossSparkline'
 
 interface JobDrawerProps {
   jobId: string
@@ -230,7 +231,13 @@ export function JobDrawer({ jobId, onClose, onSelect, onOpenReproduce, onOpenPro
 
           {Object.keys(job.metrics).length > 0 && (
             <Section title="Metrics">
-              <KeyValue data={{ ...job.metrics, seconds: formatSeconds(job.metrics.seconds) || job.metrics.seconds }} />
+              {Array.isArray(job.metrics.loss_history) && (
+                <LossSparkline values={(job.metrics.loss_history as unknown[]).filter((v): v is number => typeof v === 'number')} width={300} height={56} />
+              )}
+              {typeof job.metrics.consistency === 'number' && (
+                <p className="text-xs text-zinc-300" data-testid="consistency-score">Cross-frame consistency <span className={job.metrics.consistency >= 0.75 ? 'text-emerald-300' : job.metrics.consistency >= 0.5 ? 'text-amber-300' : 'text-red-300'}>{(job.metrics.consistency * 100).toFixed(0)}%</span> <span className="text-zinc-500">· CLIP similarity of the first frame to the character reference</span></p>
+              )}
+              <KeyValue data={{ ...job.metrics, loss_history: undefined, consistency: undefined, seconds: formatSeconds(job.metrics.seconds) || job.metrics.seconds }} />
             </Section>
           )}
 

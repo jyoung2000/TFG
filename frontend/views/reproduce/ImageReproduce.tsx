@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ArrowLeft, Copy, Image as ImageIcon, Loader2, Pin, Play, RefreshCw, Send, Sparkles, Square, Star, Trash2, Wand2 } from 'lucide-react'
 import { Lightbox, type LightboxItem } from '../../components/Lightbox'
+import { LoraPicker } from '../../components/LoraPicker'
+import type { LoraUse } from '../../types/training'
 import { useProjects } from '../../contexts/ProjectContext'
 import { previewPrompt } from '../../lib/shotspec/formatters'
 import { logger } from '../../lib/logger'
@@ -31,6 +33,7 @@ export function ImageReproduce() {
   const [budget, setBudget] = useState({ candidates_per_round: 6, max_rounds: 3, target_score: 0.9 })
   const [seed, setSeed] = useState<string>('')
   const [useVlm, setUseVlm] = useState(false)
+  const [loras, setLoras] = useState<LoraUse[]>([])
   const [fixing, setFixing] = useState<ReproduceCandidate | null>(null)
   const [lightbox, setLightbox] = useState<{ items: LightboxItem[]; index: number } | null>(null)
   const [serverPrompt, setServerPrompt] = useState<string>('')
@@ -174,10 +177,11 @@ export function ImageReproduce() {
                   {busyJob ? (
                     <button onClick={() => void run('Cancelling', () => reproduceApi.cancel(job.id))} className="btn-chip text-red-300"><Square className="h-3.5 w-3.5" /> Cancel</button>
                   ) : (
-                    <button onClick={() => void run('Starting', () => reproduceApi.start(job.id, budget, seed.trim() ? Number(seed) : null, useVlm))} disabled={!!busy || !shownPrompt} className="btn-chip bg-violet-700 hover:bg-violet-600 text-white"><Play className="h-3.5 w-3.5" /> Start loop</button>
+                    <button onClick={() => void run('Starting', () => reproduceApi.start(job.id, budget, seed.trim() ? Number(seed) : null, useVlm, loras))} disabled={!!busy || !shownPrompt} className="btn-chip bg-violet-700 hover:bg-violet-600 text-white"><Play className="h-3.5 w-3.5" /> Start loop</button>
                   )}
                 </div>
               </section>
+              <LoraPicker model={target} value={loras} onChange={setLoras} disabled={busyJob} compact />
               {busyJob && (
                 <div className="h-1.5 rounded bg-zinc-800 overflow-hidden" role="progressbar" aria-valuenow={Math.round(job.progress)} aria-valuemin={0} aria-valuemax={100} aria-label="Reproduce progress">
                   <div className="h-full bg-violet-500 transition-all" style={{ width: `${Math.max(2, job.progress)}%` }} />

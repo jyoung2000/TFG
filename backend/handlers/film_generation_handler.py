@@ -14,6 +14,7 @@ import base64
 import logging
 import mimetypes
 import os
+import tempfile
 import time
 from collections import deque
 from collections.abc import Callable
@@ -23,7 +24,7 @@ from threading import RLock
 from typing import Any, cast
 
 from _routes._errors import HTTPError
-from api_types import GenerateImageRequest, GenerateVideoRequest, VideoCameraMotion
+from api_types import GenerateImageRequest, GenerateVideoRequest, VideoCameraMotion, LoraUse
 from film.film_api_types import (
     AddAssetReferenceRequest,
     BatchGenerateRequest,
@@ -38,6 +39,9 @@ from film.film_api_types import (
     QueuedJob,
     QueueShotResponse,
     ReplaceProjectRequest,
+    ReferenceSheetRequest,
+    ReferenceSheetResponse,
+    UpdateAssetRequest,
 )
 from film.film_continuity import check_shot_continuity
 from film.media_providers import MediaSpec
@@ -56,6 +60,9 @@ from handlers.film_handler import FilmHandler
 from handlers.knowledge_handler import KnowledgeHandler
 from handlers.generation_handler import GenerationHandler
 from handlers.jobs_handler import JobsHandler
+from handlers.training_handler import TrainingHandler
+from handlers.vision_handler import VisionHandler
+from services.similarity.metrics import cosine_similarity
 from handlers.image_generation_handler import ImageGenerationHandler
 from handlers.video_generation_handler import VideoGenerationHandler, get_allowed_durations
 from runtime_config.model_download_specs import MODEL_FILE_ORDER, resolve_required_model_types
@@ -252,6 +259,9 @@ class FilmGenerationHandler(StateHandlerBase):
         # Optional on purpose: the queue works without it, and learning is
         # never allowed to be a reason a render fails.
         self._knowledge: KnowledgeHandler | None = None
+        #: Registry lookups for asset-bound LoRAs (phase 7); optional like knowledge.
+        self._training: TrainingHandler | None = None
+        self._vision: VisionHandler | None = None
         # Set while a hosted job runs, so the queue can report and cancel it.
         self._hosted_cancel = False
         self._hosted_progress: tuple[int, str] | None = None
@@ -940,6 +950,16 @@ class FilmGenerationHandler(StateHandlerBase):
             aspect_ratio = shot.generation.aspect_ratio
             control_video = self._deliver_pass(job.project_id, shot.generation.control_video)
             depth_video = self._deliver_pass(job.project_id, shot.generation.depth_video)
+            loras = self.asset_loras(project, shot)
+            seed_lock = self.asset_seed_lock(project, shot)
+            if version.seed is None and seed_lock is not None:
+                version.seed = seed_lock
+                self._film.store.save(project)
+            reference_images = [
+                str(self._film.store.resolve_media_path(job.project_id, asset.reference_images[0]))
+                for asset in (project.asset(c.asset_id) for c in shot.characters)
+                if asset is not None and asset.reference_images and asset.lora_id == ""
+            ][:2]
 
         request = GenerateVideoRequest(
             prompt=version.prompt,
@@ -955,6 +975,8 @@ class FilmGenerationHandler(StateHandlerBase):
             aspectRatio=aspect_ratio,
             controlVideoPath=control_video,
             depthVideoPath=depth_video,
+            loras=loras,
+            referenceImagePaths=[p for p in reference_images if Path(p).is_file()],
         )
         return request, version.seed
 
@@ -1058,6 +1080,11 @@ class FilmGenerationHandler(StateHandlerBase):
             if version.gpu_name:
                 job_metrics["gpu_name"] = version.gpu_name
 
+        if status == "complete" and output_path:
+            score = self._consistency_score(job.project_id, job.shot_id, output_path)
+            if score is not None:
+                job_metrics["consistency"] = score
+
         if job.job_id and self._jobs is not None:
             metrics = {k: v for k, v in job_metrics.items()}
             if status == "complete" and output_path:
@@ -1089,6 +1116,126 @@ class FilmGenerationHandler(StateHandlerBase):
                 duration_seconds=seconds,
                 error=error,
             )
+
+    def _consistency_score(self, project_id: str, shot_id: str, output_path: str) -> float | None:
+        """Cross-frame consistency (phase 7): CLIP cosine between the shot's
+        first frame and the reference image of each character in it, averaged.
+        Best effort — never fails a render, None when nothing to compare."""
+        if self._vision is None:
+            return None
+        try:
+            project = self._film.store.load(project_id)
+            found = project.find_shot(shot_id)
+            if found is None:
+                return None
+            _, shot = found
+            references = [
+                self._film.store.resolve_media_path(project_id, asset.reference_images[0])
+                for asset in (project.asset(c.asset_id) for c in shot.characters)
+                if asset is not None and asset.reference_images
+            ]
+            references = [r for r in references if r.is_file()]
+            if not references:
+                return None
+            cap = self._video_processor.open_video(output_path)
+            try:
+                frame = self._video_processor.read_frame(cap, 0)
+                if frame is None:
+                    return None
+                jpeg = self._video_processor.encode_frame_jpeg(frame, quality=90)
+            finally:
+                self._video_processor.release(cap)
+            # A scratch file, never project media: it must not show up in packages or the assets gallery.
+            with tempfile.NamedTemporaryFile(prefix=f"{shot.id}-consistency-", suffix=".jpg", delete=False) as handle:
+                handle.write(jpeg)
+                probe = Path(handle.name)
+            try:
+                frame_vector = self._vision.embed(str(probe), "clip")
+            finally:
+                probe.unlink(missing_ok=True)
+            scores: list[float] = []
+            for reference in references:
+                vector = self._vision.embed(str(reference), "clip")
+                scores.append(cosine_similarity(frame_vector, vector))
+            return round(sum(scores) / len(scores), 4) if scores else None
+        except Exception as exc:  # noqa: BLE001 - advisory metric
+            logger.info("Consistency score unavailable: %s", exc)
+            return None
+
+    def generate_reference_sheet(self, project_id: str, asset_id: str, req: ReferenceSheetRequest) -> ReferenceSheetResponse:
+        """Consistency Kit: the same asset from several angles with one seed and
+        its bound LoRA, saved as reference images (local image model only)."""
+        project = self._film.get_project(project_id)
+        asset = project.asset(asset_id)
+        if asset is None:
+            raise HTTPError(404, f"Asset not found: {asset_id}")
+        handler = self._image_generation
+        if handler is None:  # pragma: no cover - wired in AppHandler
+            raise HTTPError(500, "Local image generation is not available in this build")
+        views = [v.strip() for v in req.views if v.strip()][:6] or ["front view"]
+        seed = req.seed if req.seed is not None else asset.seed_lock
+        if seed is None:
+            seed = int(time.time()) % 2_000_000_000
+        base = self._reference_prompt(asset, project.settings.style_prompt)
+        trigger = asset.lora_trigger.strip()
+        loras: list[LoraUse] = []
+        if asset.lora_id and self._training is not None:
+            try:
+                entry = self._training.get_lora(asset.lora_id)
+                loras.append(LoraUse(name=entry.file, multiplier=asset.lora_multiplier or entry.default_multiplier))
+                trigger = trigger or entry.trigger
+            except HTTPError:
+                pass
+        width, height = self._REFERENCE_SIZES.get(asset.kind, (1024, 1024))
+        prompts: list[str] = []
+        paths: list[str] = []
+        for view in views:
+            prompt = ", ".join(p for p in (trigger, base, view, "consistent character sheet, same person, same outfit") if p)
+            prompts.append(prompt)
+            response = handler.generate(GenerateImageRequest(prompt=prompt, width=width, height=height, numImages=1, loras=loras), seed=seed)
+            out_paths = response.image_paths or []
+            if response.status != "complete" or not out_paths:
+                raise HTTPError(502, "The local image model did not return an image")
+            image_bytes = Path(out_paths[0]).read_bytes()
+            encoded = base64.b64encode(image_bytes).decode("ascii")
+            updated = self._film.add_asset_reference(project_id, asset_id, AddAssetReferenceRequest(image_base64=encoded, name_hint=f"{asset.name}-{view.replace(' ', '-')}"))
+            paths.append(updated.reference_images[-1])
+        asset = self._film.get_project(project_id).asset(asset_id)
+        assert asset is not None
+        if asset.seed_lock is None:
+            asset = self._film.update_asset(project_id, asset_id, UpdateAssetRequest(seed_lock=seed))
+        return ReferenceSheetResponse(asset=asset, prompts=prompts, seed=seed, reference_paths=paths)
+
+    def attach_training(self, training: TrainingHandler, vision: VisionHandler | None = None) -> None:
+        self._training = training
+        self._vision = vision
+
+    def asset_loras(self, project: FilmProject, shot: FilmShot) -> list[LoraUse]:
+        """Every LoRA bound to an asset the shot references, deduplicated."""
+        if self._training is None:
+            return []
+        out: list[LoraUse] = []
+        seen: set[str] = set()
+        asset_ids = [c.asset_id for c in shot.characters] + list(shot.prop_ids) + ([shot.location_id] if shot.location_id else [])
+        for asset_id in asset_ids:
+            asset = project.asset(asset_id)
+            if asset is None or not asset.lora_id or asset.lora_id in seen:
+                continue
+            seen.add(asset.lora_id)
+            try:
+                entry = self._training.get_lora(asset.lora_id)
+            except HTTPError:
+                continue
+            out.append(LoraUse(name=entry.file, multiplier=asset.lora_multiplier if asset.lora_multiplier > 0 else entry.default_multiplier))
+        return out
+
+    @staticmethod
+    def asset_seed_lock(project: FilmProject, shot: FilmShot) -> int | None:
+        for character in shot.characters:
+            asset = project.asset(character.asset_id)
+            if asset is not None and asset.seed_lock is not None:
+                return asset.seed_lock
+        return None
 
     def attach_knowledge(self, knowledge: KnowledgeHandler) -> None:
         """Give the queue somewhere to report outcomes.

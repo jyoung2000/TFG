@@ -1,6 +1,6 @@
 import { APP_NAME } from "../lib/brand";
 import { useState } from 'react'
-import { Clapperboard, FileVideo, Image as ImageIcon, Plus, Folder, MoreVertical, Trash2, Pencil, Sparkles, Zap, History } from 'lucide-react'
+import { Clapperboard, FileVideo, Image as ImageIcon, Layers, Plus, Folder, MoreVertical, Trash2, Pencil, Sparkles, Zap, History } from 'lucide-react'
 import { useProjects } from '../contexts/ProjectContext'
 import { LtxLogo } from '../components/LtxLogo'
 import { Button } from '../components/ui/button'
@@ -110,7 +110,7 @@ function ProjectCard({ project, onOpen, onDelete, onRename }: {
 export function Home() {
   const { projects, createProject, deleteProject, renameProject, openProject, openPlayground, openQuickMode, openAnalyzeVideo } =
     useProjects()
-  const { setCurrentView, openHistory } = useProjects()
+  const { setCurrentView, openHistory, openTrain } = useProjects()
   const [isCreating, setIsCreating] = useState(false)
   const [createTarget, setCreateTarget] = useState<ProjectTab>('gen-space')
   const [newProjectName, setNewProjectName] = useState('')
@@ -202,6 +202,10 @@ export function Home() {
             <button onClick={() => setCurrentView('analyze-image')}
               className="w-full px-3 py-2 rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-white text-left text-sm flex items-center gap-2 transition-colors">
               <ImageIcon className="h-4 w-4" /> Reproduce image
+            </button>
+            <button onClick={openTrain}
+              className="w-full px-3 py-2 rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-white text-left text-sm flex items-center gap-2 transition-colors">
+              <Layers className="h-4 w-4" /> Train
             </button>
             <button
               onClick={openPlayground}
@@ -368,6 +372,12 @@ export function Home() {
               <div className="flex items-center gap-2 mb-2"><span className="p-2 rounded-lg bg-teal-600/20 text-teal-300"><ImageIcon className="h-5 w-5" /></span><span className="text-base font-semibold text-white">Reproduce image</span></div>
               <p className="text-sm text-zinc-400 leading-relaxed">Analyze a reference, generate candidates, compare them side by side and refine the prompt using visible differences.</p>
               <span className="inline-block mt-3 text-xs text-teal-300 group-hover:text-teal-200">Choose an image →</span>
+            </button>
+            <button onClick={openTrain}
+              className="group text-left rounded-xl border border-zinc-800 bg-zinc-900 hover:border-fuchsia-500 p-5 transition-colors">
+              <div className="flex items-center gap-2 mb-2"><span className="p-2 rounded-lg bg-fuchsia-600/20 text-fuchsia-300"><Layers className="h-5 w-5" /></span><span className="text-base font-semibold text-white">Train</span></div>
+              <p className="text-sm text-zinc-400 leading-relaxed">Teach the image model a character, style or object: build a dataset from a folder, a video or your History, auto-caption it, and train a LoRA that fits a 12 GB card.</p>
+              <span className="inline-block mt-3 text-xs text-fuchsia-300 group-hover:text-fuchsia-200">Train a LoRA →</span>
             </button>
           </div>
         </div>

@@ -221,6 +221,7 @@ class ImageGenerationHandler(StateHandlerBase):
                 seed=seed,
                 on_progress=self._generation.update_progress,
                 is_cancelled=self._generation.is_generation_cancelled,
+                loras=[(lora.name, lora.multiplier) for lora in req.loras if Path(lora.name).is_file()],
             )
             self._generation.complete_generation(output_paths)
             return GenerateImageResponse(status="complete", image_paths=output_paths)

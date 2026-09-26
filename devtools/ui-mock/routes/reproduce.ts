@@ -191,6 +191,7 @@ export function registerReproduceRoutes(router: Router, store: Store): void {
       prompt: '',
       negative_prompt: '',
       image_model: 'z_image (UI mock)',
+      loras: [],
       vision_model: '',
       budget: { candidates_per_round: 2, max_rounds: 3, target_score: 0.85 },
       status: 'idle',

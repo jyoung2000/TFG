@@ -105,6 +105,7 @@ def test_state(tmp_path: Path, fake_services: FakeServices):
         nvml=fake_services.nvml,
         motion=fake_services.motion,
         stitcher=fake_services.stitcher,
+        trainers={"fake": fake_services.trainer, "musubi": fake_services.trainer, "ai-toolkit": fake_services.trainer},
     )
 
     handler = build_initial_state(

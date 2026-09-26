@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Lightbox, type LightboxItem } from '../../components/Lightbox'
-import { ImagePlus, Loader2, MapPin, Package, Palette, Plus, Sparkles, Trash2, User, Wand2 } from 'lucide-react'
+import { ImagePlus, Layers, Loader2, MapPin, Package, Palette, Plus, Sparkles, Trash2, User, Wand2 } from 'lucide-react'
 import { useFilm } from '../../contexts/FilmContext'
 import { filmApi, filmMediaUrl } from '../../lib/film-api'
+import { trainingApi } from '../../lib/training-api'
+import type { LoraEntry } from '../../types/training'
+import type { FilmProject } from '../../types/film'
 import type { FilmAsset, FilmAssetKind } from '../../types/film'
 
 const KIND_META: Record<FilmAssetKind, { label: string; plural: string; icon: React.ReactNode; color: string }> = {
@@ -291,6 +294,7 @@ export function AssetsPanel() {
               <button onClick={() => void generateStyleGuide()} disabled={generatingGuide || selected.reference_images.length === 0} title="Analyze reference image with vision AI" className="flex items-center gap-1 px-2 py-1 rounded bg-amber-800/70 hover:bg-amber-700 disabled:opacity-40 text-[10px] text-amber-100">{generatingGuide ? <Loader2 className="h-3 w-3 animate-spin" /> : <Wand2 className="h-3 w-3" />} Generate style guide</button>
             </div>
             {selected.reference_images.length > 0 && <div className="flex gap-1.5 overflow-x-auto pb-1">{selected.reference_images.map((p, i) => <ReferenceThumb key={p} path={p} onOpen={() => setLightboxIndex(i)} />)}</div>}
+            {selected.kind !== 'style' && <ConsistencyKit film={film} asset={selected} refresh={async () => { await refresh() }} setNote={setNote} />}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               <div className="space-y-3">
                               <span className="text-[10px] text-zinc-500 uppercase tracking-wide font-semibold">Details</span>
@@ -334,5 +338,70 @@ export function AssetsPanel() {
         />
       )}
     </div>
+  )
+}
+
+
+/**
+ * Consistency Kit (phase 7): bind a registry LoRA to the asset so every shot
+ * that features it inherits the LoRA and trigger word, lock a seed, and render
+ * a multi-angle reference sheet with both.
+ */
+function ConsistencyKit({ film, asset, refresh, setNote }: { film: FilmProject; asset: FilmAsset; refresh: () => Promise<void>; setNote: (note: string) => void }) {
+  const [loras, setLoras] = useState<LoraEntry[]>([])
+  const [busy, setBusy] = useState(false)
+  const [seedDraft, setSeedDraft] = useState(asset.seed_lock === null ? '' : String(asset.seed_lock))
+  const [multiplier, setMultiplier] = useState(asset.lora_multiplier || 1)
+  const [trigger, setTrigger] = useState(asset.lora_trigger)
+  useEffect(() => { trainingApi.listLoras().then(setLoras).catch(() => setLoras([])) }, [])
+  useEffect(() => { setSeedDraft(asset.seed_lock === null ? '' : String(asset.seed_lock)); setMultiplier(asset.lora_multiplier || 1); setTrigger(asset.lora_trigger) }, [asset.id, asset.seed_lock, asset.lora_multiplier, asset.lora_trigger])
+
+  const update = async (data: Record<string, unknown>, note: string) => {
+    setBusy(true)
+    try { await filmApi.updateAsset(film.id, asset.id, data as Partial<FilmAsset>); await refresh(); setNote(note) }
+    catch (e) { setNote('Failed: ' + (e instanceof Error ? e.message : String(e))) }
+    finally { setBusy(false) }
+  }
+  const bind = (loraId: string) => {
+    const entry = loras.find(l => l.id === loraId)
+    void update({ lora_id: loraId, lora_trigger: entry?.trigger ?? '', lora_multiplier: entry?.default_multiplier ?? 1 }, loraId ? 'LoRA bound' : 'LoRA cleared')
+  }
+  const saveSeed = () => {
+    const value = seedDraft.trim()
+    if (value === '') { if (asset.seed_lock !== null) void update({ clear_seed_lock: true }, 'Seed unlocked'); return }
+    const seed = Number(value)
+    if (!Number.isInteger(seed) || seed < 0) { setNote('Failed: the seed must be a whole number'); return }
+    if (seed !== asset.seed_lock) void update({ seed_lock: seed }, 'Seed locked')
+  }
+  const sheet = async () => {
+    setBusy(true); setNote('')
+    try {
+      const result = await filmApi.referenceSheet(film.id, asset.id)
+      await refresh(); setNote(`Reference sheet: ${result.reference_paths.length} views at seed ${result.seed ?? '?'}`)
+    } catch (e) { setNote('Failed: ' + (e instanceof Error ? e.message : String(e))) }
+    finally { setBusy(false) }
+  }
+  const bound = loras.find(l => l.id === asset.lora_id)
+  return (
+    <section className="rounded border border-zinc-800 p-2 space-y-1.5" data-testid="consistency-kit">
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-[10px] text-zinc-500 uppercase tracking-wide font-semibold flex items-center gap-1"><Layers className="h-3 w-3" /> Consistency kit</span>
+        <label className="text-[10px] text-zinc-500 flex items-center gap-1">LoRA
+          <select value={asset.lora_id} disabled={busy} onChange={e => bind(e.target.value)} aria-label="Bound LoRA" className="bg-zinc-900 border border-zinc-700 rounded px-1.5 py-0.5 text-[11px] text-zinc-200">
+            <option value="">none</option>
+            {loras.map(l => <option key={l.id} value={l.id}>{l.name} · {l.target}</option>)}
+          </select>
+        </label>
+        {asset.lora_id && (
+          <>
+            <label className="text-[10px] text-zinc-500 flex items-center gap-1">trigger <input value={trigger} disabled={busy} onChange={e => setTrigger(e.target.value)} onBlur={() => { if (trigger !== asset.lora_trigger) void update({ lora_trigger: trigger }, 'Trigger saved') }} aria-label="LoRA trigger word" className="w-24 bg-zinc-900 border border-zinc-700 rounded px-1.5 py-0.5 text-[11px] text-zinc-200" /></label>
+            <label className="text-[10px] text-zinc-500 flex items-center gap-1">strength <input type="number" step="0.05" min="0" max="2" value={multiplier} disabled={busy} onChange={e => setMultiplier(Number(e.target.value))} onBlur={() => { if (multiplier !== asset.lora_multiplier) void update({ lora_multiplier: multiplier }, 'Strength saved') }} aria-label="LoRA strength" className="w-14 bg-zinc-900 border border-zinc-700 rounded px-1.5 py-0.5 text-[11px] text-zinc-200" /></label>
+          </>
+        )}
+        <label className="text-[10px] text-zinc-500 flex items-center gap-1">seed lock <input value={seedDraft} disabled={busy} placeholder="none" onChange={e => setSeedDraft(e.target.value)} onBlur={saveSeed} onKeyDown={e => { if (e.key === 'Enter') saveSeed() }} aria-label="Seed lock" className="w-24 bg-zinc-900 border border-zinc-700 rounded px-1.5 py-0.5 text-[11px] text-zinc-200" /></label>
+        <button onClick={() => void sheet()} disabled={busy} className="ml-auto flex items-center gap-1 px-2 py-1 rounded bg-fuchsia-800/70 hover:bg-fuchsia-700 disabled:opacity-40 text-[10px] text-fuchsia-100" data-testid="reference-sheet">{busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />} Reference sheet</button>
+      </div>
+      <p className="text-[10px] text-zinc-600">Shots with this {asset.kind} inherit the LoRA{bound?.trigger || asset.lora_trigger ? ` and put “${asset.lora_trigger || bound?.trigger}” in the prompt` : ''}{asset.seed_lock !== null ? `, and render with seed ${asset.seed_lock} unless the shot sets its own` : ''}. The reference sheet renders front, three-quarter, profile and back views with one seed{asset.seed_lock === null ? ' and locks it' : ''}.</p>
+    </section>
   )
 }

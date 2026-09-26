@@ -121,6 +121,11 @@ export interface FilmAsset {
   continuity_notes: string
   reference_images: string[]
   style_guide?: AssetStyleGuide
+  /** Consistency Kit (phase 7): a registry LoRA bound to this asset, its trigger word, strength and a locked seed. */
+  lora_id: string
+  lora_trigger: string
+  lora_multiplier: number
+  seed_lock: number | null
   created_at: number
   updated_at: number
 }

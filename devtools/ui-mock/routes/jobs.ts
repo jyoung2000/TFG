@@ -65,7 +65,14 @@ function job(kind: JobKind, index: number, status: JobStatus, minutesAgo: number
     params: kind === 'download' ? { files: [`${name}.safetensors`] } : { resolution: '540p', duration: '5', fps: '24', model: 'fast', aspectRatio: '16:9' },
     inputs: kind === 'analysis' || kind.endsWith('reproduce') ? { analysis_id: `va-${index}`, video_path: `C:/clips/reference-${index}.mp4` } : {},
     outputs,
-    metrics: status === 'complete' ? { seconds: 28.4 + index, peak_vram_mb: 9800 + index * 100 } : {},
+    metrics:
+      status === 'complete'
+        ? kind === 'training'
+          ? { loss_history: Array.from({ length: 40 }, (_, i) => Number((0.6 * (1 - i / 40) + 0.05 + Math.sin(i / 5) * 0.02).toFixed(4))), final_loss: 0.071, steps: 600, seconds: 760 + index, peak_vram_mb: 10850 }
+          : kind === 'video_gen' && index === 1
+            ? { seconds: 28.4 + index, peak_vram_mb: 9800 + index * 100, consistency: 0.82 }
+            : { seconds: 28.4 + index, peak_vram_mb: 9800 + index * 100 }
+        : {},
     parent_job_id: '',
     project_id: '',
     shot_id: '',

@@ -40,6 +40,8 @@ from film.film_api_types import (
     UpdateShotRequest,
     DeliverRequest,
     DeliverResponse,
+    ReferenceSheetRequest,
+    ReferenceSheetResponse,
 )
 from film.film_models import FilmScene, FilmShot
 from state import get_state_service
@@ -150,6 +152,20 @@ def route_generate_asset_reference(
 ) -> GenerateAssetReferenceResponse:
     """Render a reference image for this asset with the project's image model."""
     return handler.film_generation.generate_asset_reference(project_id, asset_id, req)
+
+
+@router.post(
+    "/projects/{project_id}/assets/{asset_id}/reference-sheet",
+    response_model=ReferenceSheetResponse,
+)
+def route_reference_sheet(
+    project_id: str,
+    asset_id: str,
+    req: ReferenceSheetRequest,
+    handler: AppHandler = Depends(get_state_service),
+) -> ReferenceSheetResponse:
+    """Consistency Kit: multi-angle references with one seed and the asset's LoRA."""
+    return handler.film_generation.generate_reference_sheet(project_id, asset_id, req)
 
 
 @router.put("/projects/{project_id}/assets/{asset_id}", response_model=AssetResponse)

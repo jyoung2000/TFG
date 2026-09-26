@@ -53,6 +53,8 @@ interface ProjectContextType {
   openAnalyzeVideo: () => void
   /** The unified History tab. */
   openHistory: () => void
+  /** The Train tab: datasets, LoRA training runs and the registry. */
+  openTrain: () => void
   /** Open Reproduce for an image or video analysis; an empty id opens the view without a selection. */
   openAnalysis: (kind: 'image' | 'video', id: string) => void
   /** Set by openAnalysis, consumed (and cleared) by the analysis view that mounts next. */
@@ -554,6 +556,11 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
     setCurrentView('history')
   }, [])
 
+  const openTrain = useCallback(() => {
+    setCurrentProjectId(null)
+    setCurrentView('train')
+  }, [])
+
   const [pendingAnalysis, setPendingAnalysis] = useState<{ kind: 'image' | 'video'; id: string } | null>(null)
   const openAnalysis = useCallback((kind: 'image' | 'video', id: string) => {
     setPendingAnalysis(id ? { kind, id } : null)
@@ -596,6 +603,7 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
       openQuickMode,
       openAnalyzeVideo,
       openHistory,
+      openTrain,
       openAnalysis,
       pendingAnalysis,
       clearPendingAnalysis,

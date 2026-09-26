@@ -349,9 +349,11 @@ class FilmHandler(StateHandlerBase):
             asset = project.asset(asset_id)
             if asset is None:
                 raise HTTPError(404, f"Asset not found: {asset_id}")
-            updates = {key: value for key, value in req.model_dump().items() if value is not None}
+            updates = {key: value for key, value in req.model_dump().items() if value is not None and key != "clear_seed_lock"}
             for key, value in updates.items():
                 setattr(asset, key, value)
+            if req.clear_seed_lock:
+                asset.seed_lock = None
             asset.updated_at = now_ms()
             self._save(project)
             return asset

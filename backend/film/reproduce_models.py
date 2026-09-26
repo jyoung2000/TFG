@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Literal, cast
 
+from api_types import LoraUse
 from pydantic import BaseModel, Field
 
 from film.film_models import now_ms
@@ -90,6 +91,8 @@ class ReproduceJob(BaseModel):
     image_model: str = ""
     vision_model: str = ""
     budget: ReproduceBudget = Field(default_factory=ReproduceBudget)
+    #: LoRAs (absolute safetensors path + multiplier) applied to every candidate render.
+    loras: list[LoraUse] = Field(default_factory=list[LoraUse])
     status: ReproduceStatus = "idle"
     progress: float = 0.0
     message: str = ""

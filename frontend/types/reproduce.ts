@@ -72,6 +72,8 @@ export interface ReproduceJob {
   prompt: string
   negative_prompt: string
   image_model: string
+  /** LoRAs applied to every candidate (`api_types.LoraUse`). */
+  loras: { name: string; multiplier: number }[]
   vision_model: string
   budget: ReproduceBudget
   status: ReproduceStatus

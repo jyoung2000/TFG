@@ -172,6 +172,12 @@ class FilmAsset(BaseModel):
     reference_images: list[str] = Field(default_factory=list[str])  # relative paths
     # AI-powered style guide filled from a reference image.
     style_guide: FilmAssetStyleGuide | None = None
+    #: Consistency Kit (phase 7): a registry LoRA every shot with this asset
+    #: inherits (with its trigger word), and a seed the renders lock to.
+    lora_id: str = ""
+    lora_trigger: str = ""
+    lora_multiplier: float = 1.0
+    seed_lock: int | None = None
     created_at: int = Field(default_factory=now_ms)
     updated_at: int = Field(default_factory=now_ms)
 

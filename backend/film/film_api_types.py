@@ -65,6 +65,11 @@ class CreateAssetRequest(BaseModel):
 
 class UpdateAssetRequest(BaseModel):
     name: str | None = None
+    lora_id: str | None = None
+    lora_trigger: str | None = None
+    lora_multiplier: float | None = None
+    seed_lock: int | None = None
+    clear_seed_lock: bool = False
     description: str | None = None
     appearance: str | None = None
     wardrobe: str | None = None
@@ -95,6 +100,20 @@ class GenerateAssetReferenceResponse(BaseModel):
     provider: str
     model: str
     reference_path: str
+
+
+class ReferenceSheetRequest(BaseModel):
+    """Multi-angle reference sheet: one image per view, same seed, the asset's LoRA."""
+
+    views: list[str] = Field(default_factory=lambda: ["front view", "three-quarter view", "profile view", "back view"])
+    seed: int | None = None
+
+
+class ReferenceSheetResponse(BaseModel):
+    asset: FilmAsset
+    prompts: list[str]
+    seed: int | None
+    reference_paths: list[str]
 
 
 class AddAssetReferenceRequest(BaseModel):

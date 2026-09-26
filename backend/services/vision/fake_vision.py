@@ -12,7 +12,7 @@ import math
 from pathlib import Path
 
 import numpy as np
-from PIL import Image
+from PIL import Image, UnidentifiedImageError
 
 from services.vision.depth import write_depth_png
 from services.vision.deterministic import measure_image
@@ -103,8 +103,14 @@ class FakeVision:
         self._use("clip" if kind == "clip" else "dino", image_path)
         # A content-derived unit vector: identical images embed identically,
         # different colours land far apart — enough for similarity tests.
-        with Image.open(image_path) as image:
-            small = np.asarray(image.convert("RGB").resize((4, 4)), dtype=np.float64).reshape(-1) / 255.0
+        try:
+            with Image.open(image_path) as image:
+                small = np.asarray(image.convert("RGB").resize((4, 4)), dtype=np.float64).reshape(-1) / 255.0
+        except (OSError, UnidentifiedImageError):
+            # Frames the fake video processor produces are not real images;
+            # hash their bytes so the vector is still content-derived.
+            digest = hashlib.sha1(Path(image_path).read_bytes()).digest()
+            small = np.asarray(list(digest[:48]), dtype=np.float64) / 255.0
         seed = int(hashlib.sha1(small.tobytes()).hexdigest()[:8], 16)
         rng = np.random.default_rng(seed)
         vector = np.concatenate([small, rng.normal(size=16)])

@@ -20,6 +20,8 @@ export interface GenerationSettings {
   imageAspectRatio: string
   imageSteps: number
   variations?: number  // Number of image variations to generate
+  /** Registry LoRAs (absolute safetensors path + strength) applied to the render. */
+  loras?: { name: string; multiplier: number }[]
 }
 
 interface SettingsPanelProps {

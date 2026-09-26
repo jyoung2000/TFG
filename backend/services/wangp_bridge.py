@@ -10,7 +10,7 @@ import sys
 import threading
 import time
 from collections import deque
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -202,6 +202,9 @@ class WanGPBridge:
         is_cancelled: CancelledCallback,
         control_video_path: str | None = None,
         depth_video_path: str | None = None,
+        loras: Sequence[tuple[str, float]] = (),
+        reference_images: Sequence[str] = (),
+        end_frame_path: str | None = None,
     ) -> str:
         resolution = self._map_video_resolution(resolution_label, aspect_ratio)
         merged_prompt = prompt + self._camera_motion_prompts.get(camera_motion, "")
@@ -225,6 +228,14 @@ class WanGPBridge:
         if image_path:
             settings["image_prompt_type"] = "S"
             settings["image_start"] = str(Path(image_path).resolve())
+        if end_frame_path:
+            # "E" = end frame (wgp.py image_end); combined with a start frame as "SE".
+            settings["image_prompt_type"] = str(settings.get("image_prompt_type", "")) + "E"
+            settings["image_end"] = str(Path(end_frame_path).resolve())
+        self._apply_loras(settings, loras)
+        if reference_images:
+            settings["image_refs"] = [str(Path(p).resolve()) for p in reference_images]
+            settings["video_prompt_type"] = str(settings.get("video_prompt_type", "")) + "I"
         if audio_path:
             settings["audio_prompt_type"] = "A"
             settings["audio_guide"] = str(Path(audio_path).resolve())
@@ -235,7 +246,7 @@ class WanGPBridge:
         # model type is a VACE/control variant and the clean pass otherwise.
         guide = depth_video_path if (depth_video_path and "vace" in self._video_model_type.lower()) else (control_video_path or depth_video_path)
         if guide:
-            settings["video_prompt_type"] = "V"
+            settings["video_prompt_type"] = str(settings.get("video_prompt_type", "")).replace("V", "") + "V"
             settings["video_guide"] = str(Path(guide).resolve())
 
         outputs = self._run_manifest(
@@ -248,6 +259,16 @@ class WanGPBridge:
             raise RuntimeError("WanGP completed without producing a video")
         return outputs[0]
 
+    @staticmethod
+    def _apply_loras(settings: dict[str, object], loras: Sequence[tuple[str, float]]) -> None:
+        """`activated_loras` takes absolute paths (wgp.py `get_lora_URL` returns
+        them unchanged) and `loras_multipliers` is the space-separated strengths."""
+        chosen = [(path, mult) for path, mult in loras if path and Path(path).is_file()]
+        if not chosen:
+            return
+        settings["activated_loras"] = [str(Path(path).resolve()) for path, _ in chosen]
+        settings["loras_multipliers"] = " ".join(f"{mult:g}" for _, mult in chosen)
+
     def generate_images(
         self,
         *,
@@ -259,6 +280,7 @@ class WanGPBridge:
         seed: int | None,
         on_progress: ProgressCallback,
         is_cancelled: CancelledCallback,
+        loras: Sequence[tuple[str, float]] = (),
     ) -> list[str]:
         mapped_width, mapped_height = self._map_image_resolution(width, height)
         normalized_steps = self._normalize_image_steps(num_steps)
@@ -273,6 +295,7 @@ class WanGPBridge:
         if seed is not None:
             settings["seed"] = seed
 
+        self._apply_loras(settings, loras)
         outputs = self._run_manifest(
             manifest=[{"id": 1, "params": settings, "plugin_data": {}}],
             media_suffixes={".png", ".jpg", ".jpeg", ".webp"},

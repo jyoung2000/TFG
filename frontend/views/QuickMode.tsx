@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { LoraPicker } from '../components/LoraPicker'
+import type { LoraUse } from '../types/training'
 import {
   ArrowLeft,
   Clapperboard,
@@ -152,6 +154,7 @@ export function QuickMode() {
   const [prompt, setPrompt] = useState('')
   const [negativePrompt, setNegativePrompt] = useState('')
   const [settings, setSettings] = useState<QuickSettings>(DEFAULT_QUICK_SETTINGS)
+  const [loras, setLoras] = useState<LoraUse[]>([])
   const [chat, setChat] = useState<ChatTurn[]>([])
   const [chatInput, setChatInput] = useState('')
   const [chatBusy, setChatBusy] = useState(false)
@@ -244,9 +247,9 @@ export function QuickMode() {
       const useReference = overrideReference === undefined ? referenceImage : overrideReference
       submittedRef.current = { prompt: usePrompt, negativePrompt: useNegative, settings: useSettings, referenceImage: useReference }
       setResult(null)
-      await generation.generate(usePrompt, useReference ? fileUrlToPath(useReference) : null, toGenerationSettings(useSettings))
+      await generation.generate(usePrompt, useReference ? fileUrlToPath(useReference) : null, { ...toGenerationSettings(useSettings), loras })
     },
-    [prompt, negativePrompt, effectiveSettings, generation, referenceImage],
+    [prompt, negativePrompt, effectiveSettings, generation, referenceImage, loras],
   )
 
   const sendChat = useCallback(async () => {
@@ -557,6 +560,7 @@ export function QuickMode() {
                 </select>
               </label>
             </div>
+            {!forcedApi && <LoraPicker model="ltx2" value={loras} onChange={setLoras} disabled={generation.isGenerating} />}
             {/* Optional reference image → image-to-video */}
             <div className="flex items-center gap-3">
               <div

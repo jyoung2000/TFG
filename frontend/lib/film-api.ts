@@ -139,6 +139,13 @@ export const filmApi = {
       method: 'DELETE',
     }),
 
+  /** Consistency Kit: the same asset from several angles with one seed and its bound LoRA. */
+  referenceSheet: (projectId: string, assetId: string, data: { views?: string[]; seed?: number | null } = {}) =>
+    request<{ asset: FilmAsset; prompts: string[]; seed: number | null; reference_paths: string[] }>(
+      `/api/film/projects/${enc(projectId)}/assets/${enc(assetId)}/reference-sheet`,
+      { method: 'POST', body: JSON.stringify(data) },
+    ),
+
   addAssetReference: (projectId: string, assetId: string, imageBase64: string, nameHint: string) =>
     request<{ asset: FilmAsset }>(
       `/api/film/projects/${enc(projectId)}/assets/${enc(assetId)}/references`,

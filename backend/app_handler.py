@@ -38,6 +38,8 @@ from film.prompt_templates import TemplateStore
 from handlers.reproduce_handler import ReproduceHandler
 from handlers.video_reproduce_handler import VideoReproduceHandler
 from handlers.scene_handler import SceneHandler
+from handlers.training_handler import TrainingHandler
+from services.trainer.trainer import LoraTrainer
 from services.vision.protocol import VisionService
 from services.motion.motion_analyzer import MotionAnalyzer
 from services.stitcher.video_stitcher import VideoStitcher
@@ -95,6 +97,7 @@ class AppHandler:
         nvml: NvmlProbe | None = None,
         motion: MotionAnalyzer | None = None,
         stitcher: VideoStitcher | None = None,
+        trainers: dict[str, LoraTrainer] | None = None,
     ) -> None:
         self.config = config
 
@@ -189,6 +192,14 @@ class AppHandler:
         self._stitcher = stitcher
         #: Exposed for routes that encode media (Deliver).
         self.stitcher = stitcher
+        if trainers is None:
+            from pathlib import Path as _Path
+
+            from services.trainer.subprocess_trainer import AiToolkitTrainer, MusubiTrainer
+
+            backend_root = _Path(__file__).resolve().parent
+            trainers = {"musubi": MusubiTrainer(backend_root), "ai-toolkit": AiToolkitTrainer(backend_root)}
+        self._trainers = trainers
 
         # The unified job store: every handler below that does work reports
         # to it, and the History tab reads nothing else.
@@ -438,6 +449,20 @@ class AppHandler:
             knowledge=self.knowledge,
         )
         self.video_analysis.attach_reproduce(self.video_reproduce)
+        self.training = TrainingHandler(
+            state=self.state,
+            lock=self._lock,
+            app_data=app_data,
+            trainers=self._trainers,
+            task_runner=task_runner,
+            probe=media_probe,
+            vram=self.vram,
+            jobs=self.jobs,
+            vision=self.vision,
+            reproduce_root=config.outputs_dir / "image_analyses",
+            analysis_root=config.outputs_dir / "video_analyses",
+        )
+        self.film_generation.attach_training(self.training, self.vision)
         self.scene = SceneHandler(
             state=self.state,
             lock=self._lock,
@@ -505,6 +530,18 @@ class AppHandler:
             return _cancel_generation(job)
 
         self.jobs.register_canceller("video_reproduce", _cancel_video_reproduce)
+
+        def _cancel_training(job: Job) -> bool:
+            run_id = str(job.inputs.get("run_id", ""))
+            if run_id:
+                try:
+                    self.training.cancel(run_id)
+                    return True
+                except HTTPError:
+                    pass
+            return False
+
+        self.jobs.register_canceller("training", _cancel_training)
         self.jobs.register_canceller("download", _cancel_download)
         self.jobs.register_canceller("analysis", _cancel_analysis)
         self.jobs.register_rerunner("video_gen", _rerun_video)
@@ -542,6 +579,8 @@ class ServiceBundle:
     motion: MotionAnalyzer | None = None
     #: None → ffmpeg concat (imageio-ffmpeg / TFG_FFMPEG); tests inject FakeStitcher.
     stitcher: VideoStitcher | None = None
+    #: None → subprocess trainers (musubi-tuner, ai-toolkit); tests inject FakeTrainer.
+    trainers: dict[str, LoraTrainer] | None = None
 
 
 def _default_nvml() -> NvmlProbe:
@@ -645,4 +684,5 @@ def build_initial_state(
         nvml=bundle.nvml,
         motion=bundle.motion,
         stitcher=bundle.stitcher,
+        trainers=bundle.trainers,
     )

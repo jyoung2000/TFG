@@ -5,8 +5,8 @@
 4 Image Reproduce v2 · 5 Motion + Video Reproduce v2 · 6 3D storyboard · 7 LoRA Train · 8 front door/4070 preset ·
 9 containers/remote/tiering · 10 acceptance/docs/PR
 
-**Current phase:** 6 (committing)
-**Last passing gate:** Gate 6 (tsc 0 · pyright 0 · vitest 53/53 · pytest 766 · e2e 21/21)
+**Current phase:** 7 (committing)
+**Last passing gate:** Gate 7 (tsc 0 · pyright 0 · vitest 53/53 · pytest 793 · e2e 25/25 · Vite build OK)
 
 ## Environment (this session)
 - Cloud Linux container (not the Windows 4070 box the prompt assumes). No GPU, no nvidia-smi.
@@ -49,8 +49,38 @@
 - VF-013: WanGP's `video_guide` / `video_prompt_type="V"` settings keys are the documented guide-video inputs; the
   per-model (VACE vs depth) semantics could not be verified here — the bridge sends the depth pass for `*vace*`
   model types and the clean pass otherwise, and the request keys are covered by tests.
+- VF-014 (phase 7): WanGP `wgp.py` reads `activated_loras` (a list; `get_lora_URL` returns absolute paths
+  unchanged), `loras_multipliers` (space-separated string in the same order), `image_refs` (list), `image_start`,
+  `image_end`, `video_guide`, `video_mask`, and the `image_prompt_type` / `video_prompt_type` letter flags
+  (`S`/`E` start/end frame, `I` image refs, `V` guide video). Verified from the upstream source at fetch time.
+- VF-015: musubi-tuner README: "12GB or more recommended for image training, 24GB or more for video training";
+  memory knobs `--blocks_to_swap`, `--fp8_base --fp8_scaled`, `--fp8_llm`/`--fp8_vl`/`--fp8_t5`; scripts
+  `zimage_train_network.py`, `qwen_image_train_network.py`, `wan_train_network.py --task t2v-A14B/i2v-A14B`.
+- VF-016: ostris ai-toolkit runs `python run.py config.yaml`; config keys `network.type: lora`, `linear`,
+  `train.steps`, `model.quantize`, `low_vram`, `trigger_word`, `datasets[].folder_path`/`resolution`,
+  `save.save_every`, `sample.sample_every`.
+- VF-017: the LTX-2 trainer (`packages/ltx-trainer`) recommends 80 GB and its low-VRAM config targets 32 GB → not
+  runnable on a 12 GB card; listed in the catalog only so the UI can say so.
+- VF-018: the `dataviz` skill the prompt names is not available in this session (only `docs` and `xlsx` exist);
+  the loss sparkline is a plain inline SVG (`views/train/LossSparkline.tsx`).
 
 ## Decisions
+- D-028 (phase 7): trainers are subprocess-only, each in its own venv (`backend/.venv-trainer-*`) cloned by
+  `scripts/ensure-trainer.{sh,ps1}`; never vendored. One `LoraTrainer` Protocol, `FakeTrainer` for tests. The
+  bootstrap pattern (clone → venv → pip under the app's folders) follows Open-Generative-AI's installer as a
+  concept only — no code copied.
+- D-029: the 12 GB guard runs before any subprocess: `fits_machine(config)` against `vram.memory_mb()` (or the
+  12288 MB constant) and the catalog's `fits_12gb`; Wan 2.2 / LTX-2 stay listed and are refused with the reason.
+- D-030: the registry folder layout mirrors WanGP's LoRA directories (`z_image`, `qwen`, `flux2`, `wan`, `ltx2`);
+  entries whose file vanished are dropped on load rather than shown.
+- D-031: cross-frame consistency = mean CLIP cosine between the shot's first frame and each featured character's
+  first reference image; the metric is absent when there is nothing to compare (never invented).
+- D-032: pickers ask by model id (`/api/training/loras?model=`) and `compatible()` maps it to a target; Quick video
+  asks for `ltx2`, Image Reproduce for its compile target, Film binds per asset.
+- D-033: Image Reproduce carries `loras` on the job (persisted) and every candidate render uses them.
+- D-034: e2e helpers wait for the "Connect API Keys" modal to clear after load — `forceApiGenerations` defaults
+  to true until `/api/runtime-policy` answers, so a cold dev server can flash it over Home.
+- D-035: `Dataset.folder` is part of the model (set on save) so the UI and tests can show/verify the on-disk path.
 - D-025 (phase 6): the layout solver places grounded objects exactly on their bottom ray's floor hit, so
   reprojection is exact by construction and the round trip is the test (tolerance 0.05 of the frame).
 - D-026: blockout thumbnails are deterministic isometric SVGs written server-side (no headless WebGL); the composer
@@ -187,5 +217,24 @@
 - devtools/ui-mock/routes/{scene,video-analysis,film}.ts, server.ts, seed.ts; e2e/storyboard3d.spec.ts;
   docs/{STORYBOARD_3D,SHOT_COMPOSER,INTEGRATED_UPSTREAMS}.md, NOTICES.md
 
+## Files touched (phase 7)
+- backend/services/trainer/{__init__,trainer,catalog,subprocess_trainer,fake_trainer}.py; film/{training_models,
+  training_presets,training_api_types}.py; handlers/training_handler.py; _routes/training.py; api_types.py
+  (LoraUse, loras/referenceImagePaths/endFramePath); services/wangp_bridge.py (_apply_loras, image_refs,
+  image_end); handlers/{video,image}_generation_handler.py; film/film_models.py (FilmAsset lora_*/seed_lock);
+  film/film_api_types.py (UpdateAssetRequest, ReferenceSheet*); handlers/film_handler.py; film/film_prompt.py;
+  handlers/film_generation_handler.py (attach_training, asset_loras, seed lock, _consistency_score,
+  generate_reference_sheet); _routes/film.py; handlers/reproduce_handler.py + _routes/reproduce.py +
+  film/reproduce_models.py (loras); app_factory.py; app_handler.py; services/vision/fake_vision.py (embed
+  tolerates non-image bytes); tests/{test_training.py,fakes/services.py,conftest.py};
+  scripts/ensure-trainer.{sh,ps1}
+- frontend/types/training.ts, lib/training-api.ts, components/LoraPicker.tsx, views/train/{TrainView,
+  LossSparkline}.tsx, App.tsx, contexts/ProjectContext.tsx (openTrain), types/project.ts, views/Home.tsx (Train
+  verb), views/QuickMode.tsx + hooks/use-generation.ts + components/SettingsPanel.tsx (loras),
+  views/reproduce/ImageReproduce.tsx + lib/reproduce-api.ts + types/reproduce.ts, views/film/AssetsPanel.tsx
+  (Consistency Kit), lib/film-api.ts (referenceSheet), types/film.ts, views/history/JobDrawer.tsx
+- devtools/ui-mock/routes/{training,film,jobs,reproduce}.ts, state.ts, server.ts, seed.ts; e2e/train.spec.ts;
+  docs/{TRAINING,INTEGRATED_UPSTREAMS}.md
+
 ## Next step
-Phase 7: LoRA Train tab + Consistency Kit (D14): dataset builder from analyses/candidates, training service behind a Protocol with fake, VRAM-classed configs for the 4070, training jobs in History, consistency kit (character sheets, reference packs).
+Phase 8: front door (Create · Reproduce · Train · History), RTX 4070 preset, UX polish.

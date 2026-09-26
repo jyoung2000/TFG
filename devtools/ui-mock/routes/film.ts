@@ -146,7 +146,8 @@ export function registerFilmRoutes(router: Router, store: Store, clipUrl: string
       const p = project(req.params.projectId)
       const asset = p.assets.find(a => a.id === req.params.assetId)
       if (!asset) throw new MockHttpError(404, `Asset not found: ${req.params.assetId}`)
-      applyPatch(asset, req.body, ['id', 'created_at'])
+      applyPatch(asset, req.body, ['id', 'created_at', 'clear_seed_lock'])
+      if (req.body.clear_seed_lock) asset.seed_lock = null
       asset.updated_at = now()
       touched(p)
       return { asset }
@@ -172,6 +173,25 @@ export function registerFilmRoutes(router: Router, store: Store, clipUrl: string
       asset.updated_at = now()
       touched(p)
       return { asset }
+    }),
+  )
+
+  router.post('/api/film/projects/:projectId/assets/:assetId/reference-sheet', req =>
+    store.mutate(state => {
+      const p = project(req.params.projectId)
+      const asset = p.assets.find(a => a.id === req.params.assetId)
+      if (!asset) throw new MockHttpError(404, `Asset not found: ${req.params.assetId}`)
+      const views = ((req.body.views as string[] | undefined) ?? ['front view', 'three-quarter view', 'profile view', 'back view']).slice(0, 6)
+      const seed = typeof req.body.seed === 'number' ? req.body.seed : asset.seed_lock ?? 4242
+      const lora = state.training.loras.find(l => l.id === asset.lora_id)
+      const trigger = asset.lora_trigger || lora?.trigger || ''
+      const prompts = views.map(view => [trigger, `${asset.name}, ${asset.appearance || asset.description}`, view, 'consistent character sheet, same person, same outfit'].filter(Boolean).join(', '))
+      const paths = views.map(view => `references/${asset.id}-${view.replace(/ /g, '-')}-${asset.reference_images.length + 1}.png`)
+      asset.reference_images.push(...paths)
+      if (asset.seed_lock === null) asset.seed_lock = seed
+      asset.updated_at = now()
+      touched(p)
+      return { asset, prompts, seed, reference_paths: paths }
     }),
   )
 

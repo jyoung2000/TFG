@@ -213,3 +213,42 @@ what was inspected and adapted, from which commits, under which licenses.
   applied during motion preview); `src/history.js` → `composer/history.ts`
   (bounded snapshot undo with drag grouping, Ctrl+Z / Ctrl+Shift+Z).
 - **Not used**: rooms/doorways, the MediaRecorder export, the UI.
+
+## kohya-ss/musubi-tuner (LoRA trainer, subprocess only)
+
+- **URL**: https://github.com/kohya-ss/musubi-tuner
+- **License**: Apache-2.0
+- **Integration**: **not vendored**. `scripts/ensure-trainer.{sh,ps1} musubi`
+  clones it to `backend/.trainer-musubi` and installs it into its own venv
+  (`backend/.venv-trainer-musubi`); `services/trainer/subprocess_trainer.py`
+  (`MusubiTrainer`) writes the dataset TOML and launches its
+  `*_cache_latents.py`, `*_cache_text_encoder_outputs.py` and
+  `*_train_network.py` scripts through `accelerate`. No source is copied.
+- **Facts relied on** (README at fetch time, session-notes VF-015): 12 GB
+  for image training with `--fp8_base --fp8_scaled --blocks_to_swap`, 24 GB
+  for Wan video training (refused on this card).
+
+## ostris/ai-toolkit (LoRA trainer, subprocess only)
+
+- **URL**: https://github.com/ostris/ai-toolkit
+- **License**: MIT
+- **Integration**: **not vendored**. `scripts/ensure-trainer.{sh,ps1} ai-toolkit`
+  clones it to `backend/.trainer-ai-toolkit` with its own venv;
+  `AiToolkitTrainer` writes one YAML config (`network.type: lora`,
+  `quantize`, `low_vram`, `trigger_word`) and runs `python run.py config.yaml`.
+- **Facts relied on**: config keys per the upstream example configs
+  (session-notes VF-016).
+
+## Lightricks/LTX-2 `packages/ltx-trainer` (catalog entry only)
+
+- **URL**: https://github.com/Lightricks/LTX-2/tree/main/packages/ltx-trainer
+- **License**: Apache-2.0
+- **Integration**: none beyond the catalog (`services/trainer/catalog.py`).
+  The trainer recommends 80 GB and its low-VRAM config targets 32 GB, so it
+  is listed as *needs more than 12 GB* and never launched (VF-017).
+
+## Open-Generative-AI (engine installer — concept only)
+
+- The clone → venv → pip bootstrap under the app's own folders in
+  `scripts/ensure-trainer.{sh,ps1}` follows that project's engine-installer
+  pattern as a concept. No code was copied.

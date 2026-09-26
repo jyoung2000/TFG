@@ -9,6 +9,7 @@ from services.vision.fake_vision import FakeVision
 from services.vram.vram_manager import FakeNvml
 from services.motion.fake_motion import FakeMotion
 from services.stitcher.video_stitcher import FakeStitcher
+from services.trainer.fake_trainer import FakeTrainer
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -771,6 +772,7 @@ class FakeServices:
     nvml: FakeNvml = field(default_factory=FakeNvml)
     motion: FakeMotion = field(default_factory=FakeMotion)
     stitcher: FakeStitcher = field(default_factory=FakeStitcher)
+    trainer: FakeTrainer = field(default_factory=FakeTrainer)
 
     def __post_init__(self) -> None:
         FakeFastVideoPipeline.bind_singleton(self.fast_video_pipeline)

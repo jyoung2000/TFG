@@ -258,6 +258,13 @@ class ErrorResponse(BaseModel):
 # ============================================================
 
 
+class LoraUse(BaseModel):
+    """One LoRA to apply: the registry entry's file (absolute path) and a strength."""
+
+    name: str
+    multiplier: float = 1.0
+
+
 class GenerateVideoRequest(BaseModel):
     prompt: NonEmptyPrompt
     resolution: str = "512p"
@@ -275,6 +282,11 @@ class GenerateVideoRequest(BaseModel):
     #: receives them as its guide video (key per docs/VIDEO_REPRODUCE.md, VF-011).
     controlVideoPath: str | None = None
     depthVideoPath: str | None = None
+    #: LoRAs from the registry (WanGP `activated_loras` / `loras_multipliers`).
+    loras: list[LoraUse] = Field(default_factory=list[LoraUse])
+    #: Reference images (WanGP `image_refs`) and an end frame (`image_end`).
+    referenceImagePaths: list[str] = Field(default_factory=list[str])
+    endFramePath: str | None = None
 
 
 class GenerateImageRequest(BaseModel):
@@ -283,6 +295,7 @@ class GenerateImageRequest(BaseModel):
     height: int = 1024
     numSteps: int = 4
     numImages: int = 1
+    loras: list[LoraUse] = Field(default_factory=list[LoraUse])
 
 
 class ModelDownloadRequest(BaseModel):

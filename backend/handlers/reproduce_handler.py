@@ -18,12 +18,13 @@ import threading
 import uuid
 from pathlib import Path
 from threading import RLock
+from collections.abc import Sequence
 from typing import Any, cast
 
 from PIL import Image, UnidentifiedImageError
 
 from _routes._errors import HTTPError
-from api_types import GenerateImageRequest
+from api_types import GenerateImageRequest, LoraUse
 from film.image_recreation import MAX_BYTES, MAX_PIXELS, SUPPORTED, describe_differences, image_data_url, read_json
 from film.llm_providers import LLMMessage, LLMProvider
 from film.prompt_compiler import PromptHints, PromptStyle, SpecCompileResult, compile_from_spec, resolve_target
@@ -345,12 +346,13 @@ class ReproduceHandler(StateHandlerBase):
 
     # ---- the loop -----------------------------------------------------------------
 
-    def start(self, job_id: str, budget: ReproduceBudget | None, *, seed: int | None, provider: LLMProvider | None) -> ReproduceJob:
+    def start(self, job_id: str, budget: ReproduceBudget | None, *, seed: int | None, provider: LLMProvider | None, loras: Sequence[LoraUse] = ()) -> ReproduceJob:
         job = self.get(job_id)
         if job.is_busy:
             raise HTTPError(409, "A reproduce run is already in progress")
         if not job.prompt.strip() and not job.prompt_override.strip():
             raise HTTPError(400, "Analyse the reference first, or enter a prompt")
+        job.loras = [l for l in loras if Path(l.name).is_file()]
         if budget is not None:
             job.budget = budget
         job.status = "rendering"
@@ -506,7 +508,7 @@ class ReproduceHandler(StateHandlerBase):
         params = compiled.params
         width = params.width or job.width
         height = params.height or job.height
-        request = GenerateImageRequest(prompt=prompt, width=width, height=height, numSteps=params.steps, numImages=1)
+        request = GenerateImageRequest(prompt=prompt, width=width, height=height, numSteps=params.steps, numImages=1, loras=list(job.loras))
         try:
             result = self._image_generation.generate(request, seed=seed)
         except HTTPError as exc:

@@ -15,6 +15,7 @@ import { Playground } from './views/Playground'
 import { QuickMode } from './views/QuickMode'
 import { AnalyzeVideo } from './views/AnalyzeVideo'
 import { ImageReproduce } from './views/reproduce/ImageReproduce'
+import { TrainView } from './views/train/TrainView'
 import { HistoryView } from './views/history/HistoryView'
 import { LaunchGate } from './components/FirstRunSetup'
 import { PythonSetup } from './components/PythonSetup'
@@ -446,6 +447,8 @@ function AppContent() {
         return <ImageReproduce />
       case 'history':
         return <HistoryView />
+      case 'train':
+        return <TrainView />
       default:
         return <Home />
     }
