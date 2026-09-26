@@ -12,13 +12,12 @@ from __future__ import annotations
 
 import base64
 import logging
-import mimetypes
 import os
 import tempfile
 import time
 from collections import deque
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from threading import RLock
 from typing import Any, cast
@@ -45,7 +44,8 @@ from film.film_api_types import (
 )
 from film.film_continuity import check_shot_continuity
 from film.media_providers import MediaSpec
-from film.media_runner import MediaRunner, suffix_for
+from film.media_runner import MediaRunResult, MediaRunner, image_data_url, suffix_for
+from film.provider_tiers import Task, Tier, TierPlan, default_order, plan as plan_tiers, run_with_fallback
 from film.film_models import (
     FilmAsset,
     FilmProject,
@@ -148,18 +148,7 @@ def _wangp_task(architecture: str) -> str:
     return "video"
 
 
-def _image_data_url(path: str | None) -> str:
-    """A local conditioning image as a data: URL, which every hosted provider
-    accepts in place of a public URL — nothing of the user's is uploaded to a
-    file host first."""
-    if not path:
-        return ""
-    try:
-        raw = Path(path).read_bytes()
-    except OSError:
-        return ""
-    mime = mimetypes.guess_type(path)[0] or "image/png"
-    return f"data:{mime};base64,{base64.b64encode(raw).decode('ascii')}"
+_image_data_url = image_data_url
 
 
 def _system_ram_gb() -> float | None:
@@ -666,6 +655,11 @@ class FilmGenerationHandler(StateHandlerBase):
         if provider != "local":
             self._run_hosted_job(job, provider, model)
             return
+        tiers = self._tier_plan(job.project_id, "t2v").usable
+        if tiers and tiers[0].provider != "local":
+            # The tier list puts a hosted provider first for this task.
+            self._run_hosted_job(job, tiers[0].provider, tiers[0].model)
+            return
         prepared = self._prepare_request(job)
         if prepared is None:
             return
@@ -682,12 +676,12 @@ class FilmGenerationHandler(StateHandlerBase):
                 settings.locked_seed = seed
         started = time.perf_counter()
         try:
-            response = self._video_generation.generate(request, job_id=job.job_id or None, seed=seed)
+            response = self._video_generation.generate(request, job_id=job.job_id or None, seed=seed, allow_fallback=False)
         except HTTPError as exc:
-            self._finish_version(job, status="failed", error=str(exc.detail), telemetry=self._telemetry(started))
+            self._local_failed(job, str(exc.detail), self._telemetry(started))
             return
         except Exception as exc:  # noqa: BLE001 - queue must survive any job failure
-            self._finish_version(job, status="failed", error=str(exc), telemetry=self._telemetry(started))
+            self._local_failed(job, str(exc), self._telemetry(started))
             return
         finally:
             if restore_seed is not None:
@@ -702,7 +696,59 @@ class FilmGenerationHandler(StateHandlerBase):
         elif response.status == "cancelled":
             self._finish_version(job, status="cancelled", error="Cancelled", telemetry=telemetry)
         else:
-            self._finish_version(job, status="failed", error=f"Generation ended with status {response.status}", telemetry=telemetry)
+            self._local_failed(job, f"Generation ended with status {response.status}", telemetry)
+
+    def _local_failed(self, job: _QueuedShotJob, error: str, telemetry: dict[str, Any]) -> None:
+        """A local render failed: move to the next usable tier, else record the failure."""
+        hosted = [t for t in self._tier_plan(job.project_id, "t2v").usable if t.provider != "local"]
+        if not hosted or self._hosted_cancelled_flag():
+            self._finish_version(job, status="failed", error=error, telemetry=telemetry)
+            return
+        logger.info("Local render failed (%s); falling back to %s", error, hosted[0].provider)
+        if job.job_id and self._jobs is not None:
+            self._jobs.progress(job.job_id, 0.0, f"Local failed: {error[:120]} — trying {hosted[0].provider}")
+        self._run_hosted_job(job, hosted[0].provider, hosted[0].model, fallback_from=("local", error))
+
+    def _hosted_cancelled_flag(self) -> bool:
+        with self.lock:
+            return self._hosted_cancel
+
+    # ---- Tiered fallback ---------------------------------------------------
+
+    def _tier_plan(self, project_id: str, task: Task) -> TierPlan:
+        """The provider order for this project and task, checked against keys,
+        model ids and the capability catalog (film/provider_tiers.py)."""
+        with self.lock:
+            settings = self.state.app_settings.model_copy(deep=True)
+        project_provider, project_video, project_image = "", "", ""
+        try:
+            project = self._film.store.load(project_id)
+            project_provider = (project.settings.media_provider or "").strip()
+            project_video = (project.settings.video_model or "").strip()
+            project_image = (project.settings.image_model or "").strip()
+        except Exception:  # noqa: BLE001 - a missing project is handled downstream
+            pass
+        if project_provider:
+            order = [project_provider]
+        else:
+            order = list(settings.media_tiers.get(task) or default_order(settings.media_provider))
+        image_task = task in ("t2i", "i2i", "edit")
+
+        def models(provider: str, _task: Task) -> str:
+            own = project_image if image_task else project_video
+            if project_provider == provider and own:
+                return own
+            return settings.default_image_model if image_task else settings.default_video_model
+
+        local_available = self._config.wangp_enabled or not self._config.force_api_generations or bool(settings.ltx_api_key.strip())
+        return plan_tiers(task, order=order, local_available=local_available, keys=settings.media_api_key, models=models)
+
+    def tier_preview(self, project_id: str) -> dict[str, list[dict[str, str]]]:
+        """What Settings shows: per task, the resolved tiers and why any is skipped."""
+        out: dict[str, list[dict[str, str]]] = {}
+        for task in ("t2i", "i2i", "t2v", "i2v", "edit"):
+            out[task] = [{"provider": t.provider, "model": t.model, "skip_reason": t.skip_reason} for t in self._tier_plan(project_id, task).tiers]
+        return out
 
     # ---- Reference images --------------------------------------------------
 
@@ -760,7 +806,29 @@ class FilmGenerationHandler(StateHandlerBase):
         prompt = req.prompt.strip() or self._reference_prompt(asset, project.settings.style_prompt)
         width, height = self._REFERENCE_SIZES.get(asset.kind, (1024, 1024))
 
-        if provider == "local":
+        tiers = self._tier_plan(project_id, "t2i").tiers if not project.settings.media_provider else []
+        if provider == "local" and tiers:
+            # Local first, then whichever hosted tiers are configured for stills.
+            def attempt(tier: Tier) -> MediaRunResult:
+                if tier.provider == "local":
+                    try:
+                        return MediaRunResult(status="complete", content=self._local_reference_image(prompt, width, height))
+                    except HTTPError as exc:
+                        return MediaRunResult(status="failed", error=str(exc.detail))
+                runner = self._media_runner
+                if runner is None:  # pragma: no cover - wired in AppHandler
+                    return MediaRunResult(status="failed", error="Hosted generation is not available in this build")
+                return runner.run(provider=tier.provider, api_key=settings.media_api_key(tier.provider), spec=MediaSpec(model=tier.model, prompt=prompt, task="image", width=width, height=height))
+
+            outcome = run_with_fallback(tiers, attempt)
+            if outcome.result.status != "complete":
+                raise HTTPError(502, outcome.result.error or "No provider returned an image")
+            image_bytes = outcome.result.content
+            provider = outcome.provider
+            if outcome.fell_back:
+                logger.info("Reference image: %s", outcome.note())
+                model = next((t.model for t in tiers if t.provider == provider), model)
+        elif provider == "local":
             image_bytes = self._local_reference_image(prompt, width, height)
         else:
             api_key = settings.media_api_key(provider)
@@ -819,7 +887,7 @@ class FilmGenerationHandler(StateHandlerBase):
         model = (project_model or settings.default_video_model).strip()
         return provider, model
 
-    def _run_hosted_job(self, job: _QueuedShotJob, provider: str, model: str) -> None:
+    def _run_hosted_job(self, job: _QueuedShotJob, provider: str, model: str, *, fallback_from: tuple[str, str] | None = None) -> None:
         """Render one shot on a hosted provider, then store the file exactly
         like a local render so versions, timeline and export behave the same."""
         prepared = self._prepare_request(job)
@@ -862,14 +930,31 @@ class FilmGenerationHandler(StateHandlerBase):
             self._clear_hosted()
             self._finish_version(job, status="failed", error="Hosted generation is not available in this build", telemetry=self._telemetry(started, execution_mode=provider))
             return
-        result = runner.run(
-            provider=provider,
-            api_key=api_key,
-            spec=spec,
-            is_cancelled=self._hosted_cancelled,
-            on_progress=self._report_hosted_progress,
-        )
+        # This provider first, then any later hosted tiers configured for the task.
+        later = [t for t in self._tier_plan(job.project_id, "t2v").usable if t.provider not in ("local", provider)]
+        tiers = [Tier(provider, model), *later]
+
+        def attempt(tier: Tier) -> MediaRunResult:
+            if job.job_id and self._jobs is not None and tier.provider != provider:
+                self._jobs.annotate(job.job_id, provider=tier.provider, model=tier.model)
+            return runner.run(
+                provider=tier.provider,
+                api_key=settings.media_api_key(tier.provider),
+                spec=replace(spec, model=tier.model),
+                is_cancelled=self._hosted_cancelled,
+                on_progress=self._report_hosted_progress,
+            )
+
+        outcome = run_with_fallback(tiers, attempt, is_cancelled=self._hosted_cancelled)
+        result = outcome.result
+        if outcome.provider:
+            provider = outcome.provider
+        attempts = ([fallback_from] if fallback_from else []) + outcome.attempts
         telemetry = self._telemetry(started, execution_mode=provider)
+        if attempts:
+            telemetry["fallback"] = [{"provider": p, "error": e} for p, e in attempts]
+            if job.job_id and self._jobs is not None:
+                self._jobs.annotate(job.job_id, metrics={"fallback": "; ".join(f"{p}: {e[:80]}" for p, e in attempts)})
         if result.status == "cancelled":
             self._clear_hosted()
             self._finish_version(job, status="cancelled", error="Cancelled", telemetry=telemetry)

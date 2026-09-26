@@ -251,6 +251,24 @@ If `WANGP_ROOT` is not set, `pnpm setup:dev:linux` will prepare a repo-local `Wa
   <img src="images/timeline-gap-fill.png" alt="Timeline gap fill" width="70%">
 </p>
 
+## Containers, Unraid and a remote backend
+
+`deploy/docker-compose.yml` runs the backend, the vision sidecar and an
+optional Ollama VLM where the GPU is; the desktop connects through
+*Settings → General → Remote backend* (URL + token) and any MCP agent
+through `http://<host>:8000/mcp`. Unraid steps, the Docker Desktop on
+Windows "file cannot be accessed by the system" repair
+(`scripts/docker-desktop-repair.ps1`) and the WanGP-only remote mode are in
+[`docs/CONTAINERS.md`](docs/CONTAINERS.md).
+
+## Agents: Hermes, Claude Code, Cursor
+
+Every API route is an MCP tool — `pnpm agent:mcp` (stdio) or `POST /mcp`
+(HTTP). [`skills/tfg/SKILL.md`](skills/tfg/SKILL.md) is the agent skill
+(agentskills.io format; `hermes skills install …`), and
+[`docs/AGENTS_GUIDE.md`](docs/AGENTS_GUIDE.md) has the Hermes
+`config.yaml` snippets and the workflow tool names.
+
 ## Features
 
 - Text-to-video generation

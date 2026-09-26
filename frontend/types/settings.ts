@@ -120,6 +120,8 @@ export interface AppSettings {
   geminiModel: string
   /** Where image/video generation runs; "local" keeps everything offline. */
   mediaProvider: 'local' | 'fal' | 'wavespeed' | 'replicate'
+  /** Tiered fallback per task (t2i/i2i/t2v/i2v/edit): the order providers are tried. */
+  mediaTiers: Record<string, string[]>
   hasWavespeedApiKey: boolean
   hasReplicateApiKey: boolean
   defaultVideoModel: string
@@ -172,6 +174,7 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   xaiModel: '',
   geminiModel: '',
   mediaProvider: 'local',
+  mediaTiers: {},
   hasWavespeedApiKey: false,
   hasReplicateApiKey: false,
   defaultVideoModel: '',

@@ -4,7 +4,11 @@ const { contextBridge, ipcRenderer } = require('electron')
 // Expose protected methods to the renderer process
 contextBridge.exposeInMainWorld('electronAPI', {
   // Get the backend URL and auth token
-  getBackend: (): Promise<{ url: string; token: string }> => ipcRenderer.invoke('get-backend'),
+  getBackend: (): Promise<{ url: string; token: string; remote?: boolean }> => ipcRenderer.invoke('get-backend'),
+  // Remote backend (phase 9)
+  getRemoteBackend: (): Promise<{ url: string; token: string; enabled: boolean }> => ipcRenderer.invoke('get-remote-backend'),
+  testRemoteBackend: (url: string, token: string): Promise<{ ok: boolean; status?: string; gpu?: string; modelsLoaded?: boolean; error?: string }> => ipcRenderer.invoke('test-remote-backend', url, token),
+  setRemoteBackend: (config: { url: string; token: string; enabled: boolean }): Promise<{ ok: boolean; status?: string; gpu?: string; error?: string }> => ipcRenderer.invoke('set-remote-backend', config),
   
   // Get the path where models are stored
   getModelsPath: (): Promise<string> => ipcRenderer.invoke('get-models-path'),
@@ -140,7 +144,10 @@ interface BackendHealthStatus {
 declare global {
   interface Window {
     electronAPI: {
-      getBackend: () => Promise<{ url: string; token: string }>
+      getBackend: () => Promise<{ url: string; token: string; remote?: boolean }>
+      getRemoteBackend: () => Promise<{ url: string; token: string; enabled: boolean }>
+      testRemoteBackend: (url: string, token: string) => Promise<{ ok: boolean; status?: string; gpu?: string; modelsLoaded?: boolean; error?: string }>
+      setRemoteBackend: (config: { url: string; token: string; enabled: boolean }) => Promise<{ ok: boolean; status?: string; gpu?: string; error?: string }>
       getModelsPath: () => Promise<string>
       readLocalFile: (filePath: string) => Promise<{ data: string; mimeType: string }>
       approveLocalPath: (filePath: string) => Promise<boolean>

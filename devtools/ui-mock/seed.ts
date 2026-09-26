@@ -519,6 +519,7 @@ export function seedSettings(): AppSettings {
     xaiModel: '',
     geminiModel: '',
     mediaProvider: 'local',
+    mediaTiers: {},
     hasWavespeedApiKey: false,
     hasReplicateApiKey: false,
     defaultVideoModel: '',

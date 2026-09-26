@@ -7,6 +7,7 @@ import os
 import tempfile
 import time
 import uuid
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from threading import RLock
@@ -23,6 +24,9 @@ from handlers.generation_handler import GenerationHandler
 from handlers.pipelines_handler import PipelinesHandler
 from handlers.text_handler import TextHandler
 from services.wangp_bridge import WanGPBridge
+from film.media_providers import MediaSpec
+from film.media_runner import MediaRunResult, MediaRunner, image_data_url, suffix_for
+from film.provider_tiers import Task, Tier, default_order, plan as plan_tiers, run_with_fallback
 from server_utils.media_validation import (
     normalize_optional_path,
     validate_audio_file,
@@ -81,6 +85,7 @@ class VideoGenerationHandler(StateHandlerBase):
         wangp_bridge: WanGPBridge,
         jobs: JobsHandler | None = None,
         vision: VisionHandler | None = None,
+        media_runner: MediaRunner | None = None,
     ) -> None:
         super().__init__(state, lock)
         self._jobs = jobs
@@ -94,6 +99,7 @@ class VideoGenerationHandler(StateHandlerBase):
         self._camera_motion_prompts = camera_motion_prompts
         self._default_negative_prompt = default_negative_prompt
         self._wangp_bridge = wangp_bridge
+        self._media_runner = media_runner
 
     def generate(
         self,
@@ -101,9 +107,11 @@ class VideoGenerationHandler(StateHandlerBase):
         *,
         job_id: str | None = None,
         seed: int | None = None,
+        allow_fallback: bool = True,
     ) -> GenerateVideoResponse:
         """Render one video. `job_id` reuses a History job another handler
-        already opened (the film queue); `seed` pins the seed for a re-run."""
+        already opened (the film queue); `seed` pins the seed for a re-run;
+        `allow_fallback=False` when the caller runs its own provider tiers."""
         if self._generation.is_generation_running():
             raise HTTPError(409, "Generation already in progress")
         tracked = self._open_job(req, job_id, seed)
@@ -119,15 +127,82 @@ class VideoGenerationHandler(StateHandlerBase):
             else:
                 response = self._dispatch(req, tracked, seed)
         except HTTPError as exc:
-            self._close_job(tracked, error=str(exc.detail))
-            raise
+            fallback = self._hosted_fallback(req, tracked, seed, str(exc.detail)) if allow_fallback else None
+            if fallback is None:
+                self._close_job(tracked, error=str(exc.detail))
+                raise
+            response = fallback
         except Exception as exc:
-            self._close_job(tracked, error=str(exc))
-            raise
+            fallback = self._hosted_fallback(req, tracked, seed, str(exc)) if allow_fallback else None
+            if fallback is None:
+                self._close_job(tracked, error=str(exc))
+                raise
+            response = fallback
         if peak_mb is not None and tracked and self._jobs is not None:
             self._jobs.annotate(tracked, metrics={"peak_vram_mb": peak_mb})
         self._close_job(tracked, response=response)
         return response
+
+    # ---- Tiered fallback (phase 9) --------------------------------------
+
+    def _hosted_fallback(self, req: GenerateVideoRequest, job_id: str, seed: int | None, error: str) -> GenerateVideoResponse | None:
+        """The local render failed: try the hosted tiers configured for this
+        task, in order. None when no hosted tier is usable (the caller then
+        reports the local error); raises with every attempt's reason when all
+        tiers fail. Cancelled renders never fall back."""
+        runner = self._media_runner
+        if runner is None or self._generation.is_generation_cancelled() or "cancelled" in error.lower():
+            return None
+        with self.lock:
+            settings = self.state.app_settings.model_copy(deep=True)
+        task: Task = "i2v" if req.imagePath else "t2v"
+        order = list(settings.media_tiers.get(task) or default_order(settings.media_provider))
+        tiers = [
+            t for t in plan_tiers(task, order=order, local_available=False, keys=settings.media_api_key, models=lambda _p, _t: settings.default_video_model).usable
+            if t.provider != "local"
+        ]
+        if not tiers:
+            return None
+        logger.info("Local render failed (%s); trying hosted tiers %s", error, [t.provider for t in tiers])
+        if job_id and self._jobs is not None:
+            self._jobs.progress(job_id, 0.0, f"Local failed: {error[:120]} — trying {tiers[0].provider}")
+        spec = MediaSpec(
+            model="",
+            prompt=req.prompt,
+            task="video",
+            negative_prompt=req.negativePrompt,
+            duration_seconds=float(req.duration),
+            fps=int(float(req.fps)),
+            aspect_ratio=req.aspectRatio,
+            resolution=req.resolution,
+            seed=seed,
+            image_data_url=image_data_url(req.imagePath),
+        )
+
+        def attempt(tier: Tier) -> MediaRunResult:
+            if job_id and self._jobs is not None:
+                self._jobs.annotate(job_id, provider=tier.provider, model=tier.model)
+            return runner.run(
+                provider=tier.provider,
+                api_key=settings.media_api_key(tier.provider),
+                spec=replace(spec, model=tier.model),
+                is_cancelled=self._generation.is_generation_cancelled,
+                on_progress=lambda percent, phase: self._generation.update_progress(phase, percent, None, None),
+            )
+
+        outcome = run_with_fallback(tiers, attempt, is_cancelled=self._generation.is_generation_cancelled)
+        attempts = [("local", error), *outcome.attempts]
+        if job_id and self._jobs is not None:
+            self._jobs.annotate(job_id, metrics={"fallback": "; ".join(f"{p}: {e[:80]}" for p, e in attempts)})
+        result = outcome.result
+        if result.status == "cancelled":
+            return GenerateVideoResponse(status="cancelled")
+        if result.status != "complete":
+            raise HTTPError(502, "; ".join(f"{p}: {e}" for p, e in [*attempts, (outcome.provider, result.error)] if p))
+        self._outputs_dir.mkdir(parents=True, exist_ok=True)
+        target = self._outputs_dir / f"quick-{outcome.provider}-{int(time.time() * 1000)}{suffix_for(result.media_url, 'video')}"
+        target.write_bytes(result.content)
+        return GenerateVideoResponse(status="complete", video_path=str(target), seed=seed)
 
     def _render_model_type(self, req: GenerateVideoRequest) -> str:
         if self._config.wangp_enabled:

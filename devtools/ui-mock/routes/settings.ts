@@ -87,6 +87,22 @@ export function registerSettingsRoutes(router: Router, store: Store): void {
       { id: 'balanced', label: 'Balanced', model: 'ltx2_22B_distilled', resolution: '720p', duration_seconds: 8, note: '720p · 6–8 s' },
     ],
   }
+  router.get('/api/settings/tiers', () => {
+    const s = store.data.settings
+    const keyFor: Record<string, boolean> = { fal: s.hasFalApiKey, wavespeed: s.hasWavespeedApiKey, replicate: s.hasReplicateApiKey }
+    const out: Record<string, { provider: string; model: string; skip_reason: string }[]> = {}
+    for (const task of ['t2i', 'i2i', 't2v', 'i2v', 'edit']) {
+      const order = s.mediaTiers[task]?.length ? s.mediaTiers[task] : [s.mediaProvider || 'local']
+      out[task] = order.map(provider => {
+        if (provider === 'local') return { provider, model: 'local', skip_reason: task === 'i2i' || task === 'edit' ? `local engine cannot do ${task} yet` : '' }
+        if (!keyFor[provider]) return { provider, model: '', skip_reason: `${provider.toUpperCase()}_KEY_MISSING` }
+        const model = task.endsWith('2i') || task === 'edit' ? s.defaultImageModel : s.defaultVideoModel
+        return model ? { provider, model, skip_reason: '' } : { provider, model: '', skip_reason: `no ${provider} model id for ${task}` }
+      })
+    }
+    return out
+  })
+
   router.get('/api/settings/presets', () => ({
     presets: [{ ...PRESET, recommended: true, applied: store.data.settings.hardwarePreset === PRESET.id }],
     gpu_name: 'NVIDIA GeForce RTX 4070',

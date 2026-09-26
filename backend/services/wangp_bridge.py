@@ -389,6 +389,17 @@ class WanGPBridge:
                 )
             return self._session
 
+    def run_manifest(
+        self,
+        *,
+        manifest: list[dict[str, object]],
+        media_suffixes: set[str],
+        on_progress: ProgressCallback,
+        is_cancelled: CancelledCallback,
+    ) -> list[str]:
+        """Run one already-built manifest (the remote WanGP server route calls this)."""
+        return self._run_manifest(manifest=manifest, media_suffixes=media_suffixes, on_progress=on_progress, is_cancelled=is_cancelled)
+
     def _run_manifest(
         self,
         *,

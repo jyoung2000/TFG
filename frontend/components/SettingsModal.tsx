@@ -1,5 +1,6 @@
 import { APP_NAME } from "../lib/brand";
 import { HardwarePresetCard } from './settings/HardwarePresetCard'
+import { RemoteBackendCard } from './settings/RemoteBackendCard'
 import { AlertCircle, Boxes, Brain, Check, Cpu, Eye, Library, Download, Film, Folder, Info, KeyRound, RefreshCw, Settings, Sliders, Sparkles, X, Zap } from 'lucide-react'
 import React, { useEffect, useRef, useState } from 'react'
 import { Button } from './ui/button'
@@ -367,6 +368,7 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
           {activeTab === 'general' && (
             <>
               <HardwarePresetCard />
+              <RemoteBackendCard />
               {/* GPU Detection */}
               <div className="space-y-3">
                 <div className="flex items-center justify-between">

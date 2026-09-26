@@ -252,3 +252,23 @@ what was inspected and adapted, from which commits, under which licenses.
 - The clone → venv → pip bootstrap under the app's own folders in
   `scripts/ensure-trainer.{sh,ps1}` follows that project's engine-installer
   pattern as a concept. No code was copied.
+
+## Anil-matcha/Open-Generative-AI (remote WanGP concept, capability catalog)
+
+- **URL**: https://github.com/Anil-matcha/Open-Generative-AI
+- **License**: MIT
+- **Used**: the capability catalog (`backend/film/data/model_catalog.json`,
+  extracted from `packages/studio/src/models.js`, see the header there) and
+  the *concept* of treating Wan2GP as a remote server the desktop only
+  sends prompts to (`services/wangp_remote_bridge.py`,
+  docs/adr/0002). Its Gradio HTTP client was not copied; TFG's transport is
+  its own `/api/wangp/*` API.
+
+## Model Context Protocol (specification, tools-only subset)
+
+- **URL**: https://modelcontextprotocol.io/specification/2025-06-18
+- **Used**: the JSON-RPC method set (`initialize`, `tools/list`,
+  `tools/call`, `ping`, `notifications/initialized`) and result shapes,
+  implemented without the SDK in `backend/agent/mcp_core.py` (docs/adr/0004).
+  Hermes Agent's MCP client configuration was verified against
+  https://github.com/NousResearch/hermes-agent (`website/docs/user-guide/features/mcp.md`, `skills.md`).

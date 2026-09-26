@@ -5,8 +5,8 @@
 4 Image Reproduce v2 · 5 Motion + Video Reproduce v2 · 6 3D storyboard · 7 LoRA Train · 8 front door/4070 preset ·
 9 containers/remote/tiering · 10 acceptance/docs/PR
 
-**Current phase:** 8 (committing)
-**Last passing gate:** Gate 8 (tsc 0 · pyright 0 · vitest 53/53 · pytest 793+5 · e2e 27/27 · main chunk 302 kB)
+**Current phase:** 9 (committing)
+**Last passing gate:** Gate 9 (tsc 0 · pyright 0 · vitest 53/53 · pytest 829 · e2e 28/28 · main chunk 308 kB); compose build + container /health + desktop↔stack: BLOCKED — ENVIRONMENT (no Docker daemon / GPU here)
 
 ## Environment (this session)
 - Cloud Linux container (not the Windows 4070 box the prompt assumes). No GPU, no nvidia-smi.
@@ -69,8 +69,47 @@
 - VF-020: the Wan2GP README (fetched 2026-09-26) names no Wan 2.2 5B TI2V model key and no VRAM figure for it, so a
   second "Wan 2.2 5B" video profile is NOT offered by the 4070 preset; the Settings card says so. Verifying the
   key needs the WanGP checkout on the 4070 (BLOCKED — ENVIRONMENT, docs/RTX_4070_TEST_MATRIX.md).
+- VF-021 (phase 9): Hermes Agent (NousResearch/hermes-agent) configures MCP servers in `~/.hermes/config.yaml`
+  under `mcp_servers:` — stdio (`command`, `args`, `env`) or remote (`url`, `headers`/`auth`), with per-server
+  `tools.include/exclude`; CLI `hermes mcp test <name>`; skills live in `~/.hermes/skills/` as agentskills.io
+  `SKILL.md` folders (`name`, `description`, `version`, `metadata.hermes`), installed with `hermes skills install`.
+  Verified from the repo docs (website/docs/user-guide/features/{mcp,skills}.md) on 2026-09-26.
+- VF-022: the MCP tools-only method set and result shapes (`initialize` → protocolVersion/capabilities/serverInfo,
+  `tools/list` → tools[name, description, inputSchema], `tools/call` → content[type=text]/isError) are implemented
+  from the 2025-06-18 specification as known; the spec site was not fetched in this session (proxy allow-list).
+- VF-023: Docker Desktop 4.77–4.90 on Windows crash-loops on stale AF_UNIX socket reparse points
+  (`%LOCALAPPDATA%\Docker\run\sailor-ingest.sock`, `docker-secrets-engine\engine.sock`): the file cannot be
+  renamed/removed until reboot but the directory can be moved aside (docker/for-win#15063,
+  docker/desktop-feedback#676/#692/#460/#554). No factory reset needed → scripts/docker-desktop-repair.ps1.
+- VF-024: FastAPI 0.141.1 keeps included routers as lazy `_IncludedRouter` entries in `app.routes`; the real
+  routes are `_EffectiveRouteContext` objects from `effective_candidates()` (they carry path/name/tags/methods/
+  endpoint). `build_tools` walks them; 214 tools for the current API.
+- VF-025: Open-Generative-AI (MIT) treats Wan2GP as a remote *Gradio* server (README: `python wgp.py --listen`,
+  Settings → Local Models → Wan2GP server URL); its client file could not be fetched (GitHub API 403 via proxy),
+  so TFG's remote bridge uses its own `/api/wangp/*` transport and credits the concept only.
+- VF-026: no Docker daemon in this environment (`docker info`: cannot connect to /var/run/docker.sock) and no
+  GPU; `docker compose config` validates the stack file, building/running it is BLOCKED — ENVIRONMENT.
 
 ## Decisions
+- D-041 (phase 9): remote WanGP = `RemoteWanGPBridge(WanGPBridge)` overriding only `get_status`,
+  `list_model_definitions`, `_run_manifest`; the container side is `/api/wangp/*` (`WanGPServerHandler`): upload
+  (base64 JSON), manifest job with progress/cancel, output download restricted to the outputs dir; manifest
+  inputs must be uploaded files. Selected by `WANGP_REMOTE_URL`/`WANGP_REMOTE_TOKEN`; tests drive both halves
+  through the FastAPI test client (`TestClientHTTP` adapter).
+- D-042: the desktop's Remote backend lives in Electron (`app_state.json.remoteBackend`), swaps `getBackend()`
+  and stops the local Python; `toFileUrl` builds `/api/film/output?token=` URLs when the backend is remote.
+- D-043: tiered fallback per task in `film/provider_tiers.py` (`plan` + `run_with_fallback`), wired into Create
+  video, film shots (local → hosted via `_local_failed`, hosted → later hosted tiers) and asset reference images;
+  the film queue passes `allow_fallback=False` so a project's explicit provider is honoured; History gets
+  `metrics.fallback`; `GET /api/settings/tiers` explains skips for the Settings editor.
+- D-044: MCP is generated from the route table (one tool per route/method, `<tag>_<route name>`), no SDK; two
+  transports (stdio `tfg_mcp.py`, in-process ASGI `POST /mcp`); file routes return metadata; `/mcp` sits behind
+  the same auth middleware. Skill `skills/tfg/SKILL.md` (agentskills.io) + docs/AGENTS_GUIDE.md for Hermes.
+- D-045: compose stack = one image (CUDA 12.8 runtime, uv-synced backend venv from the lock, WanGP cloned at
+  build, vision venv) running backend + vision sidecar (+ Ollama profile `vlm`); data on one `/data` volume
+  (`LTX_APP_DATA_DIR`), `LTX_HOST` added for binding 0.0.0.0, `TFG_VLM_BASE_URL` seeds the VLM base URL.
+- D-046: Docker Desktop repair is a script + doc section, never a factory reset; it only moves the two stale
+  socket folders aside and restarts Docker.
 - D-036 (phase 8): hardware presets live in `backend/state/hardware_presets.py` as settings patches applied through
   the normal `update_settings` path (validation, persistence, listeners); `AppSettings.hardware_preset` records the
   last one. The RTX 4070 preset is recommended by GPU-name markers or any 12 GB NVIDIA card, applied automatically
@@ -264,6 +303,21 @@
   contexts/AppSettingsContext.tsx, vite.config.ts (manualChunks)
 - devtools/ui-mock/{routes/settings.ts,seed.ts}; e2e/{views,settings,storyboard3d,video-reproduce}.spec.ts
 
+## Files touched (phase 9)
+- backend/services/wangp_remote_bridge.py, handlers/wangp_server_handler.py, _routes/wangp.py, services/wangp_bridge.py
+  (run_manifest), runtime_config (wangp_remote_url/token), ltx2_server.py (WANGP_REMOTE_*, LTX_HOST, TFG_VLM_BASE_URL),
+  app_handler.py (bundle.wangp_bridge, RemoteWanGPBridge selection, WanGPServerHandler, media_runner for video),
+  film/provider_tiers.py, film/media_runner.py (image_data_url), handlers/{film_generation,video_generation}_handler.py
+  (tiers), state/app_settings.py (media_tiers), _routes/settings.py (tiers preview), agent/{mcp_core,asgi_forward}.py,
+  tfg_mcp.py, app_factory.py (/mcp, create_app_routes_only), tests/{test_wangp_remote,test_provider_tiers,test_mcp}.py,
+  tests/fakes/fake_wangp_bridge.py, conftest.py
+- electron/{remote-backend,python-backend,preload}.ts, electron/ipc/app-handlers.ts; frontend/lib/{backend,file-url,
+  browser-electron-shim}.ts, components/settings/RemoteBackendCard.tsx, components/{SettingsModal,AiProviderSettings}.tsx
+  (tiers editor), types/settings.ts, contexts/AppSettingsContext.tsx, vite-env.d.ts; devtools/ui-mock/{routes/settings,seed}.ts
+- deploy/{docker-compose.yml,backend.Dockerfile,.env.example,ollama/entrypoint.sh}, .dockerignore, package.json
+  (agent:mcp, deploy:config), scripts/docker-desktop-repair.ps1, skills/tfg/SKILL.md, docs/{CONTAINERS,AGENTS_GUIDE,
+  AI_PROVIDERS,INTEGRATED_UPSTREAMS}.md, docs/adr/000{2,3,4}-*.md, README.md, e2e/settings.spec.ts
+
 ## Next step
-Phase 9: deploy/ containers (backend + vision sidecar + WanGP), Electron remote backend setting, wangp_remote_bridge,
-per-task provider capabilities + tiered fallback, docs/AI_PROVIDERS.md.
+Phase 10: acceptance (docs/RTX_4070_TEST_MATRIX.md with honest BLOCKED rows), API docs regeneration, README/docs
+pass, full gates, PR from feat/production-oneshot into feat/video-recreation-and-assets-gallery via GitHub MCP.

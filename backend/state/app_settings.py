@@ -168,6 +168,9 @@ class AppSettings(SettingsBaseModel):
     fal_api_key: str = ""
     wavespeed_api_key: str = ""
     replicate_api_key: str = ""
+    # Tiered fallback per task (phase 9): the order providers are tried, e.g.
+    # {"t2v": ["local", "fal"]}. A missing task means [media_provider].
+    media_tiers: dict[str, list[str]] = Field(default_factory=dict[str, list[str]])
     # Default model ids used when a film project does not override them.
     default_video_model: str = ""
     default_image_model: str = ""
@@ -309,6 +312,7 @@ class SettingsResponse(SettingsBaseModel):
     media_provider: MediaProvider = "local"
     has_wavespeed_api_key: bool = False
     has_replicate_api_key: bool = False
+    media_tiers: dict[str, list[str]] = Field(default_factory=dict[str, list[str]])
     default_video_model: str = ""
     default_image_model: str = ""
     recent_model_ids: list[str] = Field(default_factory=list[str])

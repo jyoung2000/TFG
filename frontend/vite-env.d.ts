@@ -18,7 +18,7 @@ interface BackendHealthStatus {
 
 interface Window {
   electronAPI: {
-    getBackend: () => Promise<{ url: string; token: string }>
+    getBackend: () => Promise<{ url: string; token: string; remote?: boolean }>
     getModelsPath: () => Promise<string>
     readLocalFile: (filePath: string) => Promise<{ data: string; mimeType: string }>
     approveLocalPath: (filePath: string) => Promise<boolean>
@@ -59,6 +59,10 @@ interface Window {
     startPythonSetup: () => Promise<void>
     startPythonBackend: () => Promise<void>
     getBackendHealthStatus: () => Promise<BackendHealthStatus | null>
+    // Remote backend (phase 9)
+    getRemoteBackend: () => Promise<{ url: string; token: string; enabled: boolean }>
+    testRemoteBackend: (url: string, token: string) => Promise<{ ok: boolean; status?: string; gpu?: string; modelsLoaded?: boolean; error?: string }>
+    setRemoteBackend: (config: { url: string; token: string; enabled: boolean }) => Promise<{ ok: boolean; status?: string; gpu?: string; error?: string }>
     onPythonSetupProgress: (cb: (data: unknown) => void) => void
     removePythonSetupProgress: () => void
     onBackendHealthStatus: (cb: (data: BackendHealthStatus) => void) => (() => void)

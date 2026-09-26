@@ -81,6 +81,12 @@ def route_apply_preset(preset_id: str, handler: AppHandler = Depends(get_state_s
     return to_settings_response(handler.settings.get_settings_snapshot())
 
 
+@router.get("/settings/tiers")
+def route_tiers(project: str = "", handler: AppHandler = Depends(get_state_service)) -> dict[str, list[dict[str, str]]]:
+    """The resolved provider order per task (Settings shows why a tier is skipped)."""
+    return handler.film_generation.tier_preview(project)
+
+
 @router.delete("/settings/api-keys/{provider}", response_model=StatusResponse)
 def route_clear_api_key(
     provider: str,

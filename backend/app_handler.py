@@ -39,6 +39,7 @@ from handlers.reproduce_handler import ReproduceHandler
 from handlers.video_reproduce_handler import VideoReproduceHandler
 from handlers.scene_handler import SceneHandler
 from handlers.training_handler import TrainingHandler
+from handlers.wangp_server_handler import WanGPServerHandler
 from services.trainer.trainer import LoraTrainer
 from services.vision.protocol import VisionService
 from services.motion.motion_analyzer import MotionAnalyzer
@@ -98,6 +99,7 @@ class AppHandler:
         motion: MotionAnalyzer | None = None,
         stitcher: VideoStitcher | None = None,
         trainers: dict[str, LoraTrainer] | None = None,
+        wangp_bridge: WanGPBridge | None = None,
     ) -> None:
         self.config = config
 
@@ -117,17 +119,32 @@ class AppHandler:
         self.a2v_pipeline_class = a2v_pipeline_class
         self.retake_pipeline_class = retake_pipeline_class
         self.ic_lora_model_downloader = ic_lora_model_downloader
-        self.wangp_bridge = WanGPBridge(
-            enabled=config.wangp_enabled,
-            root=config.wangp_root,
-            python_executable=config.wangp_python,
-            config_dir=config.wangp_config_dir,
-            output_dir=config.outputs_dir,
-            video_model_type=config.wangp_video_model_type,
-            image_model_type=config.wangp_image_model_type,
-            camera_motion_prompts=config.camera_motion_prompts,
-            extra_args=config.wangp_extra_args,
-        )
+        if wangp_bridge is not None:
+            self.wangp_bridge = wangp_bridge
+        elif config.wangp_remote_url:
+            from services.wangp_remote_bridge import RemoteWanGPBridge
+
+            self.wangp_bridge = RemoteWanGPBridge(
+                http=http,
+                base_url=config.wangp_remote_url,
+                token=config.wangp_remote_token,
+                output_dir=config.outputs_dir,
+                video_model_type=config.wangp_video_model_type,
+                image_model_type=config.wangp_image_model_type,
+                camera_motion_prompts=config.camera_motion_prompts,
+            )
+        else:
+            self.wangp_bridge = WanGPBridge(
+                enabled=config.wangp_enabled,
+                root=config.wangp_root,
+                python_executable=config.wangp_python,
+                config_dir=config.wangp_config_dir,
+                output_dir=config.outputs_dir,
+                video_model_type=config.wangp_video_model_type,
+                image_model_type=config.wangp_image_model_type,
+                camera_motion_prompts=config.camera_motion_prompts,
+                extra_args=config.wangp_extra_args,
+            )
 
         self._lock = threading.RLock()
 
@@ -265,6 +282,7 @@ class AppHandler:
             wangp_bridge=self.wangp_bridge,
             jobs=self.jobs,
             vision=self.vision,
+            media_runner=MediaRunner(http),
         )
 
         self.image_generation = ImageGenerationHandler(
@@ -463,6 +481,14 @@ class AppHandler:
             analysis_root=config.outputs_dir / "video_analyses",
         )
         self.film_generation.attach_training(self.training, self.vision)
+        self.wangp_server = WanGPServerHandler(
+            self.state,
+            self._lock,
+            bridge=self.wangp_bridge,
+            outputs_dir=config.outputs_dir,
+            task_runner=task_runner,
+            jobs=self.jobs,
+        )
         self.scene = SceneHandler(
             state=self.state,
             lock=self._lock,
@@ -581,6 +607,8 @@ class ServiceBundle:
     stitcher: VideoStitcher | None = None
     #: None → subprocess trainers (musubi-tuner, ai-toolkit); tests inject FakeTrainer.
     trainers: dict[str, LoraTrainer] | None = None
+    #: None → the local WanGP bridge, or the remote one when `config.wangp_remote_url` is set; tests inject FakeWanGPBridge.
+    wangp_bridge: WanGPBridge | None = None
 
 
 def _default_nvml() -> NvmlProbe:
@@ -685,4 +713,5 @@ def build_initial_state(
         motion=bundle.motion,
         stitcher=bundle.stitcher,
         trainers=bundle.trainers,
+        wangp_bridge=bundle.wangp_bridge,
     )

@@ -35,7 +35,9 @@
     "test:frontend": "vitest run",
     "e2e": "playwright test",
     "e2e:ui": "playwright test --ui",
-    "test": "pnpm run test:frontend && pnpm run backend:test"
+    "test": "pnpm run test:frontend && pnpm run backend:test",
+    "agent:mcp": "python backend/tfg_mcp.py",
+    "deploy:config": "docker compose -f deploy/docker-compose.yml --env-file deploy/.env config"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.0",

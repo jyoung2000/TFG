@@ -17,6 +17,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Literal
 
+import base64
+import mimetypes
+from pathlib import Path
+
 from _routes._errors import HTTPError
 from film.media_providers import MediaSpec, media_provider
 from services.interfaces import HTTPClient
@@ -115,6 +119,20 @@ class MediaRunner:
             media_url=status.output_url,
             seconds=round(time.perf_counter() - started, 2),
         )
+
+
+def image_data_url(path: str | None) -> str:
+    """A local conditioning image as a data: URL, which every hosted provider
+    accepts in place of a public URL — nothing of the user's is uploaded to a
+    file host first."""
+    if not path:
+        return ""
+    try:
+        raw = Path(path).read_bytes()
+    except OSError:
+        return ""
+    mime = mimetypes.guess_type(path)[0] or "image/png"
+    return f"data:{mime};base64,{base64.b64encode(raw).decode('ascii')}"
 
 
 def suffix_for(url: str, task: str) -> str:
