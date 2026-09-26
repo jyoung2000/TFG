@@ -12,7 +12,11 @@ import fs from 'node:fs'
  * symlink) so CI containers with a pinned browser need no download.
  */
 const PORT = Number(process.env.E2E_PORT ?? 5173)
-const BASE_URL = process.env.E2E_BASE_URL ?? `http://127.0.0.1:${PORT}`
+// Vite's default dev host is `localhost`, which on Windows resolves to IPv6 `::1`
+// only — so the server is up while a poll of `http://127.0.0.1:<port>` (IPv4) still
+// refuses, and the whole run dies as "Timed out waiting ... from config.webServer".
+// Poll the same name the server binds unless the caller pinned a URL.
+const BASE_URL = process.env.E2E_BASE_URL ?? `http://localhost:${PORT}`
 const fallbackChromium = process.env.PW_CHROMIUM_PATH ?? '/opt/pw-browsers/chromium'
 const executablePath = fs.existsSync(fallbackChromium) && !process.env.PW_USE_BUNDLED_CHROMIUM ? fallbackChromium : undefined
 
@@ -35,7 +39,10 @@ export default defineConfig({
   webServer: process.env.E2E_BASE_URL
     ? undefined
     : {
-        command: `pnpm dev:ui -- --port ${PORT} --strictPort --host 127.0.0.1`,
+        // No `--` before the flags: `pnpm dev:ui -- --port N` hands vite a literal
+        // "--" argument, which vite treats as end-of-options, so --port/--strictPort
+        // are silently dropped and the server always comes up on 5173.
+        command: `pnpm dev:ui --port ${PORT} --strictPort`,
         url: BASE_URL,
         reuseExistingServer: !process.env.CI,
         timeout: 120_000,

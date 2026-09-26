@@ -38,31 +38,21 @@ const uiOnly = isUiMockEnabled() || standalone
 export default defineConfig({
   // `python-embed/` is the prepared Python runtime (gitignored) and `Wan2GP/` is a
   // third-party checkout. Neither is part of the renderer, but Vite's dependency
-  // scanner walks the project root and descends into them: on a machine that has
-  // run `pnpm prepare:python:win` it tries to pre-bundle gradio's bundled Svelte
-  // app out of `python-embed/Lib/site-packages`, fails on its unresolvable imports
-  // and the dev server never becomes ready (`pnpm dev:ui`, and therefore `pnpm e2e`,
-  // then time out). Telling the scanner which entries to try first does not help —
-  // it has to be told not to *look* there, hence `searchForWorkspaceRoot` + `deny`.
+  // scanner crawls outward from the config file and descends into them: on a
+  // machine that has run `pnpm prepare:python:win` it tries to pre-bundle gradio's
+  // bundled Svelte app out of `python-embed/Lib/site-packages`, fails on imports it
+  // cannot resolve, and the dev server never becomes ready — so `pnpm dev:ui` and
+  // therefore `pnpm e2e` die with "Timed out waiting ... from config.webServer".
+  //
+  // `optimizeDeps.exclude` only accepts package names, so it cannot say "never scan
+  // this directory"; `server.fs.deny` is the supported way to refuse those paths,
+  // and pinning `entries` to the renderer's own sources keeps the scan honest.
   optimizeDeps: {
     entries: ['frontend/**/*.{ts,tsx}', 'devtools/ui-mock/**/*.ts'],
-    // `optimizeDeps.exclude` takes package names, not paths, so it cannot express
-    // "never scan this directory"; the crawler directives can.
-    esbuildOptions: {
-      plugins: [{
-        name: 'tfg-deny-build-dirs',
-        setup(build: {
-          onResolve(args: { path: string }, cb: (r: unknown) => void): void;
-          onLoad(args: { path: string }, cb: (r: unknown) => void): void;
-        }) {
-          const denied = /(^|[\\/])(python-embed|Wan2GP)([\\/]|$)/;
-          cb.resolve = (r: { path: string; external?: boolean }) => {
-            if (denied.test(r.path)) return { path: r.path, external: true };
-            return null;
-          };
-          cb.load = () => null;
-        },
-      }],
+  },
+  server: {
+    fs: {
+      deny: ['python-embed', 'Wan2GP'],
     },
   },
   plugins: [
