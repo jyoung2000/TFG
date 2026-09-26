@@ -46,7 +46,10 @@ Ok "pnpm install complete"
 Write-Host ""
 Write-Host "Setting up Python backend venv..."
 Set-Location $BackendDir
-uv sync --extra dev
+# `test` is included on purpose: the documented gates (docs/TESTING.md, README)
+# run `pytest` and `pyright` from this venv, and `uv sync` prunes any extra that
+# is not requested, so a dev-only sync leaves `python -m pytest` unrunnable.
+uv sync --extra dev --extra test
 if ($LASTEXITCODE -ne 0) {
     Fail "uv sync failed"
 }
