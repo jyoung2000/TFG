@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Start the TFG backend headless (no Electron) — for agents (Hermes, MCP clients), servers and tests.
 .EXAMPLE
