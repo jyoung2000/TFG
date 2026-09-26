@@ -11,15 +11,35 @@ Check the WanGP repo for more information (docs, Discord, and more): https://git
 
 ## What do you want to make?
 
-Home offers two entry points that share one engine and one project model:
+Home is four verbs plus the studio, all sharing one engine, one History and
+one project model:
 
-- **Quick video** — describe an idea (an assistant can draft the prompt when
-  an AI key is configured), pick model/length, generate a clip. From the
-  result: *Generate again*, *Save to project*, *Open in Video Editor*, or
-  **Edit in Film Maker**, which turns the clip into a film project as
-  Scene 1 / Shot 1 / version 1 with prompt, negative prompt, model,
-  resolution, duration, fps, seed and output preserved.
-- **Filmmaker Studio** — a project's Storyboard tab (below).
+- **Create** — Quick video (Fast 540p · 6 s or Balanced 720p · 8 s on the
+  distilled LTX-2) or a still (Z-Image, 8 steps). An assistant drafts the
+  prompt when an AI key is configured; trained LoRAs are one checkbox away.
+  From the result: *Generate again*, *Save to project*, *Open in Video
+  Editor*, or **Edit in Film Maker** (Scene 1 / Shot 1 / version 1 with
+  every setting preserved).
+- **Reproduce** — give it an image or a video. The local vision stack
+  (Florence-2, CLIP, Depth-Anything, DINOv2) reads it into an editable
+  ShotSpec, renders candidates, scores them against the original and keeps
+  refining. Video adds shot detection, camera-language and motion analysis,
+  a 3D storyboard per shot and a stitched result
+  ([`docs/REPRODUCE.md`](docs/REPRODUCE.md),
+  [`docs/VIDEO_REPRODUCE.md`](docs/VIDEO_REPRODUCE.md),
+  [`docs/STORYBOARD_3D.md`](docs/STORYBOARD_3D.md)).
+- **Train** — build a dataset from a folder, a video or your own History,
+  auto-caption it with a trigger word, and train a LoRA that fits a 12 GB
+  card; bind it to a film character so every shot inherits it
+  ([`docs/TRAINING.md`](docs/TRAINING.md)).
+- **History** — every image, video, analysis, download and training run,
+  live, with prompt, seed, settings, lineage and metrics
+  ([`docs/HISTORY.md`](docs/HISTORY.md)).
+- **Film Studio** (advanced) — a project's Storyboard tab (below).
+
+At first run the app applies the **RTX 4070 · 12 GB** preset (Settings →
+General → Hardware preset): nothing it ships as a default can exceed the
+card, and what cannot run there is refused with a reason.
 
 Overview: [`docs/FILMMAKING.md`](docs/FILMMAKING.md).
 

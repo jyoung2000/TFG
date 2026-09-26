@@ -67,3 +67,14 @@ polls from the start because it cannot stream.
 Jobs still `queued`/`running` when the process starts belong to a dead
 process and are marked `failed` with "Interrupted: the app was restarted".
 The film queue then re-queues its own interrupted versions as new jobs.
+
+## Metrics a job may carry
+
+`metrics` is free-form per kind; the UI knows these keys:
+
+| Key | Set by | Shown as |
+|---|---|---|
+| `seconds`, `peak_vram_mb`, `gpu_name` | every render | duration and VRAM (an after-the-job estimate) |
+| `loss_history`, `final_loss`, `steps` | training runs | the loss sparkline in the drawer |
+| `consistency` | film shots with a character reference | cross-frame consistency (CLIP cosine of the first frame vs the reference) |
+| `fallback` | Create video / film shots that fell through provider tiers | every attempt's provider and reason |

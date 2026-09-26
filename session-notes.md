@@ -5,7 +5,7 @@
 4 Image Reproduce v2 · 5 Motion + Video Reproduce v2 · 6 3D storyboard · 7 LoRA Train · 8 front door/4070 preset ·
 9 containers/remote/tiering · 10 acceptance/docs/PR
 
-**Current phase:** 9 (committing)
+**Current phase:** 10 (acceptance docs, API reference, PR)
 **Last passing gate:** Gate 9 (tsc 0 · pyright 0 · vitest 53/53 · pytest 829 · e2e 28/28 · main chunk 308 kB); compose build + container /health + desktop↔stack: BLOCKED — ENVIRONMENT (no Docker daemon / GPU here)
 
 ## Environment (this session)
@@ -91,6 +91,12 @@
   GPU; `docker compose config` validates the stack file, building/running it is BLOCKED — ENVIRONMENT.
 
 ## Decisions
+- D-047 (phase 10): MCP tools are generated lazily on the first `/mcp` request (the OpenAPI walk costs ~1 s and every
+  test builds its own app; eager generation made the backend suite ~4× slower — caught by the full run, 829 tests in
+  3.5 min again after the change).
+- D-048: `pnpm build:win`, compose build/`/health` in a container, desktop↔stack and a live Hermes session are
+  recorded as BLOCKED — ENVIRONMENT in docs/RTX_4070_TEST_MATRIX.md (Linux container: no Windows, no Docker daemon,
+  no GPU, no Hermes); nothing is claimed from reasoning.
 - D-041 (phase 9): remote WanGP = `RemoteWanGPBridge(WanGPBridge)` overriding only `get_status`,
   `list_model_definitions`, `_run_manifest`; the container side is `/api/wangp/*` (`WanGPServerHandler`): upload
   (base64 JSON), manifest job with progress/cancel, output download restricted to the outputs dir; manifest
@@ -318,6 +324,9 @@
   (agent:mcp, deploy:config), scripts/docker-desktop-repair.ps1, skills/tfg/SKILL.md, docs/{CONTAINERS,AGENTS_GUIDE,
   AI_PROVIDERS,INTEGRATED_UPSTREAMS}.md, docs/adr/000{2,3,4}-*.md, README.md, e2e/settings.spec.ts
 
+## Files touched (phase 10)
+- docs/{RTX_4070_TEST_MATRIX,SCENE_3D,TESTING,HISTORY,REPRODUCE}.md, README.md (front door), session-notes.md. The HTML API reference was regenerated
+  (`python backend/generate_api_docs.py` → backend/generated/, 205 endpoints) but that folder is gitignored by design.
+
 ## Next step
-Phase 10: acceptance (docs/RTX_4070_TEST_MATRIX.md with honest BLOCKED rows), API docs regeneration, README/docs
-pass, full gates, PR from feat/production-oneshot into feat/video-recreation-and-assets-gallery via GitHub MCP.
+PR from feat/production-oneshot into feat/video-recreation-and-assets-gallery (no main) via GitHub MCP; then done.

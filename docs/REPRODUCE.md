@@ -93,3 +93,10 @@ per candidate is stored in the child job's `metrics.peak_vram_mb`.
   rounds → every candidate loads → pin/pick/lightbox → fix canvas → cancel,
   zero console errors against the UI mock.
 - Real-GPU runs (RTX 4070): see `docs/RTX_4070_TEST_MATRIX.md`.
+
+## LoRAs in the loop
+
+The LoRA picker under the loop controls lists registry LoRAs compatible
+with the compile target (`GET /api/training/loras?model=<target>`); the
+selection rides on the job (`loras`) and every candidate render applies it
+(`activated_loras` / `loras_multipliers` on WanGP). See `TRAINING.md`.

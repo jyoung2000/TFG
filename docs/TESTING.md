@@ -42,3 +42,27 @@ cd backend && uv run pytest tests/test_video_analysis.py -v --tb=short   # one f
 pnpm e2e -- --grep "Assets"                                               # one spec
 E2E_BASE_URL=http://127.0.0.1:5173 pnpm e2e                               # reuse a running dev:ui
 ```
+
+When `uv sync` cannot reach the torch index (locked-down networks), the
+already-synced environment runs the same suite directly:
+`backend/.venv/bin/python -m pytest -q tests` and `backend/.venv/bin/pyright`.
+
+## What the suites cover (production branch)
+
+| Suite | Covers |
+|---|---|
+| `e2e/views.spec.ts` | every view with the media check; the front door (Create · Reproduce · Train · History, Film Studio advanced) and Alt+1…5 navigation |
+| `e2e/history.spec.ts` | History cards for every job kind, live updates, drawer, lineage, re-run |
+| `e2e/reproduce.spec.ts`, `e2e/video-reproduce.spec.ts` | Image/Video Reproduce loops, candidates, pick/redo/stitch, fix canvas, cancel |
+| `e2e/storyboard3d.spec.ts` | 3D storyboard cards, composer with underlay and figures |
+| `e2e/train.spec.ts` | dataset builder, captions, 12 GB refusal, train → cancel → resume → registry, LoRA pickers, Consistency Kit |
+| `e2e/settings.spec.ts` | Vision stack, the RTX 4070 preset, the Remote backend card, the fallback-tier editor |
+| `backend/tests/test_training.py` | trainers behind `FakeTrainer`, presets, registry, WanGP LoRA keys, Consistency Kit |
+| `backend/tests/test_hardware_presets.py` | preset recommendation and application |
+| `backend/tests/test_provider_tiers.py` | per-task capability plans and local → hosted fallback for Create, film shots and reference images |
+| `backend/tests/test_wangp_remote.py` | the container-side WanGP routes and the remote bridge, end to end through the app |
+| `backend/tests/test_mcp.py` | one MCP tool per route, the `/mcp` transport under auth, the stdio loop |
+| `backend/tests/test_licenses.py` | AGPL headers, forbidden imports, and vendored code without an `INTEGRATED_UPSTREAMS.md` entry fail the build |
+
+Real-GPU behaviour is the acceptance matrix in `RTX_4070_TEST_MATRIX.md`;
+none of the above claims a render happened.
