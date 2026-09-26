@@ -45,14 +45,19 @@ export default defineConfig({
   // therefore `pnpm e2e` die with "Timed out waiting ... from config.webServer".
   //
   // `optimizeDeps.exclude` only accepts package names, so it cannot say "never scan
-  // this directory"; `server.fs.deny` is the supported way to refuse those paths,
-  // and pinning `entries` to the renderer's own sources keeps the scan honest.
+  // this directory"; pinning `entries` to the renderer's own sources is what keeps
+  // the scan honest, and `server.fs.deny` additionally refuses to serve those trees.
+  //
+  // Setting `fs.deny` REPLACES Vite's defaults (`server.fs?.deny || [...]`), so they
+  // are restated here — dropping them would let the dev server hand out `.env` files
+  // and certificates. A pattern without `/` only matches a path named exactly that,
+  // so the directories need `/**` to cover their contents.
   optimizeDeps: {
     entries: ['frontend/**/*.{ts,tsx}', 'devtools/ui-mock/**/*.ts'],
   },
   server: {
     fs: {
-      deny: ['python-embed', 'Wan2GP'],
+      deny: ['.env', '.env.*', '*.{crt,pem}', '**/python-embed/**', '**/Wan2GP/**'],
     },
   },
   plugins: [

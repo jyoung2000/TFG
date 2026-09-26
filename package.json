@@ -36,7 +36,7 @@
     "e2e": "playwright test",
     "e2e:ui": "playwright test --ui",
     "test": "pnpm run test:frontend && pnpm run backend:test",
-    "agent:mcp": "cross-env PYTHONPATH= VIRTUAL_ENV= PYTHONHOME= sh -c \"cd backend && uv run python tfg_mcp.py\"",
+    "agent:mcp": "cross-env PYTHONPATH= VIRTUAL_ENV= PYTHONHOME= uv --directory backend run python tfg_mcp.py",
     "deploy:config": "docker compose -f deploy/docker-compose.yml --env-file deploy/.env config",
     "backend:dev": "bash scripts/start-backend.sh",
     "backend:dev:win": "powershell -ExecutionPolicy Bypass -File scripts/start-backend.ps1"
