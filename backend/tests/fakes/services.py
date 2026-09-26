@@ -9,6 +9,7 @@ from services.vision.fake_vision import FakeVision
 from services.vram.vram_manager import FakeNvml
 from services.motion.fake_motion import FakeMotion
 from services.stitcher.video_stitcher import FakeStitcher
+from services.lora_fetcher.fake_lora_fetcher import FakeLoraFetcher
 from services.trainer.fake_trainer import FakeTrainer
 from tests.fakes.fake_wangp_bridge import FakeWanGPBridge
 from pathlib import Path
@@ -774,6 +775,7 @@ class FakeServices:
     motion: FakeMotion = field(default_factory=FakeMotion)
     stitcher: FakeStitcher = field(default_factory=FakeStitcher)
     trainer: FakeTrainer = field(default_factory=FakeTrainer)
+    lora_fetcher: FakeLoraFetcher = field(default_factory=FakeLoraFetcher)
     #: Injected into the bundle by conftest (needs the outputs dir); None until then.
     wangp_bridge: FakeWanGPBridge | None = None
 

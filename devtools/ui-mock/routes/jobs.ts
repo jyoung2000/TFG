@@ -111,6 +111,8 @@ export function seedJobs(): Job[] {
 export function tickJobs(state: MockState): void {
   for (const item of state.historyJobs) {
     if (item.status !== 'running' || !item.started_at) continue
+    // Link LoRA downloads advance in tickLoraDownloads (routes/training.ts).
+    if (item.kind === 'download' && item.inputs.lora_url) continue
     const elapsed = Date.now() - item.started_at
     if (elapsed >= RUNNING_MS) {
       item.status = 'complete'

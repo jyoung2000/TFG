@@ -33,7 +33,7 @@ import { registerVisionRoutes } from './routes/vision'
 import { registerReproduceRoutes, tickReproduce } from './routes/reproduce'
 import { registerVideoReproduceRoutes, tickVideoReproduce } from './routes/video-reproduce'
 import { registerSceneRoutes } from './routes/scene'
-import { registerTrainingRoutes } from './routes/training'
+import { registerTrainingRoutes, tickLoraDownloads } from './routes/training'
 import { registerSettingsRoutes } from './routes/settings'
 import { registerVideoAnalysisRoutes } from './routes/video-analysis'
 import { registerImageAnalysisRoutes } from './routes/image-analysis'
@@ -106,6 +106,7 @@ export function createMockBackend(options: MockBackendOptions = {}): MockBackend
       tickQueue(state)
       tickGeneration(state)
       tickJobs(state)
+      tickLoraDownloads(state)
       tickReproduce(state)
       tickVideoReproduce(state)
     })

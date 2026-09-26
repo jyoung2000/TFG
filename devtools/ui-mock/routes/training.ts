@@ -79,6 +79,79 @@ function trainingJob(state: MockState, r: TrainingRun): Job | undefined {
   return state.historyJobs.find(j => j.id === r.job_id)
 }
 
+// ---- LoRA downloads from a link -------------------------------------------------------------
+
+const DOWNLOAD_MS = 1500
+const DOWNLOAD_BYTES = 24_117_248 // 23 MB
+
+/** Mirror of the backend's `parse_lora_url` rejections, same messages. */
+function parseLoraLink(raw: string): { provider: 'huggingface' | 'civitai' | 'direct'; filename: string } {
+  let url: URL
+  try {
+    url = new URL(raw.trim())
+  } catch {
+    throw new MockHttpError(400, 'Paste an https:// link from Hugging Face or Civitai, or a direct .safetensors URL')
+  }
+  if (url.protocol !== 'https:') throw new MockHttpError(400, 'Paste an https:// link from Hugging Face or Civitai, or a direct .safetensors URL')
+  const host = url.hostname.toLowerCase()
+  const last = decodeURIComponent(url.pathname.split('/').filter(Boolean).pop() ?? '')
+  if (['huggingface.co', 'www.huggingface.co', 'hf.co'].includes(host)) {
+    if (!/\/(blob|resolve)\//.test(url.pathname)) throw new MockHttpError(400, 'That Hugging Face link is a repo page — open the .safetensors file and copy the link to the file itself')
+    if (!last.toLowerCase().endsWith('.safetensors')) throw new MockHttpError(400, 'The Hugging Face link must point at a .safetensors file inside the repo (open the file page and copy its URL)')
+    return { provider: 'huggingface', filename: last }
+  }
+  if (['civitai.com', 'www.civitai.com'].includes(host)) {
+    const model = url.pathname.match(/^\/models\/(\d+)/)
+    const direct = url.pathname.match(/^\/api\/download\/models\/(\d+)/)
+    if (!model && !direct) throw new MockHttpError(400, 'That Civitai link is not a model page or a download link (expected civitai.com/models/<id> or /api/download/models/<id>)')
+    return { provider: 'civitai', filename: `civitai-${(model ?? direct)![1]}.safetensors` }
+  }
+  if (last.toLowerCase().endsWith('.safetensors')) return { provider: 'direct', filename: last }
+  throw new MockHttpError(400, 'Only Hugging Face links, Civitai links, or direct .safetensors URLs are supported')
+}
+
+/** Advance running link downloads; register the LoRA when one lands. */
+export function tickLoraDownloads(state: MockState): void {
+  const now = Date.now()
+  for (const job of state.historyJobs) {
+    if (job.kind !== 'download' || !job.inputs.lora_url || job.status !== 'running' || !job.started_at) continue
+    const elapsed = now - job.started_at
+    if (elapsed < DOWNLOAD_MS) {
+      const done = Math.round((elapsed / DOWNLOAD_MS) * DOWNLOAD_BYTES)
+      job.progress = Math.min(99, Math.round((elapsed / DOWNLOAD_MS) * 100))
+      job.phase = `downloading · ${(done / 1_048_576).toFixed(1)} / ${(DOWNLOAD_BYTES / 1_048_576).toFixed(1)} MB`
+    } else {
+      const target = String(job.params.target ?? 'z_image')
+      const filename = String(job.params.filename ?? 'lora.safetensors')
+      const file = `C:/Users/you/AppData/Roaming/ltx-desktop/loras/${target}/${filename}`
+      const entry: LoraEntry = {
+        id: id('lora'),
+        name: String(job.params.name ?? '') || filename.replace(/\.safetensors$/i, ''),
+        file,
+        target,
+        base_model: target,
+        trigger: String(job.params.trigger ?? ''),
+        dataset_id: '',
+        run_id: '',
+        job_id: job.id,
+        preset: 'character',
+        default_multiplier: 1,
+        size_bytes: DOWNLOAD_BYTES,
+        imported: true,
+        created_at: now,
+      }
+      state.training.loras = [entry, ...state.training.loras.filter(l => l.file !== file)]
+      job.status = 'complete'
+      job.progress = 100
+      job.phase = 'complete'
+      job.finished_at = now
+      job.outputs = [{ path: file, kind: 'file', width: 0, height: 0, duration: 0, thumb: '' }]
+      job.metrics = { size_mb: Number((DOWNLOAD_BYTES / 1_048_576).toFixed(1)) }
+    }
+    job.updated_at = now
+  }
+}
+
 /** Advance every running run to the present; register the LoRA when done. */
 export function tickTraining(state: MockState): void {
   const now = Date.now()
@@ -364,6 +437,41 @@ export function registerTrainingRoutes(router: Router, store: Store): void {
     const entry: LoraEntry = { id: id('lora'), name, file: `C:/Users/you/AppData/Roaming/ltx-desktop/loras/${target}/${name}.safetensors`, target, base_model: target, trigger: String(req.body.trigger ?? ''), dataset_id: '', run_id: '', job_id: '', preset: 'character', default_multiplier: 1, size_bytes: 21_000_000, imported: true, created_at: Date.now() }
     state.training.loras.unshift(entry)
     return entry
+  }))
+  router.post('/api/training/loras/download', req => store.mutate(state => {
+    const target = String(req.body.target ?? 'z_image')
+    if (!(target in BASE)) throw new MockHttpError(400, `Unknown target ${target}`)
+    const source = parseLoraLink(String(req.body.url ?? ''))
+    const now = Date.now()
+    // The api_key in the request is used for the fetch and stored nowhere.
+    const job: Job = {
+      id: id('job_lora-dl'),
+      kind: 'download',
+      status: 'running',
+      progress: 0,
+      phase: 'resolving',
+      title: `LoRA · ${source.filename}`,
+      created_at: now,
+      updated_at: now,
+      started_at: now,
+      finished_at: null,
+      model: target,
+      provider: source.provider,
+      seed: null,
+      prompt: '',
+      negative_prompt: '',
+      spec: {},
+      params: { target, name: String(req.body.name ?? ''), trigger: String(req.body.trigger ?? ''), filename: source.filename },
+      inputs: { lora_url: String(req.body.url ?? '').trim() },
+      outputs: [],
+      metrics: {},
+      parent_job_id: '',
+      project_id: '',
+      shot_id: '',
+      error: '',
+    }
+    state.historyJobs.unshift(job)
+    return { job_id: job.id }
   }))
   router.put('/api/training/loras/:id', req => store.mutate(state => {
     const entry = state.training.loras.find(l => l.id === req.params.id)

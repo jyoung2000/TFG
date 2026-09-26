@@ -109,6 +109,18 @@ is the WanGP LoRA directory for the target (`z_image`, `qwen`, `flux2`,
 run and job it came from, a default strength, and whether it was imported.
 Entries whose file disappeared are dropped on load.
 
+**Import** takes any local `.safetensors` file. **Download from a link**
+(`POST /api/training/loras/download`, the "paste a link" row in the
+registry) accepts a Hugging Face file URL (`/blob/` or `/resolve/`, it is
+fetched via `/resolve/`), a Civitai model page
+(`civitai.com/models/<id>[?modelVersionId=…]`, resolved through Civitai's
+public API to the primary `.safetensors` file) or Civitai download link, or
+any direct `https://…/*.safetensors` URL. The download runs as a History
+`download` job (progress in MB, cancellable) into
+`<loras>/<folder>/.downloading/` and is registered on completion. Gated
+files can take an API key with the request; it is sent once for that fetch
+and never stored — not in settings, not on the job, not in logs.
+
 Pickers ask `GET /api/training/loras?model=<model id>` and only get LoRAs
 whose target matches that model (`z_image_turbo` → `z_image`,
 `qwen_image_20B` → `qwen_image`, anything `ltx…` → `ltx2`). The picker sits

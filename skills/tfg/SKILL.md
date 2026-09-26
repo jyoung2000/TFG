@@ -110,8 +110,12 @@ image_paths | video_path | job_ids | analysis_id | reproduce_id}` →
 config) → `training_start` `{dataset_id, name, config}`; progress lives on
 the run (`training_get_run`: step, loss_history, samples, eta) and in History.
 `training_cancel`, resume with `training_start` `{resume_run_id}`. The LoRA
-lands in `training_list_loras` (`model` filter returns only compatible ones)
-and can be passed as `loras: [{name: <file>, multiplier}]` to Create,
+lands in `training_list_loras` (`model` filter returns only compatible ones).
+`training_download_lora` `{url, target, name?, trigger?, api_key?}` pulls one
+from a Hugging Face file link, a Civitai model page/download link, or any
+direct `.safetensors` URL as a History `download` job (the optional key is
+used once for that fetch and never stored). Any registered LoRA
+can be passed as `loras: [{name: <file>, multiplier}]` to Create,
 Reproduce and film shots; `film_update_asset` binds one to a character
 (`lora_id`, `lora_trigger`, `seed_lock`) so every shot inherits it, and
 `film_reference_sheet` renders a multi-angle sheet with one seed.

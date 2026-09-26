@@ -328,6 +328,21 @@
 - docs/{RTX_4070_TEST_MATRIX,SCENE_3D,TESTING,HISTORY,REPRODUCE}.md, README.md (front door), session-notes.md. The HTML API reference was regenerated
   (`python backend/generate_api_docs.py` → backend/generated/, 205 endpoints) but that folder is gitignored by design.
 
+## Post-PR follow-up: LoRA download from a link (Hugging Face / Civitai)
+- D-049: LoRA downloads from a URL are a `download` History job owned by `TrainingHandler` (`POST
+  /api/training/loras/download` → `{job_id}`), behind a new `LoraFetcher` Protocol (`services/lora_fetcher/`:
+  pure `parse_lora_url` incl. HF `/blob/`→`/resolve/` rewrite and Civitai model-page/API/download-link forms,
+  `RequestsLoraFetcher` real, `FakeLoraFetcher` test). Streams to `<loras>/<folder>/.downloading/<job>-<file>`,
+  then moves into place and upserts the registry entry (replace by file path, `imported=True`). Cancel rides the
+  existing `download` canceller (`cancel_lora_download` checked before the model-library path). The optional
+  `api_key` is request-scoped only: never in job params/inputs, settings or logs (test-asserted).
+- Files: backend/services/lora_fetcher/{__init__,lora_fetcher,requests_fetcher,fake_lora_fetcher}.py,
+  handlers/training_handler.py, film/training_api_types.py, _routes/training.py, app_handler.py,
+  tests/{test_lora_download.py,fakes/services.py,conftest.py}; frontend/lib/training-api.ts,
+  frontend/views/train/TrainView.tsx (DownloadFromUrl panel, polls the job); devtools/ui-mock/routes/training.ts
+  (route + tickLoraDownloads), routes/jobs.ts (tickJobs skips lora downloads), server.ts; e2e/train.spec.ts,
+  docs/TRAINING.md, skills/tfg/SKILL.md.
+
 ## Next step
 Nothing pending in this session. Real-GPU acceptance (docs/RTX_4070_TEST_MATRIX.md) and `pnpm build:win` need the 4070
 machine; a live `hermes mcp test tfg` needs a Hermes install. Watch the PR for review comments.

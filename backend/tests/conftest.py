@@ -109,6 +109,7 @@ def test_state(tmp_path: Path, fake_services: FakeServices):
         stitcher=fake_services.stitcher,
         trainers={"fake": fake_services.trainer, "musubi": fake_services.trainer, "ai-toolkit": fake_services.trainer},
         wangp_bridge=fake_services.wangp_bridge,
+        lora_fetcher=fake_services.lora_fetcher,
     )
 
     handler = build_initial_state(

@@ -31,10 +31,18 @@ from film.training_api_types import (
 from film.training_models import LORA_TARGETS, Dataset, DatasetItem, DatasetPreset, ItemSource, LoraEntry, TrainingConfig, TrainingRun, TrainingSample, now_ms
 from film.training_presets import default_config, fits_machine
 from handlers.base import StateHandlerBase
-from handlers.jobs_handler import JobsHandler
+from handlers.jobs_handler import Job, JobsHandler
 from handlers.vision_handler import VisionHandler
 from server_utils.path_policy import PathPolicyError, is_within, require_absolute_file
 from services.interfaces import TaskRunner
+from services.lora_fetcher import (
+    LoraDownloadCancelled,
+    LoraFetchError,
+    LoraFetcher,
+    LoraSource,
+    parse_lora_url,
+    safe_lora_filename,
+)
 from services.media_probe.media_probe import MediaProbe
 from services.trainer.catalog import MACHINE_VRAM_MB, TRAINERS
 from services.trainer.trainer import LoraTrainer, TrainerUnavailable, TrainingProgress, TrainingRequest
@@ -62,6 +70,7 @@ class TrainingHandler(StateHandlerBase):
         lock: RLock,
         app_data: Path,
         trainers: dict[str, LoraTrainer],
+        lora_fetcher: LoraFetcher,
         task_runner: TaskRunner,
         probe: MediaProbe,
         vram: VramManager,
@@ -74,6 +83,7 @@ class TrainingHandler(StateHandlerBase):
         self._root = app_data / "training"
         self._lora_root = app_data / "loras"
         self._trainers = trainers
+        self._fetcher = lora_fetcher
         self._tasks = task_runner
         self._probe = probe
         self._vram = vram
@@ -83,6 +93,8 @@ class TrainingHandler(StateHandlerBase):
         self._analysis_root = analysis_root
         self._active: str = ""
         self._cancelled: set[str] = set()
+        #: LoRA URL downloads in flight, job id → cancel flag.
+        self._lora_downloads: dict[str, bool] = {}
         self._io = threading.RLock()
 
     # ---- storage --------------------------------------------------------------------
@@ -705,6 +717,105 @@ class TrainingHandler(StateHandlerBase):
             raise HTTPError(404, "LoRA not found")
         Path(entry.file).unlink(missing_ok=True)
         self._save_registry([e for e in entries if e.id != lora_id])
+
+    # ---- LoRA downloads (Hugging Face / Civitai / direct URL) ----------------------------
+
+    def download_lora(self, *, url: str, target: str, name: str = "", trigger: str = "", api_key: str = "") -> Job:
+        """Fetch a LoRA from a pasted link into the registry, as a History
+        `download` job. The optional API key is used for this one request and
+        never stored (not in the job, not in settings, not in logs)."""
+        if target not in LORA_TARGETS:
+            raise HTTPError(400, f"Unknown target {target}")
+        try:
+            source = parse_lora_url(url)
+        except ValueError as exc:
+            raise HTTPError(400, str(exc)) from exc
+        if self._jobs is None:  # pragma: no cover - wired in AppHandler
+            raise HTTPError(500, "The job store is not available in this build")
+        title = source.filename or (f"Civitai model {source.civitai_model_id or source.civitai_version_id}" if source.kind == "civitai" else url)
+        job = self._jobs.start(
+            "download",
+            title=f"LoRA · {title}",
+            model=target,
+            provider=source.kind,
+            params={"target": target, "name": name, "trigger": trigger},
+            inputs={"lora_url": url},
+            status="queued",
+        )
+        with self._io:
+            self._lora_downloads[job.id] = False
+        key = api_key.strip()
+        self._tasks.run_background(
+            lambda: self._download_lora(job.id, source, target=target, name=name, trigger=trigger, api_key=key),
+            task_name=f"lora-download-{job.id}",
+            on_error=lambda exc: self._lora_download_failed(job.id, str(exc)),
+        )
+        return job
+
+    def cancel_lora_download(self, job_id: str) -> bool:
+        with self._io:
+            if job_id not in self._lora_downloads:
+                return False
+            self._lora_downloads[job_id] = True
+            return True
+
+    def _lora_download_cancelled(self, job_id: str) -> bool:
+        with self._io:
+            return self._lora_downloads.get(job_id, False)
+
+    def _lora_download_failed(self, job_id: str, message: str) -> None:
+        with self._io:
+            self._lora_downloads.pop(job_id, None)
+        if self._jobs is not None:
+            self._jobs.fail(job_id, message)
+
+    def _download_lora(self, job_id: str, source: LoraSource, *, target: str, name: str, trigger: str, api_key: str) -> None:
+        assert self._jobs is not None
+        jobs = self._jobs
+        jobs.mark_running(job_id, phase="resolving")
+        folder = self._lora_root / LORA_TARGETS[target]
+        staging = folder / ".downloading"
+        try:
+            resolved = self._fetcher.resolve(source, api_key)
+            filename = safe_lora_filename(resolved.filename)
+            if not filename:
+                raise LoraFetchError(f"The link resolved to '{resolved.filename or 'no file'}', not a .safetensors LoRA")
+            jobs.annotate(job_id, title=f"LoRA · {filename}")
+            tmp = staging / f"{job_id}-{filename}"
+
+            def on_progress(done: int, total: int | None) -> None:
+                if total:
+                    jobs.progress(job_id, min(99.0, 100.0 * done / total), f"downloading · {done // 1_048_576} / {total // 1_048_576} MB")
+                else:
+                    jobs.progress(job_id, 0.0, f"downloading · {done // 1_048_576} MB")
+
+            self._fetcher.download(resolved, tmp, on_progress, lambda: self._lora_download_cancelled(job_id))
+            folder.mkdir(parents=True, exist_ok=True)
+            final = folder / filename
+            shutil.move(str(tmp), final)
+            entry = LoraEntry(
+                name=name.strip() or final.stem,
+                file=str(final),
+                target=target,
+                base_model=target,
+                trigger=trigger.strip(),
+                imported=True,
+                size_bytes=final.stat().st_size,
+            )
+            with self._io:
+                entries = [e for e in self._load_registry() if e.file != entry.file]
+                entries.append(entry)
+                self._save_registry(entries)
+            jobs.annotate(job_id, metrics={"size_mb": round(entry.size_bytes / 1_048_576, 1)})
+            jobs.complete(job_id, [entry.file])
+        except LoraDownloadCancelled:
+            jobs.mark_cancelled(job_id, reason="Cancelled")
+        except LoraFetchError as exc:
+            jobs.fail(job_id, str(exc))
+        finally:
+            with self._io:
+                self._lora_downloads.pop(job_id, None)
+            shutil.rmtree(staging, ignore_errors=True)
 
     def compatible(self, model_id: str) -> list[LoraEntry]:
         """LoRAs whose target matches a model id (for pickers)."""

@@ -49,6 +49,14 @@ test.describe('Train', () => {
     await page.getByRole('button', { name: /LoRA registry/ }).click()
     await expect(page.getByTestId('lora-row')).toHaveCount(1)
     await expect(page.getByTestId('lora-row').first()).toContainText('z_image')
+
+    // Download a LoRA from a pasted Civitai link; it lands in the registry.
+    await page.getByTestId('lora-url-input').fill('https://civitai.com/models/12345?modelVersionId=67890')
+    await page.getByLabel('Trigger for the downloaded LoRA').fill('neon_v1')
+    await page.getByTestId('lora-url-download').click()
+    await expect(page.getByTestId('lora-url-status')).toContainText('Added to the registry', { timeout: 15_000 })
+    await expect(page.getByTestId('lora-row')).toHaveCount(2)
+    await expect(page.getByLabel('Name of civitai-12345')).toHaveValue('civitai-12345')
     expect(guard.errors).toEqual([])
   })
 

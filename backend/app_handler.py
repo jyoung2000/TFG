@@ -40,6 +40,7 @@ from handlers.video_reproduce_handler import VideoReproduceHandler
 from handlers.scene_handler import SceneHandler
 from handlers.training_handler import TrainingHandler
 from handlers.wangp_server_handler import WanGPServerHandler
+from services.lora_fetcher import LoraFetcher
 from services.trainer.trainer import LoraTrainer
 from services.vision.protocol import VisionService
 from services.motion.motion_analyzer import MotionAnalyzer
@@ -100,6 +101,7 @@ class AppHandler:
         stitcher: VideoStitcher | None = None,
         trainers: dict[str, LoraTrainer] | None = None,
         wangp_bridge: WanGPBridge | None = None,
+        lora_fetcher: LoraFetcher | None = None,
     ) -> None:
         self.config = config
 
@@ -217,6 +219,11 @@ class AppHandler:
             backend_root = _Path(__file__).resolve().parent
             trainers = {"musubi": MusubiTrainer(backend_root), "ai-toolkit": AiToolkitTrainer(backend_root)}
         self._trainers = trainers
+        if lora_fetcher is None:
+            from services.lora_fetcher.requests_fetcher import RequestsLoraFetcher
+
+            lora_fetcher = RequestsLoraFetcher()
+        self._lora_fetcher = lora_fetcher
 
         # The unified job store: every handler below that does work reports
         # to it, and the History tab reads nothing else.
@@ -472,6 +479,7 @@ class AppHandler:
             lock=self._lock,
             app_data=app_data,
             trainers=self._trainers,
+            lora_fetcher=self._lora_fetcher,
             task_runner=task_runner,
             probe=media_probe,
             vram=self.vram,
@@ -513,6 +521,9 @@ class AppHandler:
             return self.generation.cancel_generation().status == "cancelling"
 
         def _cancel_download(job: Job) -> bool:
+            # A LoRA-from-URL download carries its own cancel flag.
+            if self.training.cancel_lora_download(job.id):
+                return True
             status = self.model_library.download_status()
             if status.active:
                 self.model_library.cancel_download()
@@ -609,6 +620,8 @@ class ServiceBundle:
     trainers: dict[str, LoraTrainer] | None = None
     #: None → the local WanGP bridge, or the remote one when `config.wangp_remote_url` is set; tests inject FakeWanGPBridge.
     wangp_bridge: WanGPBridge | None = None
+    #: None → requests-based Hugging Face/Civitai fetcher; tests inject FakeLoraFetcher.
+    lora_fetcher: LoraFetcher | None = None
 
 
 def _default_nvml() -> NvmlProbe:
@@ -714,4 +727,5 @@ def build_initial_state(
         stitcher=bundle.stitcher,
         trainers=bundle.trainers,
         wangp_bridge=bundle.wangp_bridge,
+        lora_fetcher=bundle.lora_fetcher,
     )

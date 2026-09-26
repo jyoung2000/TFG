@@ -9,6 +9,8 @@ from api_types import StatusResponse
 from app_handler import AppHandler
 from film.training_api_types import (
     CaptionRequest,
+    DownloadLoraRequest,
+    DownloadLoraResponse,
     CreateDatasetRequest,
     DatasetListResponse,
     ImportDatasetItemsRequest,
@@ -130,6 +132,12 @@ def route_list_loras(target: str = "", model: str = "", handler: AppHandler = De
     if model:
         return LoraListResponse(loras=handler.training.compatible(model))
     return LoraListResponse(loras=handler.training.list_loras(target))
+
+
+@router.post("/loras/download", response_model=DownloadLoraResponse)
+def route_download_lora(req: DownloadLoraRequest, handler: AppHandler = Depends(get_state_service)) -> DownloadLoraResponse:
+    job = handler.training.download_lora(url=req.url, target=req.target, name=req.name, trigger=req.trigger, api_key=req.api_key)
+    return DownloadLoraResponse(job_id=job.id)
 
 
 @router.post("/loras/import", response_model=LoraEntry)

@@ -389,10 +389,64 @@ function Registry({ loras, onChanged, onError }: { loras: LoraEntry[]; onChanged
           <button onClick={() => void importLora()} disabled={busy} className="btn-chip"><Plus className="h-3.5 w-3.5" /> Import .safetensors</button>
         </div>
       </div>
-      {loras.length === 0 && <p className="text-xs text-zinc-600">Nothing yet. Finish a training run or import a file.</p>}
+      <DownloadFromUrl target={target} onChanged={onChanged} />
+      {loras.length === 0 && <p className="text-xs text-zinc-600">Nothing yet. Finish a training run, import a file, or paste a link above.</p>}
       <div className="space-y-1">
         {loras.map(entry => <LoraRow key={entry.id} entry={entry} onChanged={onChanged} onError={onError} />)}
       </div>
+    </div>
+  )
+}
+
+/** Paste a Hugging Face / Civitai / direct .safetensors link; the backend
+ *  downloads it as a History job and registers it for the chosen target. */
+function DownloadFromUrl({ target, onChanged }: { target: string; onChanged: () => Promise<void> }) {
+  const [url, setUrl] = useState('')
+  const [trigger, setTrigger] = useState('')
+  const [apiKey, setApiKey] = useState('')
+  const [job, setJob] = useState<Job | null>(null)
+  const [error, setError] = useState('')
+  const running = job !== null && (job.status === 'queued' || job.status === 'running')
+  const jobId = running && job ? job.id : ''
+
+  useEffect(() => {
+    if (!jobId) return
+    const timer = window.setInterval(() => {
+      jobsApi.get(jobId).then(({ job: fresh }) => {
+        setJob(fresh)
+        if (fresh.status === 'complete') { setUrl(''); setTrigger(''); setApiKey(''); void onChanged() }
+      }).catch(() => undefined)
+    }, 1000)
+    return () => window.clearInterval(timer)
+  }, [jobId, onChanged])
+
+  const start = async () => {
+    setError('')
+    setJob(null)
+    try {
+      const { job_id } = await trainingApi.downloadLora({ url: url.trim(), target, trigger: trigger.trim(), api_key: apiKey })
+      const { job: fresh } = await jobsApi.get(job_id)
+      setJob(fresh)
+      if (fresh.status === 'complete') { setUrl(''); setTrigger(''); setApiKey(''); void onChanged() }
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
+  }
+
+  return (
+    <div className="rounded border border-zinc-800 bg-zinc-900/40 p-2 space-y-1.5" data-testid="lora-url-panel">
+      <div className="flex items-center gap-2 flex-wrap">
+        <input className={selectClass + ' flex-1 min-w-64'} placeholder="Paste a Hugging Face or Civitai link, or a direct .safetensors URL" value={url} onChange={e => setUrl(e.target.value)} aria-label="LoRA link" data-testid="lora-url-input" disabled={running} />
+        <input className={selectClass + ' w-28'} placeholder="trigger word" value={trigger} onChange={e => setTrigger(e.target.value)} aria-label="Trigger for the downloaded LoRA" disabled={running} />
+        <input type="password" className={selectClass + ' w-44'} placeholder="API key (used once, not saved)" value={apiKey} onChange={e => setApiKey(e.target.value)} aria-label="API key, used once and never saved" disabled={running} />
+        <button onClick={() => void start()} disabled={running || !url.trim()} className="btn-chip" data-testid="lora-url-download">
+          {running ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />} Download
+        </button>
+      </div>
+      <p className="text-[10px] text-zinc-600">Downloads into the {target} LoRA folder and registers it. Gated files may need your Civitai or Hugging Face key — it is sent once with this request and never stored.</p>
+      {running && job && <p className="text-[11px] text-violet-300" data-testid="lora-url-status">{job.phase || 'starting'}{job.progress > 0 ? ` · ${job.progress}%` : ''}</p>}
+      {job?.status === 'failed' && <p className="text-[11px] text-red-300" data-testid="lora-url-status">{job.error || 'Download failed'}</p>}
+      {job?.status === 'cancelled' && <p className="text-[11px] text-zinc-500" data-testid="lora-url-status">Download cancelled.</p>}
+      {job?.status === 'complete' && <p className="text-[11px] text-emerald-300" data-testid="lora-url-status">Added to the registry.</p>}
+      {error && <p className="text-[11px] text-red-300" data-testid="lora-url-status">{error}</p>}
     </div>
   )
 }

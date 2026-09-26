@@ -89,6 +89,21 @@ class LoraListResponse(BaseModel):
     loras: list[LoraEntry] = Field(default_factory=list[LoraEntry])
 
 
+class DownloadLoraRequest(BaseModel):
+    """A pasted Hugging Face / Civitai / direct .safetensors link."""
+
+    url: str
+    target: str = "z_image"
+    name: str = ""
+    trigger: str = ""
+    #: Used once for this request (gated files); never persisted anywhere.
+    api_key: str = ""
+
+
+class DownloadLoraResponse(BaseModel):
+    job_id: str
+
+
 class ImportLoraRequest(BaseModel):
     path: str
     name: str = ""

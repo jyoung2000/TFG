@@ -66,6 +66,10 @@ export const trainingApi = {
   },
   importLora: (data: { path: string; name?: string; target: string; trigger?: string }) =>
     request<LoraEntry>('/api/training/loras/import', { method: 'POST', body: JSON.stringify(data) }),
+  /** Start a background download of a LoRA from a Hugging Face / Civitai / direct link.
+   *  The optional api_key is sent once for the fetch and never stored anywhere. */
+  downloadLora: (data: { url: string; target: string; name?: string; trigger?: string; api_key?: string }) =>
+    request<{ job_id: string }>('/api/training/loras/download', { method: 'POST', body: JSON.stringify(data) }),
   updateLora: (id: string, data: { name?: string; trigger?: string; default_multiplier?: number }) =>
     request<LoraEntry>(`/api/training/loras/${enc(id)}`, { method: 'PUT', body: JSON.stringify(data) }),
   deleteLora: (id: string) => request<{ status: string }>(`/api/training/loras/${enc(id)}`, { method: 'DELETE' }),
