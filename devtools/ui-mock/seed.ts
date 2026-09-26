@@ -297,6 +297,7 @@ export function seedProject(id: string = DEMO_PROJECT_ID, name = ''): FilmProjec
       wardrobe: 'Grey thermal jacket, orange harness, heavy gloves.',
       accessories: 'Head torch, multi-tool on a lanyard.',
       continuity_notes: 'Harness always clipped on the left hip.',
+      reference_images: ['references/mara-front.png', 'references/mara-profile.png'],
     }),
     asset('character', 'asset-idris', 'Idris', {
       description: 'Relay operator. Talks more than he should.',
@@ -309,6 +310,7 @@ export function seedProject(id: string = DEMO_PROJECT_ID, name = ''): FilmProjec
       lighting: 'Torchlight and one failing amber strip.',
       atmosphere: 'Cold, close, humming.',
       time_of_day: 'night',
+      reference_images: ['references/relay-station-interior.png'],
     }),
     asset('location', 'asset-ridge', 'The Ridge', {
       description: 'An exposed spine of rock above the valley.',

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import { Lightbox, type LightboxItem } from '../../components/Lightbox'
 import { ImagePlus, Loader2, MapPin, Package, Palette, Plus, Sparkles, Trash2, User, Wand2 } from 'lucide-react'
 import { useFilm } from '../../contexts/FilmContext'
 import { filmApi, filmMediaUrl } from '../../lib/film-api'
@@ -48,52 +49,95 @@ const KIND_FIELDS: Record<FilmAssetKind, { key: keyof FilmAsset; label: string }
   ],
 }
 
-function ReferenceThumb({ path }: { path: string }) {
+type ThumbState = { status: 'loading' } | { status: 'ready'; url: string } | { status: 'error'; message: string }
+
+/**
+ * Resolve a film-project media path to an authenticated URL. Keyed on the
+ * project *id* (not the whole film object) so a store refresh does not refetch
+ * every thumbnail, and errors surface instead of leaving a skeleton forever.
+ */
+function useFilmMediaUrl(path: string | undefined): ThumbState {
   const { film } = useFilm()
-  const [url, setUrl] = useState<string | null>(null)
-  useEffect(() => { if (film) filmMediaUrl(film.id, path).then(setUrl).catch(() => {}) }, [film, path])
-  if (!url) return null
-  return <img src={url} alt="Asset visual reference" className="h-32 w-44 object-contain rounded border border-zinc-800 bg-black/40" />
+  const filmId = film?.id
+  const [state, setState] = useState<ThumbState>({ status: 'loading' })
+  useEffect(() => {
+    let cancelled = false
+    if (!filmId || !path) { setState({ status: 'error', message: 'No image' }); return }
+    setState({ status: 'loading' })
+    filmMediaUrl(filmId, path)
+      .then(url => { if (!cancelled) setState({ status: 'ready', url }) })
+      .catch((err: unknown) => { if (!cancelled) setState({ status: 'error', message: err instanceof Error ? err.message : String(err) }) })
+    return () => { cancelled = true }
+  }, [filmId, path])
+  return state
 }
 
-function ReferenceGallery({ asset }: { asset: FilmAsset }) {
+function ThumbError({ className, message }: { className: string; message: string }) {
+  return (
+    <div role="img" aria-label={`Image unavailable: ${message}`} title={message}
+      className={className + ' flex items-center justify-center text-[10px] text-red-300 bg-red-950/30 border border-red-900/50 rounded'}>
+      unavailable
+    </div>
+  )
+}
+
+function ReferenceThumb({ path, onOpen }: { path: string; onOpen: () => void }) {
+  const state = useFilmMediaUrl(path)
+  const cls = 'h-32 w-44 object-contain rounded border border-zinc-800 bg-black/40'
+  if (state.status === 'loading') return <div className={cls + ' animate-pulse bg-zinc-900'} />
+  if (state.status === 'error') return <ThumbError className={cls} message={state.message} />
+  return (
+    <button type="button" onClick={onOpen} className="cursor-zoom-in" aria-label={`Open reference image ${path.split('/').pop() ?? ''}`}>
+      <img src={state.url} alt="Asset visual reference" loading="lazy" className={cls} />
+    </button>
+  )
+}
+
+function ReferenceGallery({ asset, onOpen }: { asset: FilmAsset; onOpen: (index: number) => void }) {
   if (!asset.reference_images.length) return null
   return (
     <div className="flex gap-1.5 flex-wrap">
       {asset.reference_images.map((path, i) => (
-        <GalleryThumb key={i} path={path} />
+        <GalleryThumb key={path} path={path} onOpen={() => onOpen(i)} />
       ))}
     </div>
   )
 }
 
-function GalleryThumb({ path }: { path: string }) {
-  const { film } = useFilm()
-  const [url, setUrl] = useState<string | null>(null)
-  useEffect(() => { if (film) filmMediaUrl(film.id, path).then(setUrl).catch(() => {}) }, [film, path])
-  if (!url) return <div className="w-16 h-16 rounded border border-zinc-800 bg-zinc-900 animate-pulse" />
+function GalleryThumb({ path, onOpen }: { path: string; onOpen: () => void }) {
+  const state = useFilmMediaUrl(path)
+  const cls = 'w-16 h-16 rounded border border-zinc-800'
+  if (state.status === 'loading') return <div className={cls + ' bg-zinc-900 animate-pulse'} />
+  if (state.status === 'error') return <ThumbError className={cls} message={state.message} />
   return (
-    <img
-      src={url}
-      alt=""
-      className="w-16 h-16 object-cover rounded border border-zinc-800 hover:scale-150 hover:z-10 transition-transform cursor-zoom-in"
-      title={`Reference image ${path.split('/').pop() ?? ''}`}
-    />
+    <button type="button" onClick={onOpen} className="cursor-zoom-in" aria-label={`Open reference image ${path.split('/').pop() ?? ''}`}>
+      <img src={state.url} alt="" loading="lazy" className={cls + ' object-cover'} title={`Reference image ${path.split('/').pop() ?? ''}`} />
+    </button>
   )
 }
 
-function useAssetThumb(asset: FilmAsset): string | null {
+/** Resolved URLs for every reference image of an asset, for the lightbox. */
+function useReferenceUrls(asset: FilmAsset | null): LightboxItem[] {
   const { film } = useFilm()
-  const [url, setUrl] = useState<string | null>(null)
+  const filmId = film?.id
+  const paths = asset?.reference_images ?? []
+  const key = paths.join('\n')
+  const [items, setItems] = useState<LightboxItem[]>([])
   useEffect(() => {
-    let cancelled = false; setUrl(null)
-    void (async () => {
-      const first = asset.reference_images[0]; if (!film || !first) return
-      try { const r = await filmMediaUrl(film.id, first); if (!cancelled) setUrl(r) } catch {}
-    })()
+    let cancelled = false
+    if (!filmId || !paths.length) { setItems([]); return }
+    void Promise.all(paths.map(async (p): Promise<LightboxItem | null> => {
+      try { return { url: await filmMediaUrl(filmId, p), kind: 'image', label: p.split('/').pop() ?? p } }
+      catch { return null }
+    })).then(resolved => { if (!cancelled) setItems(resolved.filter((x): x is LightboxItem => x !== null)) })
     return () => { cancelled = true }
-  }, [film, asset.reference_images])
-  return url
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filmId, key])
+  return items
+}
+
+function useAssetThumb(asset: FilmAsset): ThumbState {
+  return useFilmMediaUrl(asset.reference_images[0])
 }
 
 function AssetCard({ asset, selected, onSelect, onRemove }: {
@@ -105,7 +149,11 @@ function AssetCard({ asset, selected, onSelect, onRemove }: {
   return (
     <div onClick={onSelect} className={"group relative rounded-xl overflow-hidden border cursor-pointer transition-all " + (selected ? "border-violet-500 ring-2 ring-violet-500/30" : "border-zinc-800 hover:border-zinc-600")} title={asset.name}>
       <div className="aspect-[4/3] bg-zinc-950 flex items-center justify-center relative">
-        {thumb ? <img src={thumb} alt="" className="w-full h-full object-cover" /> : <span className="text-zinc-700">{meta.icon}</span>}
+        {thumb.status === 'ready'
+          ? <img src={thumb.url} alt="" loading="lazy" className="w-full h-full object-cover" />
+          : thumb.status === 'error' && asset.reference_images.length > 0
+            ? <ThumbError className="w-full h-full" message={thumb.message} />
+            : <span className="text-zinc-700">{meta.icon}</span>}
         <div className="absolute top-2 left-2 flex items-center gap-1">
           <span className={"px-1.5 py-0.5 rounded text-[10px] font-medium " + meta.color}>{meta.label}</span>
           {hasGuide && <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-violet-600/30 text-violet-300">Guide</span>}
@@ -117,7 +165,7 @@ function AssetCard({ asset, selected, onSelect, onRemove }: {
   )
 }
 
-function StyleGuidePanel({ asset }: { asset: FilmAsset }) {
+function StyleGuidePanel({ asset, onOpen }: { asset: FilmAsset; onOpen: (index: number) => void }) {
   const sg = asset.style_guide
   if (!sg) return <p className="text-xs text-zinc-600">Upload a reference image, then click "Generate style guide" to let the vision model extract key traits, colors, mood and a reusable generation prompt.</p>
   return (
@@ -130,7 +178,7 @@ function StyleGuidePanel({ asset }: { asset: FilmAsset }) {
           <span className="text-[10px] text-zinc-500 uppercase tracking-wide font-semibold">Generation prompt</span>
           <div className="mt-1 flex gap-3 items-start">
             <p className="flex-1 text-xs text-zinc-400 bg-zinc-800/50 rounded p-2 border border-zinc-700/50">{sg.recommended_prompt}</p>
-            <ReferenceGallery asset={asset} />
+            <ReferenceGallery asset={asset} onOpen={onOpen} />
           </div>
         </div>
       )}
@@ -146,8 +194,11 @@ export function AssetsPanel() {
   const [generating, setGenerating] = useState(false)
   const [generatingGuide, setGeneratingGuide] = useState(false)
   const selected = film?.assets.find(a => a.id === selectedId) ?? null
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null)
+  const lightboxItems = useReferenceUrls(selected)
 
   useEffect(() => { if (selected) setDraft({ ...selected }) }, [selectedId, selected])
+  useEffect(() => { setLightboxIndex(null) }, [selectedId])
 
   const create = useCallback(async (kind: FilmAssetKind) => {
     if (!film) return
@@ -239,7 +290,7 @@ export function AssetsPanel() {
               <button onClick={() => void generateReference()} disabled={generating} className="flex items-center gap-1 px-2 py-1 rounded bg-violet-800/70 hover:bg-violet-700 disabled:opacity-40 text-[10px] text-violet-100">{generating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />} Generate image</button>
               <button onClick={() => void generateStyleGuide()} disabled={generatingGuide || selected.reference_images.length === 0} title="Analyze reference image with vision AI" className="flex items-center gap-1 px-2 py-1 rounded bg-amber-800/70 hover:bg-amber-700 disabled:opacity-40 text-[10px] text-amber-100">{generatingGuide ? <Loader2 className="h-3 w-3 animate-spin" /> : <Wand2 className="h-3 w-3" />} Generate style guide</button>
             </div>
-            {selected.reference_images.length > 0 && <div className="flex gap-1.5 overflow-x-auto pb-1">{selected.reference_images.map((p, i) => <ReferenceThumb key={i} path={p} />)}</div>}
+            {selected.reference_images.length > 0 && <div className="flex gap-1.5 overflow-x-auto pb-1">{selected.reference_images.map((p, i) => <ReferenceThumb key={p} path={p} onOpen={() => setLightboxIndex(i)} />)}</div>}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               <div className="space-y-3">
                               <span className="text-[10px] text-zinc-500 uppercase tracking-wide font-semibold">Details</span>
@@ -249,7 +300,7 @@ export function AssetsPanel() {
                                   {field.key === 'style_prompt' && selected.reference_images.length > 0 ? (
                                     <div className="flex gap-2 items-start mt-0.5">
                                       <textarea className={inputClass + ' flex-1 resize-none h-14'} value={String(draft[field.key] ?? '')} onChange={e => setDraft(d => ({ ...d, [field.key]: e.target.value }))} />
-                                      <ReferenceGallery asset={selected} />
+                                      <ReferenceGallery asset={selected} onOpen={setLightboxIndex} />
                                     </div>
                                   ) : (
                                     <textarea className={inputClass + ' mt-0.5 resize-none h-14'} value={String(draft[field.key] ?? '')} onChange={e => setDraft(d => ({ ...d, [field.key]: e.target.value }))} />
@@ -259,7 +310,7 @@ export function AssetsPanel() {
               </div>
               <div className="space-y-3">
                 <span className="text-[10px] text-zinc-500 uppercase tracking-wide font-semibold">Style Guide</span>
-                <div className="bg-zinc-900/50 border border-zinc-800 rounded-lg p-3 min-h-[120px]"><StyleGuidePanel asset={selected} /></div>
+                <div className="bg-zinc-900/50 border border-zinc-800 rounded-lg p-3 min-h-[120px]"><StyleGuidePanel asset={selected} onOpen={setLightboxIndex} /></div>
               </div>
             </div>
             <button onClick={() => void save()} className="px-4 py-1.5 rounded bg-violet-700 hover:bg-violet-600 text-xs font-medium text-white">Save {KIND_META[selected.kind].label.toLowerCase()}</button>
@@ -274,6 +325,14 @@ export function AssetsPanel() {
           </div>
         )}
       </div>
+      {lightboxIndex !== null && lightboxItems.length > 0 && (
+        <Lightbox
+          items={lightboxItems}
+          index={Math.min(lightboxIndex, lightboxItems.length - 1)}
+          onClose={() => setLightboxIndex(null)}
+          onIndexChange={setLightboxIndex}
+        />
+      )}
     </div>
   )
 }

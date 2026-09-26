@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { backendFetch } from '../lib/backend'
 import { logger } from '../lib/logger'
+import { toFileUrl } from '../lib/file-url'
 import './FirstRunSetup.css'
 
 interface LaunchGateProps {
@@ -105,7 +106,7 @@ export function LaunchGate({
         try {
           const resourcePath = await window.electronAPI.getResourcePath?.()
           if (resourcePath) {
-            setVideoPath(`file://${resourcePath}/app.asar.unpacked/dist/splash/splash.mp4`)
+            setVideoPath(toFileUrl(`${resourcePath}/app.asar.unpacked/dist/splash/splash.mp4`))
           }
         } catch {
           // Dev mode: use relative path

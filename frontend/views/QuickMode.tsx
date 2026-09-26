@@ -33,6 +33,7 @@ import { ErrorNotice } from '../components/ErrorNotice'
 import { LtxLogo } from '../components/LtxLogo'
 import { Button } from '../components/ui/button'
 import { requestSettings } from '../lib/error-messages'
+import { toFileUrl } from '../lib/file-url'
 import type { GenerationSettings } from '../components/SettingsPanel'
 import type { DirectorChatMessage, DirectorContextDetails } from '../types/film'
 
@@ -155,8 +156,7 @@ export function QuickMode() {
     if (!file || !file.type.startsWith('image/')) return
     const filePath = (file as File & { path?: string }).path
     if (filePath) {
-      const normalized = filePath.replace(/\\/g, '/')
-      setReferenceImage(normalized.startsWith('/') ? `file://${normalized}` : `file:///${normalized}`)
+      setReferenceImage(toFileUrl(filePath))
     } else {
       setActionNote('Pick the image with the file dialog so its path can be used as the reference.')
     }

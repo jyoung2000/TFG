@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { APP_NAME } from '../lib/brand'
+import { toFileUrl } from '../lib/file-url'
 
 interface PythonSetupProps {
   onReady: () => void
@@ -47,7 +48,7 @@ export function PythonSetup({ onReady }: PythonSetupProps) {
       try {
         const resourcePath = await window.electronAPI.getResourcePath?.()
         if (resourcePath) {
-          setVideoPath(`file://${resourcePath}/app.asar.unpacked/dist/splash/splash.mp4`)
+          setVideoPath(toFileUrl(`${resourcePath}/app.asar.unpacked/dist/splash/splash.mp4`))
         }
       } catch {
         // Dev mode: use relative path

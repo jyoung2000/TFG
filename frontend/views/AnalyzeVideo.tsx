@@ -15,7 +15,7 @@ import {
 import { useProjects } from '../contexts/ProjectContext'
 import { useFilm } from '../contexts/FilmContext'
 import { useAppSettings } from '../contexts/AppSettingsContext'
-import { filmApi } from '../lib/film-api'
+import { filmApi, filmOutputUrl } from '../lib/film-api'
 import type { FilmModelCapability } from '../types/film'
 import { analysisFrameUrl, videoAnalysisApi, type VideoRecreationRequest, type VideoRecreationResponse } from '../lib/video-analysis-api'
 import { logger } from '../lib/logger'
@@ -855,6 +855,29 @@ function PromptEditor({
   )
 }
 
+/** A generated candidate, served through the authenticated output route (no `media://`). */
+function CandidateVideo({ path, index }: { path: string; index: number }) {
+  const [url, setUrl] = useState<string | null>(null)
+  const [failed, setFailed] = useState(false)
+  useEffect(() => {
+    let cancelled = false
+    setUrl(null); setFailed(false)
+    filmOutputUrl(path)
+      .then(u => { if (!cancelled) setUrl(u) })
+      .catch(() => { if (!cancelled) setFailed(true) })
+    return () => { cancelled = true }
+  }, [path])
+  if (failed) {
+    return <p className="text-xs text-red-300 p-4">Candidate {index + 1} could not be loaded: {path}</p>
+  }
+  if (!url) return <div className="w-full h-full animate-pulse bg-zinc-900" aria-label={`Loading candidate ${index + 1}`} />
+  return (
+    <video src={url} controls preload="metadata" className="w-full h-full object-contain" onError={() => setFailed(true)}>
+      <p className="text-xs text-zinc-400 p-4">Candidate {index + 1}: {path}</p>
+    </video>
+  )
+}
+
 /** Panel showing video recreation results with comparison to reference. */
 function RecreationResultsPanel({
   result,
@@ -880,7 +903,7 @@ function RecreationResultsPanel({
       
       <div className="rounded-lg border border-zinc-800 bg-zinc-900 p-3">
         <p className="text-xs text-zinc-400">
-          Status: <span className="text-{result.status === 'complete' ? 'emerald' : 'amber'}-300">{result.status}</span>
+          Status: <span className={result.status === 'complete' ? 'text-emerald-300' : 'text-amber-300'}>{result.status}</span>
         </p>
         <p className="text-xs text-zinc-400">
           Shots generated: {result.shots_generated}
@@ -895,15 +918,7 @@ function RecreationResultsPanel({
           {result.video_paths.map((path, index) => (
             <div key={path} className="rounded-lg border border-zinc-800 overflow-hidden">
               <div className="relative aspect-video bg-zinc-950">
-                <video
-                  src={`media://${path}`}
-                  controls
-                  className="w-full h-full object-contain"
-                >
-                  <p className="text-xs text-zinc-400 p-4">
-                    Candidate {index + 1}: {path}
-                  </p>
-                </video>
+                <CandidateVideo path={path} index={index} />
               </div>
               <div className="p-2 bg-zinc-900">
                 <p className="text-xs text-zinc-400 truncate">Candidate {index + 1}</p>

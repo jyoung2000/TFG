@@ -271,9 +271,14 @@ class TestRecreation:
         response = client.post(f"/api/video-analysis/{analysis['id']}/recreate", json={"candidates": 1})
         assert response.status_code == 400
 
+    @pytest.mark.xfail(
+        strict=True,
+        reason="Video reproduce v2 (phase 5): per-shot jobs through the film queue; handler returns 501 until then.",
+    )
     def test_recreation_generates_candidates_from_analyzed_shots(
         self, client, video, test_state, create_fake_model_files
     ):
+        """Every requested candidate must exist as a playable file; a 'failed' status is a failure."""
         from tests.test_generation import _enable_local_text_encoding
 
         create_fake_model_files()
@@ -286,7 +291,23 @@ class TestRecreation:
         response = client.post(f"/api/video-analysis/{analysis['id']}/recreate", json={"candidates": 2})
         assert response.status_code == 200, response.text
         payload = response.json()
-        assert payload["status"] in ("complete", "failed")
+        assert payload["status"] == "complete"
         assert payload["shots_generated"] == 6
-        if payload["video_paths"]:
-            assert all(Path(p).exists() for p in payload["video_paths"])
+        assert payload["video_paths"], "at least one candidate per shot is required"
+        assert len(payload["video_paths"]) >= 6
+        for candidate in payload["video_paths"]:
+            assert Path(candidate).is_file(), candidate
+            assert Path(candidate).stat().st_size > 0, candidate
+
+    def test_recreation_is_honest_about_being_unavailable(self, client, video, test_state, create_fake_model_files):
+        """Until phase 5 the endpoint refuses with 501 instead of pretending to render."""
+        from tests.test_generation import _enable_local_text_encoding
+
+        create_fake_model_files()
+        _enable_local_text_encoding(test_state)
+        analysis = _import(client, video)
+        client.post(f"/api/video-analysis/{analysis['id']}/detect")
+        client.post(f"/api/video-analysis/{analysis['id']}/analyze", json={})
+        response = client.post(f"/api/video-analysis/{analysis['id']}/recreate", json={"candidates": 1})
+        assert response.status_code == 501, response.text
+

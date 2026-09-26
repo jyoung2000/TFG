@@ -675,42 +675,28 @@ class VideoAnalysisHandler(StateHandlerBase):
     # ---- stage 6: video recreation ---------------------------------------
     
     def recreate_video(self, analysis_id: str, req: VideoRecreationRequest) -> VideoRecreationResponse:
-        """Recreate video from analyzed shots to verify prompts produce similar results.
-        
-        Combines shot prompts from analysis into generation requests and returns
-        generated video candidates for comparison with the original.
+        """Recreate analysed shots as generated candidates.
+
+        Validates the request (analysis exists, shots analysed, shot ids known)
+        and then hands off to the recreation pipeline. The old implementation
+        concatenated every shot prompt into a single synchronous T2V request in
+        the route; it was removed rather than kept. Until the per-shot queue
+        based pipeline lands this raises 501 so callers see an honest error
+        instead of a silently failing render.
         """
         analysis = self._load(analysis_id)
         if not analysis.shots:
             raise HTTPError(400, "No shots available. Detect and analyze shots first.")
-        
-        # Determine which shots to recreate
+
         shots_to_recreate = analysis.shots
         if req.shot_ids:
             shots_to_recreate = [s for s in analysis.shots if s.id in req.shot_ids]
             if not shots_to_recreate:
                 raise HTTPError(400, "No matching shots found for the provided shot IDs")
-        
-        # Build combined prompt from all shots
-        combined_prompt = self._build_combined_recreation_prompt(analysis, shots_to_recreate)
-        if not combined_prompt.strip():
+        if not any(s.prompts.video and s.prompts.video.strip() for s in shots_to_recreate):
             raise HTTPError(400, "No valid prompts available for recreation. Analyze shots first.")
-        
-        # For now, return a structured response that the route handler will populate
-        return VideoRecreationResponse(
-            status="ready_to_generate",
-            video_paths=None,
-            shots_generated=len(shots_to_recreate),
-            analysis_id=analysis_id
-        )
-    
-    def _build_combined_recreation_prompt(self, analysis: VideoAnalysis, shots: list[AnalyzedShot]) -> str:
-        """Build a combined generation prompt from multiple shots."""
-        parts: list[str] = []
-        for shot in shots:
-            if shot.prompts.video and shot.prompts.video.strip():
-                parts.append(f"Shot {shot.index + 1}: {shot.prompts.video.strip()}")
-        return "\n\n".join(parts)
+
+        raise HTTPError(501, "Video reproduce is being rebuilt: per-shot generation through the film queue lands in phase 5.")
 
     def _film_shot_from(
         self, analysis: VideoAnalysis, analysed: AnalyzedShot, order: int, asset_by_name: dict[str, str]

@@ -88,3 +88,7 @@ verify-shots/
 # The standalone UI build is committed on purpose (ui-preview/), so it is not
 # ignored here. The older output directory is.
 dist-ui/
+
+# Playwright
+test-results/
+playwright-report/
