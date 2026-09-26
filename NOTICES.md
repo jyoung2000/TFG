@@ -86,6 +86,22 @@ The filmmaking features adapt designs and code from the following projects
   AI-command-registry design were adapted (ported to plain three.js and this
   app's backend architecture).
 
+- **ComfyUI-Florence2** — https://github.com/kijai/ComfyUI-Florence2 —
+  MIT License. The Florence-2 task/post-processing map and model registry
+  were adapted (`backend/services/vision/florence2.py`); no model code was
+  copied.
+
+- **clip-interrogator** — https://github.com/pharmapsychotic/clip-interrogator —
+  Copyright (c) 2022 pharmapsychotic — MIT License. Term lists vendored
+  unchanged under `backend/services/vision/clip_data/` (license reproduced
+  there); the LabelTable/ranking design was ported to
+  `backend/services/vision/clip_tagger.py`.
+
+- **imex-next** — https://github.com/macchant/imex-next — MIT License.
+  Deterministic image statistics (CIELAB palette, edges, aspect snapping,
+  EXIF) adapted in `backend/services/vision/deterministic.py` and
+  `frontend/lib/shotspec/deterministic.ts`.
+
 ---
 
 ## License Texts

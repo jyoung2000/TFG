@@ -33,6 +33,9 @@ from handlers import (
 from film.media_runner import MediaRunner
 from film.image_recreation import ImageRecreation
 from handlers.jobs_handler import JobsHandler
+from handlers.vision_handler import VisionHandler
+from services.vision.protocol import VisionService
+from services.vram.vram_manager import NvmlProbe, VramManager
 from runtime_config.runtime_config import RuntimeConfig
 from services.wangp_bridge import WanGPBridge
 from services.media_probe import MediaProbe
@@ -82,6 +85,8 @@ class AppHandler:
         a2v_pipeline_class: type[A2VPipeline],
         retake_pipeline_class: type[RetakePipeline],
         ic_lora_model_downloader: IcLoraModelDownloader,
+        vision: VisionService | None = None,
+        nvml: NvmlProbe | None = None,
     ) -> None:
         self.config = config
 
@@ -141,6 +146,26 @@ class AppHandler:
             settings_file=config.settings_file,
         )
         self.settings.load_settings(default_settings)
+
+        # VRAM arbitration + the local vision stack. `vision` is injected by
+        # tests (FakeVision); the real bundle leaves it None so the in-process
+        # service can be built around this manager.
+        app_data = config.settings_file.parent
+        self.vram = VramManager(nvml if nvml is not None else _default_nvml(), http=http)
+        if vision is None:
+            from services.vision.local_vision import LocalVision, VisionConfig
+
+            vision = LocalVision(VisionConfig(cache_dir=app_data / "vision-cache" / "models"), self.vram)
+        self.vision = VisionHandler(
+            state=self.state,
+            lock=self._lock,
+            vision=vision,
+            vram=self.vram,
+            http=http,
+            cache_dir=app_data / "vision-cache",
+            outputs_dir=config.outputs_dir,
+        )
+        self.settings.add_listener(self.vision.apply_settings)
 
         # The unified job store: every handler below that does work reports
         # to it, and the History tab reads nothing else.
@@ -205,6 +230,7 @@ class AppHandler:
             default_negative_prompt=config.default_negative_prompt,
             wangp_bridge=self.wangp_bridge,
             jobs=self.jobs,
+            vision=self.vision,
         )
 
         self.image_generation = ImageGenerationHandler(
@@ -217,6 +243,7 @@ class AppHandler:
             zit_api_client=zit_api_client,
             wangp_bridge=self.wangp_bridge,
             jobs=self.jobs,
+            vision=self.vision,
         )
 
         self.health = HealthHandler(
@@ -240,6 +267,7 @@ class AppHandler:
             task_runner=task_runner,
             model_downloader=model_downloader,
             jobs=self.jobs,
+            vision=self.vision,
         )
 
         self.runtime_policy = RuntimePolicyHandler(config=config)
@@ -295,6 +323,7 @@ class AppHandler:
             task_runner=task_runner,
             film_store=self.film.store,
             jobs=self.jobs,
+            vision=self.vision,
         )
 
         self.timeline = TimelineHandler(
@@ -351,6 +380,7 @@ class AppHandler:
             image_generation=self.image_generation,
             image_model=config.wangp_image_model_type if config.wangp_enabled else "Z-Image",
             jobs=self.jobs,
+            vision=self.vision,
         )
 
         # History controls: cancel and re-run per job kind. Film-queued shots
@@ -421,6 +451,35 @@ class ServiceBundle:
     a2v_pipeline_class: type[A2VPipeline]
     retake_pipeline_class: type[RetakePipeline]
     ic_lora_model_downloader: IcLoraModelDownloader
+    #: None → the in-process LocalVision is built by AppHandler; tests inject FakeVision.
+    vision: VisionService | None = None
+    #: None → pynvml; tests inject FakeNvml.
+    nvml: NvmlProbe | None = None
+
+
+def _default_nvml() -> NvmlProbe:
+    from services.vram.vram_manager import PynvmlProbe
+
+    return PynvmlProbe()
+
+
+def _default_vision(http: HTTPClient) -> VisionService | None:
+    """The sidecar when `TFG_VISION_URL` points at a running worker, else None
+    (→ in-process). See docs/adr/0001-local-vision-stack.md."""
+    import os
+
+    url = os.environ.get("TFG_VISION_URL", "").strip()
+    if not url:
+        return None
+    from services.vision.remote_vision import RemoteVision
+
+    remote = RemoteVision(http, url)
+    if remote.reachable():
+        return remote
+    import logging
+
+    logging.getLogger(__name__).warning("TFG_VISION_URL=%s is not reachable; using the in-process vision stack", url)
+    return None
 
 
 def build_default_service_bundle(config: RuntimeConfig) -> ServiceBundle:
@@ -465,6 +524,7 @@ def build_default_service_bundle(config: RuntimeConfig) -> ServiceBundle:
         a2v_pipeline_class=LTXa2vPipeline,
         retake_pipeline_class=LTXRetakePipeline,
         ic_lora_model_downloader=IcLoraModelDownloaderImpl(),
+        vision=_default_vision(http),
     )
 
 
@@ -494,4 +554,6 @@ def build_initial_state(
         a2v_pipeline_class=bundle.a2v_pipeline_class,
         retake_pipeline_class=bundle.retake_pipeline_class,
         ic_lora_model_downloader=bundle.ic_lora_model_downloader,
+        vision=bundle.vision,
+        nvml=bundle.nvml,
     )

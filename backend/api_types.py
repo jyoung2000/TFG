@@ -288,7 +288,7 @@ class ModelDownloadRequest(BaseModel):
 # Model library: one searchable catalog over local weights and hosted models
 # ---------------------------------------------------------------------------
 
-LibraryTask = Literal["video", "image", "text"]
+LibraryTask = Literal["video", "image", "text", "vision"]
 LibrarySource = Literal["local", "hosted"]
 
 

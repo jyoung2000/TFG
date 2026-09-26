@@ -71,6 +71,7 @@ from film.prompt_compiler import compile_for
 from film.video_analysis_store import VideoAnalysisStore, VideoAnalysisStoreError
 from handlers.base import StateHandlerBase
 from handlers.jobs_handler import JobsHandler
+from handlers.vision_handler import VisionHandler
 from server_utils.path_policy import PathPolicyError, require_absolute_file
 from services.media_probe.media_probe import MediaProbe
 from services.interfaces import TaskRunner
@@ -102,10 +103,13 @@ class VideoAnalysisHandler(StateHandlerBase):
         task_runner: TaskRunner,
         film_store: FilmStore,
         jobs: JobsHandler | None = None,
+        vision: VisionHandler | None = None,
     ) -> None:
         super().__init__(state, lock)
         self._jobs = jobs
+        self._vision = vision
         self._analysis_jobs: dict[str, str] = {}
+        self._grounding: dict[str, str] = {}
         self._store = VideoAnalysisStore(root)
         self._probe = probe
         self._tasks = task_runner
@@ -435,6 +439,47 @@ class VideoAnalysisHandler(StateHandlerBase):
         shot.text = TextAnalysis(analyzed=False)
         shot.analysis_provider = shot.analysis_provider or "deterministic"
         shot.provenance = "measured"
+        self._ground_with_vision(analysis, shot)
+
+    def _ground_with_vision(self, analysis: VideoAnalysis, shot: AnalyzedShot) -> None:
+        """Florence-2 + CLIP + stats on the shot's representative still: fills
+        subjects, a caption and a palette with *measured* provenance, and
+        keeps the text as grounded context for the model pass."""
+        self._grounding.pop(shot.id, "")
+        if self._vision is None or not shot.frames:
+            return
+        frame = self._store.directory(analysis.id) / shot.frames[len(shot.frames) // 2].path
+        if not frame.is_file():
+            return
+        try:
+            result = self._vision.analyze(str(frame), want_depth=False)
+        except Exception as exc:  # noqa: BLE001 - the deterministic pass must never fail on vision
+            shot.evidence_note = f"Local vision unavailable: {exc}"
+            return
+        counts: dict[str, int] = {}
+        for region in result.regions:
+            counts[region.label] = counts.get(region.label, 0) + 1
+        subjects = [f"{n} {label}" if n > 1 else label for label, n in counts.items()]
+        if subjects and not shot.visual.subjects:
+            shot.visual.subjects = subjects
+        if result.caption and not shot.visual.description:
+            shot.visual.description = result.caption.text
+        if result.measured.palette and not shot.visual.palette:
+            shot.visual.palette = [entry.hex for entry in result.measured.palette[:4]]
+        if result.tags and not shot.visual.visual_style:
+            shot.visual.visual_style = ", ".join(t.term for t in result.tags.tags[:5])
+        if subjects or result.caption:
+            shot.visual.confidence = max(shot.visual.confidence, 0.5)
+        lines: list[str] = []
+        if result.caption:
+            lines.append(f"Detected caption: {result.caption.text}")
+        if subjects:
+            lines.append("Detected subjects (object detection): " + ", ".join(subjects) + ".")
+        if result.measured.palette:
+            lines.append("Measured palette: " + ", ".join(e.hex for e in result.measured.palette[:4]) + f"; luminance {result.measured.luminance:.2f}, contrast {result.measured.contrast:.2f}.")
+        if result.tags:
+            lines.append("Style tags (CLIP): " + ", ".join(t.term for t in result.tags.tags[:8]) + ".")
+        self._grounding[shot.id] = "\n".join(lines)
 
     def _describe_with_model(self, analysis: VideoAnalysis, shot: AnalyzedShot, provider: LLMProvider) -> str:
         """Ask a multimodal model to read the shot's stills."""
@@ -475,6 +520,9 @@ class VideoAnalysisHandler(StateHandlerBase):
             f"Runs {shot.start:.2f}s to {shot.end:.2f}s ({shot.duration:.2f}s) "
             f"of a {analysis.source.duration_seconds:.0f}s video at {analysis.source.aspect_ratio or 'unknown ratio'}."
         )
+        grounded = self._grounding.get(shot.id, "")
+        if grounded:
+            context = f"{context}\n\nGround truth from a local vision pass (measured; do not contradict):\n{grounded}"
         reply = provider.chat(
             [
                 LLMMessage(role="system", content=instruction),

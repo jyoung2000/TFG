@@ -135,10 +135,14 @@ class TestAnalysisPipeline:
         analyzed = client.post(f"/api/video-analysis/{analysis['id']}/analyze", json={}).json()
         assert analyzed["stage"] == "complete"
         first = analyzed["shots"][0]
-        # No model ran, so measured fields are filled and inference stays empty.
+        # No language model ran: timing fields are measured, and the local
+        # vision stack (Florence detection + caption) grounds the visual read
+        # with *measured* provenance — never an inferred one.
         assert first["editorial"]["cut_type"] == "cut"
         assert first["provenance"] == "measured"
-        assert first["visual"]["confidence"] == 0.0
+        assert first["visual"]["subjects"] == ["person"]
+        assert first["visual"]["description"]
+        assert 0.0 < first["visual"]["confidence"] <= 0.5
         assert "without a model" in analyzed["message"]
 
     def test_analyze_before_detect_is_refused(self, client, video):

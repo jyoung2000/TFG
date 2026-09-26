@@ -49,7 +49,14 @@ function applySettingsPatch(state: MockState, patch: Record<string, unknown>): v
 
     if (key.startsWith('has') || key === 'openrouterKeySource') continue
     if (key in state.settings) {
-      ;(state.settings as unknown as Record<string, unknown>)[key] = value
+      const target = state.settings as unknown as Record<string, unknown>
+      const current = target[key]
+      // Nested sections (vision, learning, model settings) are patched, not replaced.
+      if (current && typeof current === 'object' && !Array.isArray(current) && value && typeof value === 'object' && !Array.isArray(value)) {
+        target[key] = { ...(current as Record<string, unknown>), ...(value as Record<string, unknown>) }
+      } else {
+        target[key] = value
+      }
     }
   }
 }

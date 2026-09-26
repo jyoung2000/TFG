@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Callable
 from pathlib import Path
 from threading import RLock
 
@@ -37,6 +38,7 @@ _CLEARABLE_KEYS = frozenset(
 
 class SettingsHandler(StateHandlerBase):
     def __init__(self, state: AppState, lock: RLock, settings_file: Path) -> None:
+        self._listeners: list[Callable[[AppSettings], None]] = []
         super().__init__(state, lock)
         self._settings_file = settings_file
 
@@ -74,6 +76,17 @@ class SettingsHandler(StateHandlerBase):
         return self.state.app_settings.model_copy(deep=True)
 
     @with_state_lock
+    def add_listener(self, listener: Callable[[AppSettings], None]) -> None:
+        """Called with the new settings after every successful update."""
+        self._listeners.append(listener)
+
+    def _notify(self, after: AppSettings) -> None:
+        for listener in list(self._listeners):
+            try:
+                listener(after)
+            except Exception as exc:  # noqa: BLE001 - a listener must not break a settings save
+                logger.warning("Settings listener failed: %s", exc)
+
     def update_settings(self, patch: UpdateSettingsRequest) -> tuple[AppSettings, AppSettings, set[str]]:
         patch_payload = strip_none_values(ensure_json_object(patch.model_dump(by_alias=False, exclude_unset=True)))
 
@@ -96,6 +109,7 @@ class SettingsHandler(StateHandlerBase):
 
         changed_paths = collect_changed_paths(before_payload, after_payload)
         self.save_settings()
+        self._notify(after)
         return before, after, changed_paths
 
     @with_state_lock

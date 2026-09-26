@@ -525,5 +525,23 @@ export function seedSettings(): AppSettings {
     promptEnhancerEnabledI2V: false,
     seedLocked: false,
     lockedSeed: 42,
+    vision: {
+      enabled: true,
+      mode: 'auto',
+      sidecarUrl: 'http://127.0.0.1:8765',
+      florenceEnabled: true,
+      florenceModel: 'florence-2-large',
+      clipEnabled: true,
+      clipModel: 'openai/clip-vit-large-patch14',
+      depthEnabled: true,
+      depthModel: 'depth-anything-v2-small',
+      dinoEnabled: true,
+      dinoModel: 'dinov2-small',
+      vlmProvider: 'off',
+      vlmModel: '',
+      vlmBaseUrl: 'http://127.0.0.1:11434',
+      vlmKeepAlive: '0',
+      cacheDir: '',
+    },
   }
 }

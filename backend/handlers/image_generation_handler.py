@@ -14,6 +14,7 @@ from _routes._errors import HTTPError
 from api_types import GenerateImageRequest, GenerateImageResponse
 from handlers.base import StateHandlerBase
 from handlers.jobs_handler import JobsHandler
+from handlers.vision_handler import VisionHandler
 from handlers.generation_handler import GenerationHandler
 from handlers.pipelines_handler import PipelinesHandler
 from services.interfaces import ZitAPIClient
@@ -38,9 +39,11 @@ class ImageGenerationHandler(StateHandlerBase):
         zit_api_client: ZitAPIClient,
         wangp_bridge: WanGPBridge,
         jobs: JobsHandler | None = None,
+        vision: VisionHandler | None = None,
     ) -> None:
         super().__init__(state, lock)
         self._jobs = jobs
+        self._vision = vision
         self._generation = generation_handler
         self._pipelines = pipelines_handler
         self._outputs_dir = outputs_dir
@@ -59,14 +62,23 @@ class ImageGenerationHandler(StateHandlerBase):
         if self._generation.is_generation_running():
             raise HTTPError(409, "Generation already in progress")
         tracked = self._open_job(req, job_id, seed)
+        peak_mb: int | None = None
         try:
-            response = self._dispatch(req, tracked, seed)
+            if self._vision is not None:
+                model_type = self._config.wangp_image_model_type if self._config.wangp_enabled else "z_image"
+                with self._vision.render_scope(model_type) as scope:
+                    response = self._dispatch(req, tracked, seed)
+                peak_mb = scope.peak_mb
+            else:
+                response = self._dispatch(req, tracked, seed)
         except HTTPError as exc:
             self._close_job(tracked, error=str(exc.detail))
             raise
         except Exception as exc:
             self._close_job(tracked, error=str(exc))
             raise
+        if peak_mb is not None and tracked and self._jobs is not None:
+            self._jobs.annotate(tracked, metrics={"peak_vram_mb": peak_mb})
         self._close_job(tracked, response=response)
         return response
 

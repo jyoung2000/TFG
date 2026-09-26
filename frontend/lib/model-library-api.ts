@@ -20,7 +20,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export interface ModelSearchParams {
   query?: string
-  task?: 'all' | 'video' | 'image' | 'text'
+  task?: 'all' | 'video' | 'image' | 'text' | 'vision'
   source?: 'all' | 'local' | 'hosted'
   onlyCompatible?: boolean
   refresh?: boolean

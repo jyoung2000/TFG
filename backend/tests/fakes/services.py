@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+
+from services.vision.fake_vision import FakeVision
+from services.vram.vram_manager import FakeNvml
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -762,6 +765,8 @@ class FakeServices:
     a2v_pipeline: FakeA2VPipeline = field(default_factory=FakeA2VPipeline)
     retake_pipeline: FakeRetakePipeline = field(default_factory=FakeRetakePipeline)
     ic_lora_model_downloader: FakeIcLoraModelDownloader = field(default_factory=FakeIcLoraModelDownloader)
+    vision: FakeVision = field(default_factory=FakeVision)
+    nvml: FakeNvml = field(default_factory=FakeNvml)
 
     def __post_init__(self) -> None:
         FakeFastVideoPipeline.bind_singleton(self.fast_video_pipeline)

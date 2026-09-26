@@ -86,6 +86,14 @@ class ImageAnalysis(BaseModel):
     width: int
     height: int
     prompt: str = ""
+    #: Local vision stack (phase 2): what was measured/read before any VLM.
+    caption: str = ""
+    tags: list[str] = Field(default_factory=list[str])
+    negative_tags: list[str] = Field(default_factory=list[str])
+    regions: list[dict[str, Any]] = Field(default_factory=list[dict[str, Any]])
+    measured: dict[str, Any] = Field(default_factory=dict[str, Any])
+    depth_path: str = ""
+    vision_notes: dict[str, str] = Field(default_factory=dict[str, str])
     description: str = ""
     subjects: str = ""
     composition: str = ""
@@ -135,12 +143,14 @@ def score_images(reference: Image.Image, candidate: Image.Image) -> float:
 
 
 class ImageRecreation:
-    def __init__(self, root: Path, image_generation: Any, image_model: str, jobs: Any = None) -> None:
+    def __init__(self, root: Path, image_generation: Any, image_model: str, jobs: Any = None, vision: Any = None) -> None:
         self.root = root
         self._image_generation = image_generation
         self.image_model = image_model
         #: JobsHandler when History tracking is wired (typed loosely to keep this module light).
         self._jobs = jobs
+        #: VisionHandler: the offline stack that runs before any VLM.
+        self._vision = vision
 
     def _track(self, job: ImageAnalysis, title: str, candidates: int, rounds: int) -> str:
         if self._jobs is None:
@@ -236,27 +246,117 @@ class ImageRecreation:
         self.get(id)
         shutil.rmtree(self._dir(id))
 
+    def _run_local_stack(self, job: ImageAnalysis) -> str:
+        """Measured stats + Florence + CLIP before any VLM. Returns grounded
+        context text for the VLM prompt ("" when the stack is unavailable)."""
+        if self._vision is None:
+            return ""
+        source = self._dir(job.id) / job.source_path
+        try:
+            result = self._vision.analyze(str(source), depth_dir=self._dir(job.id))
+        except HTTPError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - the VLM path must still work
+            job.vision_notes = {"vision": str(exc)}
+            return ""
+        job.measured = json.loads(result.measured.model_dump_json())
+        job.caption = result.caption.text if result.caption else ""
+        job.tags = [t.term for t in result.tags.tags] if result.tags else []
+        job.negative_tags = [t.term for t in result.tags.negatives] if result.tags else []
+        job.regions = [json.loads(r.model_dump_json()) for r in result.regions]
+        job.depth_path = Path(result.depth.depth_png).name if result.depth and Path(result.depth.depth_png).parent == self._dir(job.id) else ""
+        job.vision_notes = dict(result.notes)
+        palette = ", ".join(entry.hex for entry in result.measured.palette[:4])
+        counts: dict[str, int] = {}
+        for region in result.regions:
+            counts[region.label] = counts.get(region.label, 0) + 1
+        subjects = ", ".join(f"{n} {label}" if n > 1 else label for label, n in counts.items())
+        lines = [
+            f"Measured: {result.measured.width}x{result.measured.height} ({result.measured.aspect}), palette {palette}, "
+            f"luminance {result.measured.luminance:.2f}, contrast {result.measured.contrast:.2f}, saturation {result.measured.saturation:.2f}.",
+        ]
+        if job.caption:
+            lines.append(f"Detected caption: {job.caption}")
+        if subjects:
+            lines.append(f"Detected subjects (object detection): {subjects}.")
+        if job.tags:
+            lines.append("Style tags (CLIP): " + ", ".join(job.tags[:10]) + ".")
+        return "\n".join(lines)
+
+    def _offline_prompt(self, job: ImageAnalysis) -> str:
+        """A usable prompt from the local stack alone (no VLM). Measured colour
+        alone is not a prompt: without a caption, detections or tags there is
+        nothing to say about the image."""
+        if not (job.caption or job.regions or job.tags):
+            return ""
+        parts: list[str] = []
+        if job.caption:
+            parts.append(job.caption.rstrip("."))
+        counts: dict[str, int] = {}
+        for region in job.regions:
+            label = str(region.get("label", ""))
+            if label:
+                counts[label] = counts.get(label, 0) + 1
+        if counts:
+            parts.append(", ".join(f"{n} {label}" if n > 1 else label for label, n in counts.items()))
+        parts.extend(job.tags[:8])
+        palette = job.measured.get("palette")
+        if isinstance(palette, list) and palette:
+            hexes = [str(cast(dict[str, Any], entry).get("hex", "")) for entry in cast(list[Any], palette)[:3]]
+            parts.append("colour palette " + ", ".join(h for h in hexes if h))
+        return ", ".join(p for p in parts if p)
+
     def analyze(self, id: str, provider: LLMProvider | None) -> ImageAnalysis:
         job = self.get(id)
+        grounding = self._run_local_stack(job)
         if provider is None:
-            raise HTTPError(400, "Connect a vision-capable AI Director in Settings to analyze images (qwen2.5vl:7b recommended).")
+            prompt = self._offline_prompt(job)
+            if not prompt.strip():
+                raise HTTPError(
+                    400,
+                    "No vision model produced anything: enable Florence-2 or a VLM in Settings → Vision "
+                    "(the local stack needs its weights downloaded from the Model Library).",
+                )
+            job.prompt = prompt
+            job.description = job.caption
+            job.subjects = ", ".join(str(r.get("label", "")) for r in job.regions if r.get("label"))
+            palette = job.measured.get("palette")
+            job.colors = ", ".join(str(cast(dict[str, Any], e).get("hex", "")) for e in cast(list[Any], palette)[:5]) if isinstance(palette, list) else ""
+            job.style = ", ".join(job.tags[:6])
+            job.vision_model = "local-stack"
+            job.confidence = 0.5 if job.caption else 0.3
+            return self._save(job)
         with Image.open(self._dir(id) / job.source_path) as image:
             url = _image_data_url(image)
         instruction = ("You reverse-engineer an image into an evidence-only prompt for image generation. "
                        "Return JSON ONLY with string fields description, prompt, subjects, composition, colors, lighting, style "
                        "and numeric confidence (0-1). Describe subject count and positions, background, palette, lighting, "
                        "and visible details. Do not invent hidden details or claim exact reproduction. "
-                       "Write prompt as a directly usable positive generation prompt, not a critique.")
+                       "Write prompt as a directly usable positive generation prompt, not a critique."
+                       + (" Measured facts and detections from a local vision pass follow; they are ground truth — "
+                          "use them and do not contradict them." if grounding else ""))
+        user_text = "Describe this reference accurately." + (f"\n\n{grounding}" if grounding else "")
         try:
             reply = provider.chat([LLMMessage(role="system", content=instruction),
-                                   LLMMessage(role="user", content="Describe this reference accurately.", images=[url])],
+                                   LLMMessage(role="user", content=user_text, images=[url])],
                                   json_mode=True, timeout=180)
+            fields = _read_json(reply.text)
+            prompt = fields.get("prompt")
+            if not isinstance(prompt, str) or not prompt.strip():
+                raise RuntimeError("the model did not return a usable image prompt")
         except Exception as exc:
-            raise HTTPError(502, f"Vision analysis failed: {exc}") from exc
-        fields = _read_json(reply.text)
-        prompt = fields.get("prompt")
-        if not isinstance(prompt, str) or not prompt.strip():
-            raise HTTPError(502, "Vision model did not return a usable image prompt")
+            # A text-only model (or an offline provider) must not take the
+            # analysis down when the local stack already read the image.
+            fallback = self._offline_prompt(job)
+            if not fallback.strip():
+                raise HTTPError(502, f"Vision analysis failed: {exc}") from exc
+            job.vision_notes["vlm"] = f"{provider.name}:{provider.model} failed: {exc}"
+            job.prompt = fallback
+            job.description = job.caption
+            job.style = ", ".join(job.tags[:6])
+            job.vision_model = "local-stack"
+            job.confidence = 0.5 if job.caption else 0.3
+            return self._save(job)
         for key in ("prompt", "description", "subjects", "composition", "colors", "lighting", "style"):
             value = fields.get(key, "")
             text = value.strip() if isinstance(value, str) else "; ".join(str(v) for v in cast(list[object], value)) if isinstance(value, list) else ""

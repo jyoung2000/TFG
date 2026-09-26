@@ -40,6 +40,7 @@ const TASK_TABS: { id: TaskFilter; label: string; icon: React.ReactNode }[] = [
   { id: 'video', label: 'Video', icon: <Video className="h-3 w-3" /> },
   { id: 'image', label: 'Image', icon: <ImageIcon className="h-3 w-3" /> },
   { id: 'text', label: 'Text / script', icon: <Type className="h-3 w-3" /> },
+  { id: 'vision', label: 'Vision', icon: <Sparkles className="h-3 w-3" /> },
 ]
 
 function formatSize(gb: number | null): string {
@@ -139,6 +140,10 @@ export function ModelLibrary() {
   /** Make this model the one the project (or the app) generates with. */
   const useModel = useCallback(
     async (model: LibraryModel) => {
+      if (model.task === 'vision') {
+        setNote?.('Vision models are used automatically by Reproduce and video analysis once downloaded; configure them in Settings → Vision.')
+        return
+      }
       setNote('')
       try {
         await modelLibraryApi.remember(model.provider, model.id)

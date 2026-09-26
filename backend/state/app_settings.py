@@ -93,6 +93,42 @@ class OpenRouterRoleModels(SettingsBaseModel):
         return str(chosen).strip() or self.default_model.strip() or "openai/gpt-4o-mini"
 
 
+VisionMode = Literal["auto", "local", "sidecar"]
+VlmProvider = Literal["off", "ollama", "openai_compatible", "director"]
+
+
+class VisionSettings(SettingsBaseModel):
+    """The local vision stack (Settings → Vision), independent of the AI Director.
+
+    Each component can be switched off; the models are small (Florence-2 ≤ 1.7 GB,
+    CLIP ≤ 1 GB, depth/DINO ≤ 0.5 GB) and load lazily, and the VRAM manager
+    unloads them before a render. The optional VLM runs on Ollama or any
+    OpenAI-compatible endpoint; `vlm_keep_alive` is passed to Ollama so a
+    warm 6 GB model never sits next to a 10 GB render.
+    """
+
+    enabled: bool = True
+    mode: VisionMode = "auto"
+    sidecar_url: str = "http://127.0.0.1:8765"
+    florence_enabled: bool = True
+    florence_model: str = "florence-2-large"
+    clip_enabled: bool = True
+    clip_model: str = "openai/clip-vit-large-patch14"
+    depth_enabled: bool = True
+    depth_model: str = "depth-anything-v2-small"
+    dino_enabled: bool = True
+    dino_model: str = "dinov2-small"
+    #: "director" keeps the pre-2.0 behaviour (the AI Director model reads images);
+    #: a text-only Director no longer breaks analysis because the local stack
+    #: runs first and a failed VLM call degrades to its prompt.
+    vlm_provider: VlmProvider = "director"
+    #: Empty means "qwen3-vl:4b if Ollama has it, else qwen2.5vl:3b".
+    vlm_model: str = ""
+    vlm_base_url: str = "http://127.0.0.1:11434"
+    vlm_keep_alive: str = "0"
+    cache_dir: str = ""
+
+
 class AppSettings(SettingsBaseModel):
     use_torch_compile: bool = False
     load_on_startup: bool = False
@@ -142,6 +178,8 @@ class AppSettings(SettingsBaseModel):
     # honoured when an event is written, not when it is read, so turning
     # learning off stops collection rather than merely hiding it.
     learning: LearningSettings = Field(default_factory=LearningSettings)
+    #: Local vision models used by Reproduce and video analysis.
+    vision: VisionSettings = Field(default_factory=VisionSettings)
     seed_locked: bool = False
     locked_seed: int = 42
 
@@ -272,6 +310,7 @@ class SettingsResponse(SettingsBaseModel):
     # honoured when an event is written, not when it is read, so turning
     # learning off stops collection rather than merely hiding it.
     learning: LearningSettings = Field(default_factory=LearningSettings)
+    vision: VisionSettings = Field(default_factory=VisionSettings)
     seed_locked: bool = False
     locked_seed: int = 42
 

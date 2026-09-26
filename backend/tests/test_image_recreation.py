@@ -68,7 +68,10 @@ def test_bad_image_and_bounded_budget(client, test_state, tmp_path, monkeypatch)
     good = tmp_path / "good.png"
     _png(good, (4, 5, 6))
     imported = client.post("/api/image-analysis/import", json={"path":str(good)}).json()
+    # Without any vision model (local stack off, no VLM) there is nothing to analyse with.
+    client.post("/api/settings", json={"vision": {"enabled": False, "vlmProvider": "off"}})
     assert client.post(f"/api/image-analysis/{imported['id']}/analyze").status_code == 400
+    client.post("/api/settings", json={"vision": {"enabled": True, "vlmProvider": "director"}})
     assert client.post(f"/api/image-analysis/{imported['id']}/render",json={"candidates":9,"rounds":9}).status_code == 422
     assert client.post("/api/image-analysis/import",json={"path":"relative.png"}).status_code == 400
     assert client.get("/api/image-analysis/no-such-id").status_code == 400

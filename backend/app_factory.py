@@ -18,6 +18,7 @@ from _routes.film import router as film_router
 from _routes.film_director import router as film_director_router
 from _routes.knowledge import router as knowledge_router
 from _routes.jobs import router as jobs_router
+from _routes.vision import router as vision_router
 from _routes.prompts import router as prompts_router
 from _routes.shot_library import router as shot_library_router
 from _routes.timeline import router as timeline_router
@@ -157,6 +158,7 @@ def create_app(
     app.include_router(video_analysis_router)
     app.include_router(knowledge_router)
     app.include_router(jobs_router)
+    app.include_router(vision_router)
     app.include_router(prompts_router)
     app.include_router(shot_library_router)
     app.include_router(timeline_router)

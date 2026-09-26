@@ -73,3 +73,60 @@ what was inspected and adapted, from which commits, under which licenses.
     this app's own articulated figure (`figure.ts`).
 - **Not used**: mannequin-js and its meshes/pose files, react-three-fiber,
   drei, zustand, the MCP WebSocket server, video export.
+
+
+## kijai/ComfyUI-Florence2 (Florence-2 task map, model registry)
+
+- **URL**: https://github.com/kijai/ComfyUI-Florence2
+- **License**: MIT
+- **Commit inspected**: main as of 2026-09 (the repository could not be fetched
+  from this build container; the adaptation was written from the documented
+  task tokens and registry — see `session-notes.md` VF-006)
+- **What was adapted**: the task → post-processing map (box/label parsing,
+  caption cleanup) and the HF model registry (base/large/ft, PromptGen v2,
+  CogFlorence, Flux-Large captioner) → `backend/services/vision/florence2.py`.
+  ComfyUI model management and folder plumbing are replaced by
+  `services/vram/VramManager` and the app-data models directory; the model
+  classes come from `transformers` natively (no `trust_remote_code`), so
+  nothing from `model/` was vendored.
+
+## pharmapsychotic/clip-interrogator (term lists + ranking)
+
+- **URL**: https://github.com/pharmapsychotic/clip-interrogator
+- **Commit inspected**: `bc07ce62c179d3aab3053a623d96a071101d11cb`
+- **License**: MIT (reproduced at `backend/services/vision/clip_data/LICENSE`)
+- **Vendored unchanged**: `clip_interrogator/data/{artists,flavors,mediums,
+  movements,negative}.txt` → `backend/services/vision/clip_data/`
+- **Ported**: `LabelTable` (chunked text embedding + on-disk cache),
+  `rank_top`, `chain`, the classic and negative orderings, the low-VRAM
+  `flavor_intermediate_count` knob → `backend/services/vision/clip_tagger.py`
+  on `transformers`' CLIP (`openai/clip-vit-large-patch14`). The package is
+  not installed (dormant since 2023); BLIP is not used — Florence captions
+  seed `chain()`.
+
+## macchant/imex-next (deterministic image stats)
+
+- **URL**: https://github.com/macchant/imex-next
+- **License**: MIT
+- **What was adapted (phase 2 part)**: `pipeline/color.ts` + `pipeline/analyze.ts`
+  — CIELAB k-means palette, border-ring background isolation, vector-likeness,
+  Sobel edge density, aspect snapping, EXIF → `backend/services/vision/
+  deterministic.py` (server truth) and `frontend/lib/shotspec/deterministic.ts`
+  (client preview). `types/schema.ts`, `fusion.ts`, `synthesize.ts` and
+  `vocab.ts` land in phase 3 (ShotSpec). `vlm.ts`/SigLIP are not used.
+
+## NomaDamas/CozyClay — **concepts only, no source used**
+
+- **URL**: https://github.com/NomaDamas/CozyClay — **AGPL-3.0**
+- Nothing from this repository is copied, vendored or imported.
+  `backend/tests/test_licenses.py` fails the build on any AGPL text or
+  CozyClay import. Concepts referenced (written from scratch in phase 3+):
+  camera → film-vocabulary derivation, composable prompt blocks with
+  provenance/locks, crane-height paths.
+
+## robbietilton/Compositor — **concepts only, no source used**
+
+- **URL**: https://github.com/robbietilton/Compositor — MIT, Swift/macOS
+- No Swift source is portable to this Electron app; the layer/mask/adjustment
+  concepts inform `FixCanvas` (phase 4). `test_licenses.py` rejects `.swift`
+  files.
