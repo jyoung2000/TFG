@@ -169,7 +169,9 @@ pnpm -v
 
 ### 1. Wan2GP not installed yet
 
-`pnpm setup:dev:win` clones `Wan2GP/` into this repository, installs the backend dependencies, and prepares a plug-and-play local setup.
+`pnpm setup:dev:win` clones `Wan2GP/` into this repository, installs the backend dependencies, and creates WanGP's own Python environment at `Wan2GP\.venv` (CUDA PyTorch + `Wan2GP\requirements.txt`, via `scripts\ensure-wangp-venv.ps1`).
+
+WanGP deliberately does **not** share the backend venv: `uv sync` owns `backend\.venv` and removes anything outside `uv.lock`, which used to delete WanGP's packages (`No module named 'gradio'`). When `Wan2GP\.venv` exists, the backend runs WanGP from it as a separate worker process (`backend/wangp_worker.py`) and talks to it over loopback HTTP; the backend log shows `WanGP mode: worker`. Re-run `scripts\ensure-wangp-venv.ps1` any time (add `-Recreate` to start fresh).
 
 ```bash
 pnpm setup:dev:win
@@ -198,7 +200,7 @@ set WANGP_ROOT=D:\Wan2GP
 $env:WANGP_ROOT = "D:\Wan2GP"
 ```
 
-Set `WANGP_ROOT` before running setup. `pnpm setup:dev:win` will then reuse that checkout and install its `requirements.txt` into the LTX Desktop backend venv.
+Set `WANGP_ROOT` before running setup. `pnpm setup:dev:win` will then reuse that checkout and create its environment at `%WANGP_ROOT%\.venv` (skipped work if it already exists and imports). To use an existing WanGP environment instead, point `WANGP_PYTHON` at its `python.exe`.
 
 ```bash
 set WANGP_ROOT=D:\Wan2GP
@@ -206,17 +208,19 @@ pnpm setup:dev:win
 pnpm dev
 ```
 
-If you prefer the manual path instead of `pnpm setup:dev:win`, install the external Wan2GP requirements into the backend venv yourself after `uv sync`:
+If you prefer the manual path instead of `pnpm setup:dev:win`:
 
 ```bash
 set WANGP_ROOT=D:\Wan2GP
 pnpm install
 cd backend
-uv sync --extra dev
-uv pip install --python .venv\Scripts\python.exe -r %WANGP_ROOT%\requirements.txt
+uv sync --extra dev --extra test
 cd ..
+powershell -ExecutionPolicy Bypass -File scripts\ensure-wangp-venv.ps1
 pnpm dev
 ```
+
+Do not `uv pip install` WanGP's requirements into `backend\.venv` — the next `uv sync` removes them.
 
 The backend still runs in LTX Desktop's own `backend/.venv` unless you explicitly override it with `LTX_BACKEND_PYTHON`.
 

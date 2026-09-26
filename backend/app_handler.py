@@ -121,9 +121,43 @@ class AppHandler:
         self.a2v_pipeline_class = a2v_pipeline_class
         self.retake_pipeline_class = retake_pipeline_class
         self.ic_lora_model_downloader = ic_lora_model_downloader
+        from services.wangp_worker_bridge import select_wangp_mode
+
+        wangp_mode = select_wangp_mode(
+            remote_url=config.wangp_remote_url,
+            enabled=config.wangp_enabled,
+            root=config.wangp_root,
+            python=config.wangp_python,
+        )
         if wangp_bridge is not None:
             self.wangp_bridge = wangp_bridge
-        elif config.wangp_remote_url:
+        elif wangp_mode == "worker" and config.wangp_root is not None and config.wangp_python:
+            # WanGP has its own environment (Wan2GP/.venv or WANGP_PYTHON): run
+            # it as a separate process so the backend's uv sync can never
+            # remove WanGP's packages, and WanGP's pins never touch ours.
+            from services.wangp_worker_bridge import SubprocessWorkerLauncher, WorkerWanGPBridge
+
+            worker_bridge = WorkerWanGPBridge(
+                launcher=SubprocessWorkerLauncher(
+                    python=config.wangp_python,
+                    root=config.wangp_root,
+                    output_dir=config.outputs_dir,
+                    config_dir=config.wangp_config_dir,
+                    video_model_type=config.wangp_video_model_type,
+                    image_model_type=config.wangp_image_model_type,
+                    extra_args=config.wangp_extra_args,
+                ),
+                root=config.wangp_root,
+                python_executable=config.wangp_python,
+                config_dir=config.wangp_config_dir,
+                output_dir=config.outputs_dir,
+                video_model_type=config.wangp_video_model_type,
+                image_model_type=config.wangp_image_model_type,
+                camera_motion_prompts=config.camera_motion_prompts,
+            )
+            worker_bridge.warm_up()
+            self.wangp_bridge = worker_bridge
+        elif wangp_mode == "remote":
             from services.wangp_remote_bridge import RemoteWanGPBridge
 
             self.wangp_bridge = RemoteWanGPBridge(

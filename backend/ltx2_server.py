@@ -355,7 +355,10 @@ def log_hardware_info() -> None:
     logger.info(f"GPU: {gpu_info['name']}  |  VRAM: {vram_gb} GB")
     logger.info(f"SageAttention: {'enabled' if use_sage_attention else 'disabled'}")
     if WANGP_ENABLED:
-        logger.info("WanGP bridge: enabled  |  Root: %s  |  Python: %s", WANGP_ROOT, WANGP_PYTHON)
+        from services.wangp_worker_bridge import select_wangp_mode
+
+        mode = select_wangp_mode(remote_url=WANGP_REMOTE_URL, enabled=WANGP_ENABLED, root=WANGP_ROOT, python=WANGP_PYTHON)
+        logger.info("WanGP bridge: enabled  |  WanGP mode: %s  |  Root: %s  |  Python: %s", mode, WANGP_ROOT, WANGP_PYTHON)
     else:
         logger.info("WanGP bridge: disabled")
     logger.info(f"Python: {sys.version.split()[0]}  |  Torch: {torch.__version__}")

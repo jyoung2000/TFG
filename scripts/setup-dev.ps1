@@ -55,11 +55,20 @@ if ($LASTEXITCODE -ne 0) {
 }
 Ok "uv sync complete"
 
-& (Join-Path $ScriptDir "ensure-wan2gp.ps1") -InstallPythonDeps -PythonExe $BackendPython
-if ($LASTEXITCODE -ne 0) {
-    Fail "Wan2GP dependency install failed"
+# WanGP gets its OWN environment (Wan2GP/.venv), never the backend venv: the
+# backend venv is owned by `uv sync`, which removes anything not in uv.lock.
+# The backend detects Wan2GP/.venv and runs WanGP from it as a worker process.
+# Skip with TFG_SKIP_WANGP_VENV=1 (e.g. CI without a GPU).
+if ($env:TFG_SKIP_WANGP_VENV -ne "1") {
+    Write-Host ""
+    Write-Host "Setting up the WanGP environment (Wan2GP/.venv)..."
+    try {
+        & (Join-Path $ScriptDir "ensure-wangp-venv.ps1")
+    } catch {
+        Fail "WanGP environment setup failed: $_"
+    }
+    Ok "WanGP environment ready"
 }
-Ok "Wan2GP Python dependencies installed"
 
 Write-Host ""
 Write-Host "Verifying PyTorch CUDA support..."

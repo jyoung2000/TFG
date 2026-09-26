@@ -3,7 +3,7 @@
 set -u
 root="$(cd "$(dirname "$0")/.." && pwd)"
 miss=0
-for f in scripts/start-backend.ps1 scripts/start-backend.sh scripts/setup-dev.ps1 scripts/setup-dev.sh scripts/ensure-wan2gp.ps1 scripts/ensure-wan2gp.sh \
+for f in scripts/start-backend.ps1 scripts/start-backend.sh scripts/setup-dev.ps1 scripts/setup-dev.sh scripts/ensure-wan2gp.ps1 scripts/ensure-wan2gp.sh scripts/ensure-wangp-venv.ps1 scripts/ensure-wangp-venv.sh backend/wangp_worker.py \
          backend/tfg_mcp.py backend/agent/mcp_core.py skills/tfg/SKILL.md docs/HERMES_PROMPT.md docs/AGENTS_GUIDE.md docs/AGENT_DEBUG_PROMPT.md \
          docs/RTX_4070_TEST_MATRIX.md docs/CONTAINERS.md docs/TRAINING.md docs/REPRODUCE.md docs/VIDEO_REPRODUCE.md docs/STORYBOARD_3D.md \
          session-notes.md deploy/docker-compose.yml README.md; do

@@ -387,6 +387,25 @@
 - Still open (needs the 4070 / a decision): actually downloading the distilled weights + measuring the true peak,
   and the uv.lock↔Wan2GP dependency split (subprocess bridge vs locking the 81 requirements) from Hermes PR #2.
 
+## Merge of Hermes PR #2 + WanGP in its own environment
+- Merged PR #2 (review/hermes → hermes-review, merge 33771d9); gates on the merged tree green (pyright 0, pytest 854,
+  tsc 0, vitest 58, e2e 31/31, build OK). Follow-up 8f3b834: `server.fs.deny` REPLACES Vite's defaults
+  (`server.fs?.deny || [...]`, verified in node_modules/vite), so PR #2 had dropped the .env/cert protection — restated;
+  its bare dir names matched nothing inside the dirs (`**/<name>` only) — now `**/python-embed/**`, `**/Wan2GP/**`;
+  `agent:mcp` no longer needs `sh` (`uv --directory backend run`).
+- D-054 (ADR 0005): WanGP runs in its own venv `Wan2GP/.venv` (scripts/ensure-wangp-venv.{ps1,sh}: py3.12, torch
+  2.10.0/tv 0.25.0/ta 2.10.0 cu128, requirements constrained to that torch, import check) as a worker process:
+  `backend/wangp_worker.py` (stdlib only; loads services/wangp_bridge.py by path; 127.0.0.1 ephemeral port; bearer
+  token; exits on stdin EOF = parent death) driven by `services/wangp_worker_bridge.py` `WorkerWanGPBridge`
+  (RemoteWanGPBridge subclass: same /api/wangp protocol, inputs by path, outputs in place; LoopbackHTTPClient with
+  proxies off; SubprocessWorkerLauncher drains output, restarts a dead worker). `select_wangp_mode()`: remote URL →
+  remote; WanGP interpreter ≠ backend's (abspath, NOT resolved — venvs share a base symlink) → worker; else
+  in_process (packaged app, container: unchanged). AppHandler warms the worker up in the background. setup-dev.*
+  create the env (opt out: TFG_SKIP_WANGP_VENV=1); README no longer says to install WanGP into backend/.venv.
+- Hermes PR #2 notes for later: Florence-2 fails because `Florence2Processor` needs `tokenizer.image_token`, absent
+  in the locked transformers (a transformers/model-version decision); the 4070 preset copy promises a ~1 min clip
+  and Florence captions; reproduce-loop scores don't converge and never report missing the 0.9 target.
+
 ## Next step
 Nothing pending in this session. Real-GPU acceptance (docs/RTX_4070_TEST_MATRIX.md) and `pnpm build:win` need the 4070
 machine; a live `hermes mcp test tfg` needs a Hermes install. Watch the PR for review comments. Hermes audit PR #2
