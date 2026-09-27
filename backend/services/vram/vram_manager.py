@@ -35,26 +35,30 @@ VRAM_CLASS_MB: dict[str, int] = {"S": 1536, "M": 3072, "L": 8192}
 #:
 #: MEASURED on the audit machine (RTX 4070 12 GB, Windows 11, 12282 MiB total),
 #: 2026-09-27, through the app's own backend with a baseline sampled immediately
-#: before each POST. Figures are `sampler peak - idle baseline` in MiB:
+#: before each POST. Two samplers read whole-GPU `used`: the app's History peak
+#: and an external nvidia-smi sampler. Both sample at intervals, so the true peak
+#: is at least the larger; figures are `max(History, sampler) - baseline` in MiB:
 #:   ltx2_22B_distilled  540p 6 s cold (includes the LTX-2 load spike)  3966
-#:                       540p 6 s warm                                2292
-#:                       720p 6 s Balanced                             2677
-#:   z_image            1024x1024, 8 steps                            2959
+#:                       540p 6 s warm                                2565
+#:                       720p 6 s Balanced                             2948
+#:                       540p 6 s on the final code                    4645
+#:   z_image            1024x1024, 8 steps                            4831
 #: Worst measured case per bucket, rounded up with ~11% headroom for a
 #: colder desktop or a longer clip. The guard adds SAFETY_MARGIN_MB (512) on
-#: top, so the effective bar is 4912 / 3712 MB.
+#: top, so the effective bar is 5712 / 5912 MB, still inside the ~8.9 GB a
+#: 12 GB desktop leaves free.
 #:
 #: The 8000/7500 that preceded these were never measured — they were chosen to
 #: be "attainable" guesses, and they were too high: at 8.5 GB free (a desktop
 #: with another model resident) the old 8000+512 bar refused a render the card
-#: completes in 3966 MiB. Only the two buckets this hardware actually measured
+#: completes in under 4.7 GB. Only the two buckets this hardware actually measured
 #: are lowered; the rest keep their conservative values until measured.
 #: `ltx2_22B` (non-distilled) genuinely does not fit 12 GB and stays refused.
 RENDER_NEEDS_MB: dict[str, int] = {
-    "ltx2_22B_distilled": 4400,
+    "ltx2_22B_distilled": 5200,
     "ltx2_22B": 11000,
     "wan2_2_ti2v_5B": 8000,
-    "z_image": 3200,
+    "z_image": 5400,
     "qwen_image_edit": 8000,
     "flux": 8000,
     "ltx2-fast": 8000,

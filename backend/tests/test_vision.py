@@ -73,7 +73,7 @@ class TestVramManager:
         Round 4: the free-VRAM figures are derived from the live `needed_mb`
         instead of being hardcoded. They used to be the literals 5 GB and
         7.5 GB, which were only "too tight" while RENDER_NEEDS_MB held an
-        unmeasured 8000; committing the measured 4400 made a literal 5 GB
+        unmeasured 8000; committing measured thresholds made a literal 5 GB
         sufficient, so the expected VramError stopped raising and this test
         broke through no fault of its own. Deriving the inputs keeps both
         assertions meaningful for any threshold.

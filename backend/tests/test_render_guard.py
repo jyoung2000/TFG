@@ -23,6 +23,19 @@ class TestVramGuardSettings:
         # The non-distilled 22B genuinely does not fit a 12 GB card.
         assert test_state.vram.needed_mb("ltx2_22B") > 11000
 
+    def test_defaults_cover_every_round4_measured_peak(self, test_state):
+        """Round 4 (4070, 2026-09-27) recorded two whole-GPU peaks per render:
+        the app's own History sampler and an external nvidia-smi sampler. Both
+        sample at intervals, so the true peak is at least the larger one. The
+        configured need (before SAFETY_MARGIN_MB) must cover the worst
+        `max(History, sampler) - baseline` measured for each bucket; otherwise
+        the guard admits a render into less VRAM than the card was seen to use.
+          ltx2_22B_distilled  Fast on final code  6584 - 1939 = 4645
+          z_image             1024^2, 8 steps     7073 - 2242 = 4831"""
+        measured_worst = {"ltx2_22B_distilled": 6584 - 1939, "z_image": 7073 - 2242}
+        for model_type, worst in measured_worst.items():
+            assert test_state.vram.needed_mb(model_type) - SAFETY_MARGIN_MB >= worst, model_type
+
     def test_measured_default_admits_a_render_at_the_measured_peak(self, client, fake_services):
         """Round-4 (4070, 2026-09-27): the committed thresholds come from a real
         cold render, so a 12 GB desktop that has 8.5 GB free must be allowed to

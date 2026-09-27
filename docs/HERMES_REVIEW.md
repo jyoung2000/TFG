@@ -865,3 +865,58 @@ the `{}`-does-not-restore docstring lie.
   error bar.
 - **`git log` provenance of round 1's 226.7 s / 8044 MB.** Not traceable to any
   History record in this session; treated as supplied context only.
+
+---
+
+# Round 4 follow-up — two corrections to the round-4 write-up (Claude Code, cloud container, 2026-09-27)
+
+No new measurements. Both corrections come from round 4's own tables.
+
+## The committed VRAM thresholds were below round 4's own measurements
+
+Round 4 set `RENDER_NEEDS_MB` from `sampler peak − baseline` only (`fb17e66`).
+But History's peak and the external sampler read the **same** quantity:
+whole-GPU `used`, sampled at intervals (`VramManager.render_scope`). Neither one
+is guaranteed to catch the true peak, so the true peak is at least the larger of
+the two. Using `max(History, sampler) − baseline` from round 4's own table:
+
+| Render | History | Sampler | Baseline | max − baseline |
+|---|---|---|---|---|
+| Image 1024², 8 steps (`z_image`) | 7073 | 5201 | 2242 | **4831** |
+| Fast 540p · 6 s cold | 5743 | 6305 | 2339 | 3966 |
+| Fast 540p · 6 s warm | 4676 | 4403 | 2111 | 2565 |
+| Balanced 720p · 6 s | 5035 | 4764 | 2087 | 2948 |
+| Fast 540p · 6 s on final code | 6584 | 6313 | 1939 | **4645** |
+
+The committed `z_image: 3200` sat 1.6 GB under the image's measured 4831. The
+committed `ltx2_22B_distilled: 4400` was worked out before the final-code render,
+and sat under both its 4645 and round 2's WanGP-direct 4414.
+
+These now follow round 4's own rule (worst measured case, plus ~11%):
+`ltx2_22B_distilled` → **5200**, `z_image` → **5400**. With the 512 MB margin the
+effective bars are 5712 / 5912 MB, still inside the ~8.9 GB a 12 GB desktop
+leaves free. The new test `test_defaults_cover_every_round4_measured_peak` was
+red at 4400 (`assert (4912 - 512) >= 4645`) and is green now. Round 4's
+`test_measured_default_admits_a_render_at_the_measured_peak` (8.5 GB free) still
+passes. Full backend suite: 891 passed.
+
+## The closing verdict still repeated the withdrawn F-054 claim
+
+The last paragraph of round 4's verdict still lists "a Create-view estimate that
+understates reality by 2–20×" as a caveat. Round 4 itself withdrew that claim:
+the "34s–1m" line was an OCR misread, and no estimate appears in the Create
+view. Read that caveat as the real F-054 instead: `use-generation.ts:178`
+hardcodes a 45 s progress interpolation, so the progress bar stops at 95% while
+the render keeps going.
+
+## Also noted
+
+- The four round-4 screenshots were committed at full 2560×1440, about 5 MB
+  each (20 MB total). The write-up describes switching to downscaled copies,
+  but those never replaced the originals. They are now in history either way.
+  Future rounds should downscale before committing.
+- Open from round 4, unchanged: F-052 (native crash at the first cold start,
+  not reproduced), F-053 (`{}` does not restore the overrides), F-054 (the 45 s
+  progress constant), F-055 (`diag_preready.py` cannot score a pass), F-056
+  (`busy:false` mid-render), F-057 (~4× wall-time variance), and the GUI
+  screens not yet swept (Reproduce, Train, Film Studio, Assets, Settings).
