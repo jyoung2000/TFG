@@ -179,8 +179,12 @@ class VramManager:
 
     def set_overrides(self, overrides: dict[str, int]) -> None:
         """Apply the `vram_render_needs_mb` setting on top of the defaults.
-        Called on settings load and on every save; passing `{}` restores the
-        defaults, so a removed override does not linger."""
+        Called on settings load and on every save with the WHOLE setting, so
+        a model missing from `overrides` falls back to its default.
+
+        Through the API, though, `POST /api/settings` deep-merges dicts:
+        posting `{}` changes nothing and every stored override stays. To drop
+        one, post `0` for that model (values <= 0 mean "use the default")."""
         with self._lock:
             self._needs = dict(self._base_needs)
             for model_type, value in overrides.items():

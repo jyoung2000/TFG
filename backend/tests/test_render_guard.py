@@ -46,6 +46,16 @@ class TestVramGuardSettings:
         r = client.post("/api/vision/prepare-render", json={"model_type": "ltx2_22B_distilled"})
         assert r.status_code == 200, r.json()
 
+    def test_posting_an_empty_override_map_keeps_stored_overrides(self, client, test_state):
+        """F-053 (round 4): settings patches deep-merge, so `{}` is a no-op and
+        only `0` drops an override. The set_overrides docstring now says so."""
+        default = test_state.vram.needed_mb("ltx2_22B_distilled")
+        client.post("/api/settings", json={"vram_render_needs_mb": {"ltx2_22B_distilled": 7000}})
+        client.post("/api/settings", json={"vram_render_needs_mb": {}})
+        assert test_state.vram.needed_mb("ltx2_22B_distilled") == 7000 + SAFETY_MARGIN_MB
+        client.post("/api/settings", json={"vram_render_needs_mb": {"ltx2_22B_distilled": 0}})
+        assert test_state.vram.needed_mb("ltx2_22B_distilled") == default
+
     def test_settings_override_reaches_the_guard_and_zero_restores(self, client, test_state):
         default = test_state.vram.needed_mb("ltx2_22B_distilled")
         r = client.post("/api/settings", json={"vram_render_needs_mb": {"ltx2_22B_distilled": 7000}})
