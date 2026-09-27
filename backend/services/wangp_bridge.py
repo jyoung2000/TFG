@@ -389,6 +389,17 @@ class WanGPBridge:
             raise RuntimeError(f"shared.api resolved to {module_path}, expected {expected_path}")
         return module
 
+    def warm_session(self) -> str:
+        """Construct the WanGP session now — this imports ``wgp.py``, the
+        heaviest module — so the first render does not pay for it inside its
+        job thread (round-2 F-038 note (a)). Returns '' on success, else the
+        reason renders will fail with."""
+        try:
+            self._get_session()
+            return ""
+        except Exception as exc:  # noqa: BLE001 - reported by the caller, renders re-raise it
+            return str(exc)
+
     def _get_session(self):
         status = self.get_status()
         if not status.available or status.root is None:

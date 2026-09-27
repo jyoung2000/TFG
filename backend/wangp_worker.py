@@ -15,11 +15,21 @@ anything the backend has — plus the bridge module, which is also stdlib-only
 and is loaded by file path so the backend's `services` package (and its
 imports) never load here.
 
-Lifecycle: binds 127.0.0.1 on an ephemeral port, prints
-``TFG_WANGP_WORKER_READY <port>`` once listening, and exits when its stdin
-reaches EOF — i.e. when the backend that owns the pipe exits or crashes — so
-a dead backend never leaves an orphan holding VRAM. Every request must carry
-the bearer token the backend put in ``TFG_WANGP_WORKER_TOKEN``.
+Lifecycle (order is load-bearing — F-038): WanGP's first import (torch,
+gradio, CUDA DLLs) runs FIRST, on a pristine main thread, before any other
+thread exists and before any socket is bound. Round 2 caught that import
+wedged inside a Windows ``LoadLibrary`` (py-spy: ``create_module`` under
+numpy, CPU flat) only in the launched worker — whose pre-import environment
+differed from every succeeding standalone repro by exactly two things: a
+thread blocked on the stdin pipe and a bound HTTP server. Both now come
+after the import. Then the server binds 127.0.0.1 on an ephemeral port
+(skipping stdlib's reverse-DNS ``getfqdn``), the port is announced through
+BOTH channels — the ``TFG_WANGP_WORKER_READY <port>`` line on stdout and an
+atomically written ready-file — and only then does the orphan guard arm:
+the worker exits when its stdin reaches EOF, i.e. when the backend that
+owns the pipe is gone, so a dead backend never leaves an orphan holding
+VRAM. Every request must carry the bearer token the backend put in
+``TFG_WANGP_WORKER_TOKEN``.
 """
 
 from __future__ import annotations
@@ -31,6 +41,7 @@ import importlib.util
 import json
 import logging
 import os
+import socketserver
 import sys
 import threading
 import time
@@ -267,6 +278,32 @@ def _make_handler(worker: Worker, token: str) -> type[BaseHTTPRequestHandler]:
     return Handler
 
 
+class _WorkerHTTPServer(ThreadingHTTPServer):
+    """ThreadingHTTPServer without stdlib's `server_bind` getfqdn call: that
+    is a reverse-DNS lookup which hangs for minutes on machines with broken
+    resolvers (the classic slow http.server startup on Windows), and nothing
+    here needs a server name — the worker serves loopback only."""
+
+    daemon_threads = True
+
+    def server_bind(self) -> None:
+        socketserver.TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name = str(host)
+        self.server_port = int(port)
+
+
+def _write_ready_file(path: str, port: int) -> None:
+    """Announce the port through the filesystem too (atomically), so the
+    launcher's readiness does not depend on the stdout pipe delivering one
+    specific line."""
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    tmp = target.with_name(target.name + ".tmp")
+    tmp.write_text(json.dumps({"port": port, "pid": os.getpid()}), encoding="utf-8")
+    os.replace(tmp, target)
+
+
 def _exit_when_stdin_closes() -> None:
     """The backend holds our stdin pipe; EOF means it is gone (exit, crash or
     kill), so leave rather than keep a GPU model resident as an orphan."""
@@ -288,6 +325,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--image-model-type", default="z_image")
     parser.add_argument("--extra-arg", action="append", default=[], help="Passed to WanGP's session (repeatable)")
     parser.add_argument("--port", type=int, default=0, help="0 = pick a free port")
+    parser.add_argument("--ready-file", default="", help="Also announce the port by writing this file atomically")
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s", stream=sys.stdout)
@@ -320,16 +358,35 @@ def main(argv: list[str] | None = None) -> int:
         extra_args=tuple(args.extra_arg),
     )
     worker = Worker(bridge)
-    server = ThreadingHTTPServer(("127.0.0.1", args.port), _make_handler(worker, token))
-    server.daemon_threads = True
-    _trace(f"http server bound on 127.0.0.1:{server.server_address[1]}")
-    threading.Thread(target=_exit_when_stdin_closes, name="wangp-parent-watch", daemon=True).start()
+
+    # F-038: the heavy import runs on a pristine main thread — no other
+    # thread, no bound socket — matching the environment of every standalone
+    # repro that succeeded on the round-2 box. The stdin watcher and the HTTP
+    # server come strictly after it.
     _trace("importing WanGP (shared.api — torch, gradio, CUDA DLLs; the slow part)")
     worker.warm_up()
     _trace("WanGP import finished")
-    print(f"{READY_PREFIX} {server.server_address[1]}", flush=True)
+    warm_session = getattr(bridge, "warm_session", None)
+    if callable(warm_session) and worker.status().get("available"):
+        # Pull wgp.py (heavier still) in now too, so the first render does
+        # not pay for it inside its job thread (round-2 F-038 note (a)).
+        _trace("constructing the WanGP session (wgp.py)")
+        session_error = str(warm_session() or "")
+        _trace("WanGP session ready" if not session_error else f"WanGP session failed (renders will report it): {session_error}")
+
+    server = _WorkerHTTPServer(("127.0.0.1", args.port), _make_handler(worker, token))
+    port = int(server.server_address[1])
+    _trace(f"http server bound on 127.0.0.1:{port}")
+    if args.ready_file:
+        _write_ready_file(args.ready_file, port)
+        _trace(f"ready file written: {args.ready_file}")
+    print(f"{READY_PREFIX} {port}", flush=True)
     faulthandler.cancel_dump_traceback_later()
-    _trace("ready — serving")
+    # Armed only now: a blocking read on the launcher's pipe never sits under
+    # the import, and a backend that died during startup is still honoured —
+    # the read returns EOF immediately and the worker leaves.
+    threading.Thread(target=_exit_when_stdin_closes, name="wangp-parent-watch", daemon=True).start()
+    _trace("orphan guard armed — serving")
     try:
         server.serve_forever(poll_interval=0.5)
     finally:

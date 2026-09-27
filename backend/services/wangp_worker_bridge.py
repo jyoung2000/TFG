@@ -207,11 +207,13 @@ class SubprocessWorkerLauncher:
             # "argument --extra-arg: expected one argument".
             self._args += [f"--extra-arg={arg}"]
         self._extra_env = dict(extra_env or {})
+        self._config_dir = config_dir
         self._timeout = startup_timeout_s
         self._lock = threading.Lock()
         self._proc: subprocess.Popen[str] | None = None
         self._endpoint: WorkerEndpoint | None = None
-        self._tail: deque[str] = deque(maxlen=30)
+        self._ready_file: Path | None = None
+        self._tail: deque[str] = deque(maxlen=60)
 
     @property
     def process(self) -> subprocess.Popen[str] | None:
@@ -238,8 +240,17 @@ class SubprocessWorkerLauncher:
         env.update(self._extra_env)
         creationflags = cast(int, getattr(subprocess, "CREATE_NO_WINDOW", 0))
         self._tail.clear()
+        # The port is announced through two channels: the READY line on the
+        # merged pipe AND a per-launch ready-file (fresh name every start, so
+        # a stale file from a dead worker can never be read). Either one,
+        # confirmed by an authorized status probe, counts as started.
+        self._config_dir.mkdir(parents=True, exist_ok=True)
+        for stale in self._config_dir.glob("worker-*.ready.json"):
+            stale.unlink(missing_ok=True)
+        ready_file = self._config_dir / f"worker-{secrets.token_hex(6)}.ready.json"
+        self._ready_file = ready_file
         proc = subprocess.Popen(
-            [self._python, "-u", str(self._script), *self._args],
+            [self._python, "-u", str(self._script), *self._args, "--ready-file", str(ready_file)],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -271,12 +282,55 @@ class SubprocessWorkerLauncher:
 
         assert proc.stdout is not None
         threading.Thread(target=drain, args=(proc.stdout,), name="wangp-worker-output", daemon=True).start()
-        if not ready.wait(self._timeout) or not port:
-            raise self._startup_failure(proc, deadline_note=f"startup deadline {self._timeout:.0f}s")
+
+        announced = self._await_announcement(proc, ready, port, ready_file)
+        endpoint = WorkerEndpoint(base_url=f"http://127.0.0.1:{announced}", token=token)
+        self._probe_until_serving(proc, endpoint)
         self._proc = proc
-        self._endpoint = WorkerEndpoint(base_url=f"http://127.0.0.1:{port[0]}", token=token)
-        logger.info("WanGP worker started (pid %s) at %s", proc.pid, self._endpoint.base_url)
-        return self._endpoint
+        self._endpoint = endpoint
+        logger.info("WanGP worker started (pid %s) at %s", proc.pid, endpoint.base_url)
+        return endpoint
+
+    def _await_announcement(self, proc: subprocess.Popen[str], ready: threading.Event, port: list[int], ready_file: Path) -> int:
+        """The worker's port, from the READY line or the ready-file —
+        whichever lands first. Readiness must not hinge on one specific line
+        crossing the stdout pipe (F-038's silence made that channel suspect)."""
+        deadline = time.monotonic() + self._timeout
+        while True:
+            if port:
+                return port[0]
+            if ready_file.is_file():
+                try:
+                    payload = json.loads(ready_file.read_text(encoding="utf-8"))
+                    return int(payload["port"])
+                except (OSError, ValueError, KeyError, TypeError):
+                    pass  # written concurrently; re-read on the next tick
+            if proc.poll() is not None and ready.is_set():
+                raise self._startup_failure(proc, deadline_note=f"startup deadline {self._timeout:.0f}s")
+            if time.monotonic() >= deadline:
+                raise self._startup_failure(proc, deadline_note=f"startup deadline {self._timeout:.0f}s")
+            ready.wait(0.15)
+
+    def _probe_until_serving(self, proc: subprocess.Popen[str], endpoint: WorkerEndpoint) -> None:
+        """An announced port is a claim; an authorized 200 from
+        GET /api/wangp/status is the proof the worker actually serves."""
+        client = LoopbackHTTPClient()
+        deadline = time.monotonic() + 30
+        headers = {"Authorization": f"Bearer {endpoint.token}"}
+        while True:
+            try:
+                response = client.get(f"{endpoint.base_url}/api/wangp/status", headers=headers, timeout=5)
+                if response.status_code == 200:
+                    return
+                if response.status_code == 401:
+                    raise self._startup_failure(proc, deadline_note="the status probe was refused (401) — something else answers on that port, or the token did not reach the worker")
+            except (ConnectionError, HttpTimeoutError):
+                pass
+            if proc.poll() is not None:
+                raise self._startup_failure(proc, deadline_note="the worker exited between announcing its port and serving")
+            if time.monotonic() >= deadline:
+                raise self._startup_failure(proc, deadline_note="the announced port never answered the status probe (30s)")
+            time.sleep(0.1)
 
     def _startup_failure(self, proc: subprocess.Popen[str], *, deadline_note: str) -> WanGPWorkerError:
         """Kill the worker and build an error that carries everything four
@@ -301,6 +355,9 @@ class SubprocessWorkerLauncher:
     def stop(self) -> None:
         with self._lock:
             proc, self._proc, self._endpoint = self._proc, None, None
+            ready_file, self._ready_file = self._ready_file, None
+        if ready_file is not None:
+            ready_file.unlink(missing_ok=True)
         if proc is None:
             return
         try:

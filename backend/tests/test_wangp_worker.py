@@ -7,6 +7,7 @@ through it, cancel works across it, and the worker dies with its parent."""
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -450,3 +451,139 @@ class TestLauncherFailureDetail:
         assert "exit code 7" in message, message
         assert "flux capacitor" in message, message
         assert "15" in message, message  # the deadline that governed
+
+
+class TestStartupIsolation:
+    """Round 3, F-038: the WanGP import must run on a pristine main thread.
+
+    py-spy caught the round-2 wedge with the main thread inside a DLL load
+    (create_module under numpy) while the worker had already bound an HTTP
+    server (whose stdlib server_bind performs a reverse-DNS getfqdn) and
+    started the stdin watcher — the two variables every succeeding
+    standalone repro lacked. The import now happens before any thread or
+    socket exists; the server binds afterwards, without getfqdn; and the
+    orphan guard arms only after READY.
+    """
+
+    def test_worker_reaches_ready_even_when_reverse_dns_hangs(self, tmp_path: Path):
+        """A hung socket.getfqdn (broken resolver, the classic http.server
+        stall on Windows) must not sit between launch and READY."""
+        site_dir = tmp_path / "site"
+        site_dir.mkdir()
+        (site_dir / "sitecustomize.py").write_text(
+            "import socket, time\n"
+            "def _hang(name=''):\n"
+            "    time.sleep(300)\n"
+            "    return name\n"
+            "socket.getfqdn = _hang\n"
+        )
+        root = _checkout(tmp_path)
+        launcher = SubprocessWorkerLauncher(
+            python=sys.executable,
+            root=root,
+            output_dir=tmp_path / "outputs",
+            config_dir=tmp_path / "cfg",
+            video_model_type="ltx2_22B_distilled",
+            image_model_type="z_image",
+            # The launcher strips PYTHONPATH, then applies extra_env — so this
+            # re-injects sitecustomize into the real child interpreter.
+            extra_env={"PYTHONPATH": str(site_dir), "FAKE_WANGP_DELAY": "0.1"},
+            startup_timeout_s=20,
+        )
+        try:
+            t0 = time.time()
+            endpoint = launcher.ensure_started()
+            assert time.time() - t0 < 15, "startup waited on a DNS lookup"
+            body = LoopbackHTTPClient().get(
+                f"{endpoint.base_url}/api/wangp/status",
+                headers={"Authorization": f"Bearer {endpoint.token}"},
+                timeout=10,
+            ).json()
+            assert isinstance(body, dict) and body["available"] is True
+        finally:
+            launcher.stop()
+
+    def test_backend_death_during_startup_never_skips_ready(self, tmp_path: Path):
+        """The orphan guard arms after READY: a worker whose parent pipe is
+        already gone still finishes starting (so the failure mode is visible)
+        and then exits by itself instead of lingering — it must never die
+        silently *before* READY because the guard fired first."""
+        root = _checkout(tmp_path)
+        env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV")}
+        env.update({"TFG_WANGP_WORKER_TOKEN": "x" * 32, "PYTHONUNBUFFERED": "1"})
+        import subprocess
+
+        proc = subprocess.Popen(
+            [
+                sys.executable, "-u", str(Path(__file__).resolve().parent.parent / "wangp_worker.py"),
+                "--root", str(root),
+                "--output-dir", str(tmp_path / "outputs"),
+                "--config-dir", str(tmp_path / "cfg"),
+            ],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            cwd=str(root),
+            env=env,
+            text=True,
+        )
+        assert proc.stdin is not None and proc.stdout is not None
+        proc.stdin.close()  # the backend is already gone
+        out = proc.stdout.read()  # EOF when the worker exits by itself
+        assert proc.wait(timeout=60) == 0
+        assert "TFG_WANGP_WORKER_READY" in out, out
+
+
+class TestReadinessProbe:
+    """Round 3, F-038: readiness must not hang on the stdout pipe alone.
+
+    The launcher accepts the ready-file the worker writes next to its config
+    dir and confirms with a real authorized GET /api/wangp/status before
+    declaring the worker started — a worker that serves but whose READY line
+    never crosses the pipe still counts as up.
+    """
+
+    def test_launcher_accepts_ready_file_plus_live_status_without_the_ready_line(self, tmp_path: Path):
+        silent_server = tmp_path / "silent_server.py"
+        silent_server.write_text(
+            "import json, os, sys\n"
+            "from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer\n"
+            "class H(BaseHTTPRequestHandler):\n"
+            "    def do_GET(self):\n"
+            "        body = json.dumps({'available': True, 'reason': '', 'loading': False, 'busy': False, 'active_job': ''}).encode()\n"
+            "        self.send_response(200)\n"
+            "        self.send_header('Content-Type', 'application/json')\n"
+            "        self.send_header('Content-Length', str(len(body)))\n"
+            "        self.end_headers()\n"
+            "        self.wfile.write(body)\n"
+            "    def log_message(self, *a):\n"
+            "        pass\n"
+            "srv = ThreadingHTTPServer(('127.0.0.1', 0), H)\n"
+            "args = sys.argv[1:]\n"
+            "ready = args[args.index('--ready-file') + 1]\n"
+            "tmp = ready + '.tmp'\n"
+            "with open(tmp, 'w') as f:\n"
+            "    json.dump({'port': srv.server_address[1], 'pid': os.getpid()}, f)\n"
+            "os.replace(tmp, ready)\n"
+            "srv.serve_forever()\n"
+        )
+        launcher = SubprocessWorkerLauncher(
+            python=sys.executable,
+            root=_checkout(tmp_path),
+            output_dir=tmp_path / "outputs",
+            config_dir=tmp_path / "cfg",
+            video_model_type="ltx2_22B_distilled",
+            image_model_type="z_image",
+            startup_timeout_s=20,
+            script=silent_server,
+        )
+        try:
+            endpoint = launcher.ensure_started()
+            body = LoopbackHTTPClient().get(
+                f"{endpoint.base_url}/api/wangp/status",
+                headers={"Authorization": f"Bearer {endpoint.token}"},
+                timeout=10,
+            ).json()
+            assert isinstance(body, dict) and body["available"] is True
+        finally:
+            launcher.stop()
