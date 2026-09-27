@@ -5,7 +5,7 @@ LTX Desktop is an open-source desktop app for generating videos with LTX models 
 > **Status: Beta.** Expect breaking changes.
 > Frontend architecture is under active refactor; large UI PRs may be declined for now (see [`CONTRIBUTING.md`](docs/CONTRIBUTING.md)).
 
-**This LTX Desktop fork powered by WanGP reduces the VRAM requirements from 32 GB to 6 GB.**
+**This LTX Desktop fork is powered by WanGP, which cuts VRAM needs dramatically: measured on a 12 GB RTX 4070 (2026-09-26, WanGP-direct), a 768×512 · 49-frame clip peaked ~4.4 GiB above idle and a 1024² still ~4.6 GiB. Cards below 12 GB are untested by this fork.**
 
 Check the WanGP repo for more information (docs, Discord, and more): https://github.com/deepbeepmeep/Wan2GP
 
@@ -313,7 +313,7 @@ Every API route is an MCP tool — `pnpm agent:mcp` (stdio) or `POST /mcp`
 
 | Platform / hardware | Generation mode | Notes |
 | --- | --- | --- |
-| Windows + CUDA GPU with **as low as 6 GB VRAM with WanGP** | Local generation | Downloads model weights locally |
+| Windows + CUDA GPU — **12 GB validated; WanGP's low-VRAM path may go lower (untested here)** | Local generation | Downloads model weights locally |
 | Windows (no CUDA, low VRAM, or unknown VRAM) | API-only | **LTX API key required** |
 | macOS (Apple Silicon builds) | API-only | **LTX API key required** |
 | Linux + CUDA GPU + WanGP checkout | Local generation | Source/dev setup supported in this fork |
@@ -326,7 +326,7 @@ In API-only mode, available resolutions/durations may be limited to what the API
 ### Windows (local generation)
 
 - Windows 10/11 (x64)
-- NVIDIA GPU with CUDA support and as low as 6 GB VRAM with WanGP
+- NVIDIA GPU with CUDA support — 12 GB (RTX 4070) is the validated configuration; WanGP advertises lower, untested by this fork
 - 16 GB+ RAM (32 GB recommended)
 - Plenty of free disk space for model weights and outputs
 

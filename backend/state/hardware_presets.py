@@ -28,8 +28,8 @@ class VideoProfileSpec:
 
 #: Quick video / Film "fast" vs "balanced" on the distilled LTX-2 model.
 VIDEO_PROFILES: dict[VideoProfile, VideoProfileSpec] = {
-    "fast": VideoProfileSpec("fast", "Fast", "ltx2_22B_distilled", "540p", 6, "540p · 6 s · 8 steps: a clip in about a minute on a 4070."),
-    "balanced": VideoProfileSpec("balanced", "Balanced", "ltx2_22B_distilled", "720p", 8, "720p · 6–8 s: sharper, roughly three times longer per clip."),
+    "fast": VideoProfileSpec("fast", "Fast", "ltx2_22B_distilled", "540p", 6, "540p · 6 s · 8 steps. Measured on a 4070 (WanGP-direct, 2026-09-26): ~10 min for the first clip (model load), ~3 min warm — minutes, not seconds."),
+    "balanced": VideoProfileSpec("balanced", "Balanced", "ltx2_22B_distilled", "720p", 8, "720p · 6–8 s: sharper; expect several times the Fast profile per clip (unmeasured on hardware yet)."),
 }
 
 

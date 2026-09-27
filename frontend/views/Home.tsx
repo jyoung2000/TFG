@@ -320,7 +320,7 @@ export function Home() {
                 <span className="text-base font-semibold text-white">Create</span>
               </div>
               <p className="text-sm text-zinc-400 leading-relaxed">
-                Describe a clip or a still, pick Fast or Balanced, and generate in a minute or three. LoRAs you trained are one checkbox away.
+                Describe a clip or a still and pick Fast or Balanced — stills land in about a minute, clips take minutes. LoRAs you trained are one checkbox away.
               </p>
               <span className="inline-block mt-3 text-xs text-violet-300 group-hover:text-violet-200">Make a quick video →</span>
             </button>
