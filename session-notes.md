@@ -440,6 +440,18 @@
   Balanced then commit RENDER_NEEDS_MB from data; Electron GUI sweep with screenshots). PR #4 CI: none — ci.yml only
   runs on main; local gates are the evidence.
 
+## Branch consolidation — no more PRs (2026-09-27)
+- D-057: `latest` is the single working branch, cut from 15f0c72 (fix/hermes-round3 head). It contains every other
+  working branch: hermes-review, production, feat/production-oneshot, review/hermes, review/hermes-round2,
+  fix/hermes-round3, feat/video-recreation-and-assets-gallery and claude/ltx-filmmaking-integration-75pnwq (all
+  verified with merge-base --is-ancestor). Work is committed and pushed there directly; PRs #3 and #4 were closed
+  in favour of it. The round-4 prompt now tells Hermes to commit and push on `latest`.
+- NOT included: claude/funny-mccarthy-esz7ch, 9 hosted-provider fixes from 2026-09-19 (cancel before submit,
+  "cancel all", WaveSpeed reference upload, non-JSON responses, cross-vendor model id, Model Library "Use"
+  persistence…). They are not in `latest` by patch id either. A trial merge conflicts in app_handler.py,
+  media_providers.py, film_generation_handler.py and model_library_handler.py and adds npm deps (~1.7k lines), so
+  it needs a deliberate integration pass, not a blind merge. The branch is left untouched.
+
 ## Next step
 Nothing pending in this session. Real-GPU acceptance (docs/RTX_4070_TEST_MATRIX.md) and `pnpm build:win` need the 4070
 machine; a live `hermes mcp test tfg` needs a Hermes install. Watch the PR for review comments. Hermes audit PR #2

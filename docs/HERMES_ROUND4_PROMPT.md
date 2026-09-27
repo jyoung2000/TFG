@@ -1,6 +1,6 @@
 # Hermes audit — round 4 (verify round 3 on the RTX 4070)
 
-One paste, self-contained. Round 3 (PR #4, branch `fix/hermes-round3`) fixed
+One paste, self-contained. Round 3 fixed
 the round-2 findings **off-hardware**, in a cloud container with no GPU,
 Windows or desktop. It made no hardware claims. This round checks those fixes
 on the real card and does the measurements round 3 deliberately left alone.
@@ -13,7 +13,7 @@ You are running **round 4** of the TFG audit on the same machine as rounds
 ```powershell
 git config --replace-all remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
 git fetch origin
-git checkout -B review/hermes-round4 origin/fix/hermes-round3
+git checkout -B latest origin/latest      # the single working branch — no PRs
 powershell -ExecutionPolicy Bypass -File scripts\verify-hermes-ready.ps1   # every line ok, incl. the refspec check
 ```
 
@@ -102,7 +102,7 @@ Round 2 only tested the API. This time:
 
 ## 6. Deliver
 
-Commit on `review/hermes-round4` and open a PR into `hermes-review`. Don't merge it. It contains round 3's commits too, so it supersedes PR #4, the way PR #4 superseded PR #3.
+**No pull requests.** Commit directly on `latest` and `git push origin latest` (pull first if the push is rejected; never force-push). `latest` is the single working branch and already contains every earlier round.
 
 - **`docs/HERMES_REVIEW.md`:** append a **Round 4** section. Don't touch rounds 1–3.
   - F-038 verdict, with evidence.
