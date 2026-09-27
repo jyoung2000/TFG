@@ -60,6 +60,14 @@ _MAX_BODY_BYTES = 8 * 1024 * 1024
 logger = logging.getLogger("wangp_worker")
 
 _STARTED_AT = time.monotonic()
+#: While True, every stage marker re-arms a one-shot faulthandler dump 120s
+#: out — so the dump fires exactly 120s after the LAST stage that made
+#: progress, i.e. precisely when a stage has stalled, and carries every
+#: thread's stack. One-shot, not repeating: the launcher treats output as
+#: liveness, and a wedged worker that kept dumping stacks forever would
+#: never fall silent long enough to be declared dead.
+_watchdog_armed = False
+_WATCHDOG_DELAY_S = 120.0
 
 
 def _trace(stage: str) -> None:
@@ -72,6 +80,9 @@ def _trace(stage: str) -> None:
     startup stage now announces itself, so a stall names the stage it
     stalled in."""
     print(f"[wangp-worker +{time.monotonic() - _STARTED_AT:8.3f}s] {stage}", file=sys.stderr, flush=True)
+    if _watchdog_armed:
+        faulthandler.cancel_dump_traceback_later()
+        faulthandler.dump_traceback_later(_WATCHDOG_DELAY_S, repeat=False, exit=False, file=sys.stderr)
 
 
 def _load_bridge_module() -> ModuleType:
@@ -329,15 +340,16 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s", stream=sys.stdout)
-    _trace(f"started (python {sys.version.split()[0]}, pid {os.getpid()})")
     # A wedged startup must dump every thread's stack instead of going silent:
-    # crash tracebacks via enable(), and a periodic all-thread dump while any
-    # stage is still pending (cancelled once READY is out). faulthandler's
+    # crash tracebacks via enable(), and a stall watchdog re-armed by every
+    # stage marker (see _trace; disarmed once READY is out). faulthandler's
     # watchdog is a C thread that needs no GIL, so it fires even when the
     # main thread is stuck inside a DLL load holding the GIL — exactly the
     # F-038 state py-spy caught (create_module under numpy, CPU flat).
     faulthandler.enable(file=sys.stderr)
-    faulthandler.dump_traceback_later(60.0, repeat=True, exit=False, file=sys.stderr)
+    global _watchdog_armed
+    _watchdog_armed = True
+    _trace(f"started (python {sys.version.split()[0]}, pid {os.getpid()})")
     token = os.environ.get(TOKEN_ENV, "")
     if len(token) < 16:
         print(f"{TOKEN_ENV} must be set by the backend that starts this worker", file=sys.stderr)
@@ -381,6 +393,7 @@ def main(argv: list[str] | None = None) -> int:
         _write_ready_file(args.ready_file, port)
         _trace(f"ready file written: {args.ready_file}")
     print(f"{READY_PREFIX} {port}", flush=True)
+    _watchdog_armed = False
     faulthandler.cancel_dump_traceback_later()
     # Armed only now: a blocking read on the launcher's pipe never sits under
     # the import, and a backend that died during startup is still honoured —

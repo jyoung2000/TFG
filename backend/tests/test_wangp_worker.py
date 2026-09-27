@@ -112,7 +112,7 @@ def _bridge(tmp_path: Path, root: Path, *, delay: float = 0.1) -> tuple[WorkerWa
         video_model_type="ltx2_22B_distilled",
         image_model_type="z_image",
         extra_env={"FAKE_WANGP_DELAY": str(delay)},
-        startup_timeout_s=30,
+        silence_timeout_s=30,
     )
     bridge = WorkerWanGPBridge(
         launcher=launcher,
@@ -325,7 +325,7 @@ class TestExtraArgForwarding:
             # Exactly what _resolve_wangp_extra_args() produces on this machine.
             extra_args=("--attention", "sdpa"),
             extra_env={"FAKE_WANGP_DELAY": "0.1"},
-            startup_timeout_s=30,
+            silence_timeout_s=30,
         )
         bridge = WorkerWanGPBridge(
             launcher=launcher,
@@ -374,7 +374,7 @@ class TestWorkerReadiness:
             video_model_type="ltx2_22B_distilled",
             image_model_type="z_image",
             extra_env={"FAKE_WANGP_DELAY": "0.1", "FAKE_WANGP_IMPORT_DELAY": "6"},
-            startup_timeout_s=60,
+            silence_timeout_s=30,
         )
         try:
             t0 = time.time()
@@ -392,31 +392,76 @@ class TestWorkerReadiness:
         finally:
             launcher.stop()
 
-class TestStartupTimeoutCoversTheImport:
-    """F-037: the launcher must wait long enough for the import F-036 made blocking.
+class TestLauncherDeadlineIsLivenessBased:
+    """F-037, round 3: the startup deadline is liveness, not a wall clock.
 
-    After F-036 the worker finishes WanGP's first import before printing
-    TFG_WANGP_WORKER_READY, so `startup_timeout_s` governs the import, not just
-    process launch. The default was 60s; a cold import measured 55.8s on the
-    RTX 4070, so the launcher killed the worker seconds before it announced
-    itself and every render failed with "The WanGP worker did not start
-    (no output)".
-
-    Live reproduction of the red state is in docs/DEBUG_REPORT_hermes.md (F-037).
+    This replaces round 2's constant assertion (default >= 300s), which its
+    own debug report marked "applied, INEFFECTIVE — not a fix": a fixed total
+    kills a worker that is alive and would have announced itself (60s raced a
+    55.8s cold import; 375s was observed once), and no constant is safe on a
+    slower disk. Behavioural red on the pre-fix launcher, recorded in the
+    round-3 debug report: a worker printing a line every 0.4s was killed at
+    1.7s by `startup_timeout_s=1.5` ("still running — killed; startup
+    deadline 2s").
     """
 
-    def test_default_startup_timeout_outlasts_a_cold_import(self, tmp_path: Path):
-        launcher = SubprocessWorkerLauncher(
+    def _launcher(self, tmp_path: Path, script: Path, silence: float) -> SubprocessWorkerLauncher:
+        return SubprocessWorkerLauncher(
             python=sys.executable,
             root=_checkout(tmp_path),
             output_dir=tmp_path / "outputs",
             config_dir=tmp_path / "cfg",
             video_model_type="ltx2_22B_distilled",
             image_model_type="z_image",
+            silence_timeout_s=silence,
+            script=script,
         )
-        # Measured cold import: 55.8s. Anything under ~5 minutes reintroduces
-        # the race on a slower disk or a busier machine.
-        assert launcher._timeout >= 300, f"startup timeout {launcher._timeout}s cannot cover WanGP's cold import"
+
+    def test_a_worker_that_keeps_talking_is_waited_for_past_the_silence_window(self, tmp_path: Path):
+        chatty = tmp_path / "chatty.py"
+        chatty.write_text(
+            "import json, os, sys, time\n"
+            "from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer\n"
+            "for i in range(12):\n"
+            "    print(f'still importing, tick {i}', file=sys.stderr, flush=True)\n"
+            "    time.sleep(0.4)\n"
+            "class H(BaseHTTPRequestHandler):\n"
+            "    def do_GET(self):\n"
+            "        body = json.dumps({'available': True, 'reason': '', 'loading': False, 'busy': False, 'active_job': ''}).encode()\n"
+            "        self.send_response(200)\n"
+            "        self.send_header('Content-Length', str(len(body)))\n"
+            "        self.end_headers()\n"
+            "        self.wfile.write(body)\n"
+            "    def log_message(self, *a):\n"
+            "        pass\n"
+            "srv = ThreadingHTTPServer(('127.0.0.1', 0), H)\n"
+            "print(f'TFG_WANGP_WORKER_READY {srv.server_address[1]}', flush=True)\n"
+            "srv.serve_forever()\n"
+        )
+        launcher = self._launcher(tmp_path, chatty, silence=1.5)
+        try:
+            # 12 ticks x 0.4s = ~5s of startup, every gap far below 1.5s of
+            # silence: a liveness deadline waits; the old fixed 1.5s killed it.
+            endpoint = launcher.ensure_started()
+            assert endpoint.base_url.startswith("http://127.0.0.1:")
+        finally:
+            launcher.stop()
+
+    def test_a_silent_but_running_worker_is_declared_dead_at_the_silence_window(self, tmp_path: Path):
+        mute = tmp_path / "mute.py"
+        mute.write_text(
+            "import sys, time\n"
+            "print('one line, then nothing', file=sys.stderr, flush=True)\n"
+            "time.sleep(120)\n"
+        )
+        launcher = self._launcher(tmp_path, mute, silence=1.5)
+        t0 = time.time()
+        with pytest.raises(WanGPWorkerError) as excinfo:
+            launcher.ensure_started()
+        assert time.time() - t0 < 10, "a silent worker must not be waited on for a wall-clock eternity"
+        message = str(excinfo.value)
+        assert "no output for" in message and "still running — killed" in message, message
+        assert "one line, then nothing" in message, message
 
 
 class TestLauncherFailureDetail:
@@ -442,7 +487,7 @@ class TestLauncherFailureDetail:
             config_dir=tmp_path / "cfg",
             video_model_type="ltx2_22B_distilled",
             image_model_type="z_image",
-            startup_timeout_s=15,
+            silence_timeout_s=15,
             script=crasher,
         )
         with pytest.raises(WanGPWorkerError) as excinfo:
@@ -488,7 +533,7 @@ class TestStartupIsolation:
             # The launcher strips PYTHONPATH, then applies extra_env — so this
             # re-injects sitecustomize into the real child interpreter.
             extra_env={"PYTHONPATH": str(site_dir), "FAKE_WANGP_DELAY": "0.1"},
-            startup_timeout_s=20,
+            silence_timeout_s=20,
         )
         try:
             t0 = time.time()
@@ -574,7 +619,7 @@ class TestReadinessProbe:
             config_dir=tmp_path / "cfg",
             video_model_type="ltx2_22B_distilled",
             image_model_type="z_image",
-            startup_timeout_s=20,
+            silence_timeout_s=20,
             script=silent_server,
         )
         try:

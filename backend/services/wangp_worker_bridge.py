@@ -180,13 +180,16 @@ class SubprocessWorkerLauncher:
         image_model_type: str,
         extra_args: Sequence[str] = (),
         extra_env: Mapping[str, str] | None = None,
-        # The worker now finishes WanGP's first import *before* it prints
-        # TFG_WANGP_WORKER_READY (F-036), so this timeout has to cover that
-        # import and not just process launch. Measured on the RTX 4070: 55.8s
-        # cold, which the old 60s default raced - the worker was killed
-        # ("The WanGP worker did not start (no output)") seconds before it
-        # would have announced itself.
-        startup_timeout_s: float = 300.0,
+        # F-037, round 3: the startup deadline is LIVENESS-based, not a wall
+        # clock. A fixed total (60s, then 300s) kept killing workers that were
+        # alive and would have announced themselves — WanGP's cold import
+        # measured 55.8s on the RTX 4070 and 375s was observed once under
+        # round-2 conditions. The worker emits a stage marker per startup
+        # stage and a faulthandler stack dump 120s after the last stage that
+        # made progress; a worker producing output is waited for indefinitely,
+        # and only one that has said NOTHING for this long is declared dead —
+        # at which point the error carries the stage it died in and the dump.
+        silence_timeout_s: float = 180.0,
         script: Path = WORKER_SCRIPT,
     ) -> None:
         self._python = python
@@ -208,7 +211,8 @@ class SubprocessWorkerLauncher:
             self._args += [f"--extra-arg={arg}"]
         self._extra_env = dict(extra_env or {})
         self._config_dir = config_dir
-        self._timeout = startup_timeout_s
+        self._silence_timeout = silence_timeout_s
+        self._last_output = time.monotonic()
         self._lock = threading.Lock()
         self._proc: subprocess.Popen[str] | None = None
         self._endpoint: WorkerEndpoint | None = None
@@ -267,6 +271,7 @@ class SubprocessWorkerLauncher:
 
         def drain(stream: IO[str]) -> None:
             for line in stream:
+                self._last_output = time.monotonic()
                 text = line.rstrip()
                 if not port and text.startswith(READY_PREFIX):
                     try:
@@ -294,8 +299,14 @@ class SubprocessWorkerLauncher:
     def _await_announcement(self, proc: subprocess.Popen[str], ready: threading.Event, port: list[int], ready_file: Path) -> int:
         """The worker's port, from the READY line or the ready-file —
         whichever lands first. Readiness must not hinge on one specific line
-        crossing the stdout pipe (F-038's silence made that channel suspect)."""
-        deadline = time.monotonic() + self._timeout
+        crossing the stdout pipe (F-038's silence made that channel suspect).
+
+        The deadline is liveness, not a wall clock: a worker that keeps
+        producing output (stage markers, import progress, stack dumps) is
+        waited for; one that has said nothing for `silence_timeout_s` is
+        dead or wedged — and by then the worker's own stall watchdog has
+        already dumped every thread's stack into the tail we report."""
+        self._last_output = time.monotonic()
         while True:
             if port:
                 return port[0]
@@ -306,9 +317,13 @@ class SubprocessWorkerLauncher:
                 except (OSError, ValueError, KeyError, TypeError):
                     pass  # written concurrently; re-read on the next tick
             if proc.poll() is not None and ready.is_set():
-                raise self._startup_failure(proc, deadline_note=f"startup deadline {self._timeout:.0f}s")
-            if time.monotonic() >= deadline:
-                raise self._startup_failure(proc, deadline_note=f"startup deadline {self._timeout:.0f}s")
+                raise self._startup_failure(proc, deadline_note=f"silence deadline {self._silence_timeout:.0f}s")
+            silence = time.monotonic() - self._last_output
+            if silence >= self._silence_timeout:
+                raise self._startup_failure(
+                    proc,
+                    deadline_note=f"no output for {silence:.0f}s (silence deadline {self._silence_timeout:.0f}s) — a live worker keeps talking",
+                )
             ready.wait(0.15)
 
     def _probe_until_serving(self, proc: subprocess.Popen[str], endpoint: WorkerEndpoint) -> None:
