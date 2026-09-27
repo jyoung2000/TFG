@@ -23,6 +23,16 @@ class TestVramGuardSettings:
         # The non-distilled 22B genuinely does not fit a 12 GB card.
         assert test_state.vram.needed_mb("ltx2_22B") > 11000
 
+    def test_measured_default_admits_a_render_at_the_measured_peak(self, client, fake_services):
+        """Round-4 (4070, 2026-09-27): the committed thresholds come from a real
+        cold render, so a 12 GB desktop that has 8.5 GB free must be allowed to
+        start it. The old blanket 8000 (+512 = 8512) refused this exact case,
+        which is the "refuses every render the hardware could attempt" bug.
+        Measured peak - baseline for a cold 540p 6 s Fast clip: 3966 MiB."""
+        fake_services.nvml.used_mb = 12288 - 8500  # 8.5 GB free: a loaded desktop
+        r = client.post("/api/vision/prepare-render", json={"model_type": "ltx2_22B_distilled"})
+        assert r.status_code == 200, r.json()
+
     def test_settings_override_reaches_the_guard_and_zero_restores(self, client, test_state):
         default = test_state.vram.needed_mb("ltx2_22B_distilled")
         r = client.post("/api/settings", json={"vram_render_needs_mb": {"ltx2_22B_distilled": 7000}})

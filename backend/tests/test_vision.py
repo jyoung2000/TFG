@@ -67,19 +67,36 @@ class TestFlorencePostProcessing:
 
 class TestVramManager:
     def test_prepare_unloads_lowest_priority_first_and_keeps_florence_when_it_fits(self):
-        nvml = FakeNvml(total_mb=12288, used_mb=12288 - 5000)  # 5 GB free
+        """Unload order is dino (20) -> clip (40) -> florence (80), and florence
+        must survive once there is headroom without it.
+
+        Round 4: the free-VRAM figures are derived from the live `needed_mb`
+        instead of being hardcoded. They used to be the literals 5 GB and
+        7.5 GB, which were only "too tight" while RENDER_NEEDS_MB held an
+        unmeasured 8000; committing the measured 4400 made a literal 5 GB
+        sufficient, so the expected VramError stopped raising and this test
+        broke through no fault of its own. Deriving the inputs keeps both
+        assertions meaningful for any threshold.
+        """
+        probe = VramManager(FakeNvml(total_mb=12288, used_mb=12288 - 1000))
+        need = probe.needed_mb("ltx2_22B_distilled")  # configured + SAFETY_MARGIN_MB
+        all_three = 200 + 1000 + 1700  # dino + clip + florence
+
+        # Not enough even after unloading everything: must raise, and must have
+        # tried all three in priority order.
+        nvml = FakeNvml(total_mb=12288, used_mb=12288 - (need - all_three - 500))
         manager = VramManager(nvml)
         unloaded: list[str] = []
         manager.register("dino", "S", 200, lambda: unloaded.append("dino"), priority=20)
         manager.register("clip", "M", 1000, lambda: unloaded.append("clip"), priority=40)
         manager.register("florence", "M", 1700, lambda: unloaded.append("florence"), priority=80)
-        # needs 8 GB + margin; 5 GB free → dino + clip (6.2) still short → florence goes too (7.9) → still short
         with pytest.raises(VramError) as excinfo:
             manager.prepare_for_render("ltx2_22B_distilled")
         assert unloaded == ["dino", "clip", "florence"]
         assert "Free" in str(excinfo.value) and "GB" in str(excinfo.value)
 
-        nvml = FakeNvml(total_mb=12288, used_mb=12288 - 7500)  # 7.5 GB free
+        # Tight but sufficient once dino + clip go: florence must NOT be evicted.
+        nvml = FakeNvml(total_mb=12288, used_mb=12288 - (need - 500))
         manager = VramManager(nvml)
         unloaded.clear()
         manager.register("dino", "S", 200, lambda: unloaded.append("dino"), priority=20)
