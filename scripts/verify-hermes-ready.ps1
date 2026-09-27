@@ -10,5 +10,10 @@ $pkg = Get-Content (Join-Path $root 'package.json') -Raw
 foreach ($s in @('backend:dev','backend:dev:win','agent:mcp','setup:dev:win','dev','e2e','test:frontend')) {
   if ($pkg -match [regex]::Escape("`"$s`"")) { Write-Host "ok       pnpm $s" } else { Write-Host "MISSING  pnpm $s"; $miss = 1 }
 }
+# Round 2 lost an hour to a narrow fetch refspec: git pull said "Already up to
+# date" while the branch sat 6 commits behind. Detect that trap here.
+$refspecs = git config --get-all remote.origin.fetch 2>$null
+if ($refspecs -match [regex]::Escape('refs/heads/*')) { Write-Host 'ok       git fetch refspec covers all branches' }
+else { Write-Host "MISSING  git fetch refspec is narrow - run: git config --replace-all remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'; git fetch origin"; $miss = 1 }
 if ((Get-Content (Join-Path $root 'README.md') -Raw) -match 'Windows WanGP Quick Start') { Write-Host 'ok       README Windows WanGP Quick Start' } else { Write-Host 'MISSING  README section'; $miss = 1 }
 exit $miss

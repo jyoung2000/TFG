@@ -12,5 +12,14 @@ done
 for s in backend:dev backend:dev:win agent:mcp setup:dev:win dev e2e test:frontend; do
   if grep -q "\"$s\"" "$root/package.json"; then echo "ok       pnpm $s"; else echo "MISSING  pnpm $s"; miss=1; fi
 done
+# Round 2 lost an hour to a narrow fetch refspec: `git pull` said "Already up
+# to date" while the branch sat 6 commits behind and docs/HERMES_ROUND2_PROMPT.md
+# "did not exist". Detect that trap here.
+if git config --get-all remote.origin.fetch 2>/dev/null | grep -q "refs/heads/\*"; then
+  echo "ok       git fetch refspec covers all branches"
+else
+  echo "MISSING  git fetch refspec is narrow - run: git config --replace-all remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*' && git fetch origin"
+  miss=1
+fi
 grep -q "Windows WanGP Quick Start" "$root/README.md" && echo "ok       README Windows WanGP Quick Start" || { echo "MISSING  README section"; miss=1; }
 exit $miss

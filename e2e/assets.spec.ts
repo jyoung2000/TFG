@@ -30,8 +30,13 @@ test.describe('assets', () => {
 
   test('library grid shows consistency state and filters', async ({ page }) => {
     const guard = await openAssets(page)
-    await expect(page.getByTestId('asset-grid')).toBeVisible()
-    await expect(page.getByTestId('asset-card').first()).toBeVisible()
+    // Cold-start headroom (round-2 F-041): the first navigation of a fresh
+    // dev server compiles the whole project view, which once pushed this
+    // spec past the default expect timeout under a loaded machine. Wait for
+    // the grid AND a specific seeded card, so the count below is taken from
+    // fully loaded film data, never from a mid-load render.
+    await expect(page.getByTestId('asset-grid')).toBeVisible({ timeout: 30_000 })
+    await expect(page.getByTestId('asset-card').filter({ hasText: 'Mara' })).toBeVisible({ timeout: 30_000 })
     // Every card carries the four consistency pips.
     await expect(page.getByTestId('asset-card').first().getByText('REF', { exact: true })).toBeVisible()
     // The rail filters the grid; an empty filter shows the ghost card, not a bare panel.
