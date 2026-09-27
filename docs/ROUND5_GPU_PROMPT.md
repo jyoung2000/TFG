@@ -126,8 +126,10 @@ not found. A user would see this as "sometimes it hangs".
 
 ## 3. F-052 — the native `0xc000070a` crash on first cold start
 
-1. Cold-start the app 10 times: reboot once, then kill every
-   python/electron process between starts.
+1. Cold-start the app 10 times, killing every python/electron process
+   between starts. **Never reboot the machine yourself**: that ends this
+   session. If you think a post-reboot cold start matters, commit and push
+   first, then ask the user to reboot and resume you.
 2. If it recurs, collect:
    - The Windows Event Log Application Error entry:
      `Get-WinEvent -FilterHashtable @{LogName='Application'; Id=1000} -MaxEvents 5 | Format-List`.
