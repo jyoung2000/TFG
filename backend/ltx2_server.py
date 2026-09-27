@@ -372,6 +372,13 @@ if __name__ == "__main__":
     logger.info("=" * 60)
     logger.info("LTX-2 Video Generation Server (FastAPI + Uvicorn)")
     log_hardware_info()
+    # F-040: a corrupt opencv install (namespace-package cv2) must stop the
+    # server here with the repair command, not surface as 57 pyright errors
+    # and AttributeErrors mid-export.
+    from services.video_processor.cv2_check import verify_cv2
+
+    verify_cv2()
+    logger.info("cv2: OK")
     logger.info("=" * 60)
 
     warmup_thread = threading.Thread(target=background_warmup, daemon=True)
