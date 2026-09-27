@@ -143,23 +143,38 @@ class VisionHandler(StateHandlerBase):
     def optional_vlm(self, director_fallback: LLMProvider | None = None) -> LLMProvider | None:
         """The vision-language model for analysis, or None. Independent of the
         AI Director unless the user explicitly picks `director`."""
+        return self.optional_vlm_with_reason(director_fallback)[0]
+
+    def optional_vlm_with_reason(self, director_fallback: LLMProvider | None = None) -> tuple[LLMProvider | None, str]:
+        """The VLM plus, when there is none, WHY there is none — a
+        user-facing sentence naming the setting to change. Round 2 (F-015's
+        second half) configured a VLM that never reached the analysis path
+        and the response never said so; every analysis now carries the
+        effective answer instead of silently falling back."""
         current = self.settings()
-        if not current.enabled or current.vlm_provider == "off":
-            return None
-        if current.vlm_provider == "director":
-            return director_fallback
+        if not current.enabled:
+            return None, "the vision stack is disabled (Settings → Vision)"
+        if current.vlm_provider == "off":
+            return None, 'Settings → Vision → VLM is "off"'
         with self.lock:
             app = self.state.app_settings
+        if current.vlm_provider == "director":
+            if director_fallback is None:
+                return None, (
+                    'Settings → Vision → VLM is "director", but the AI Director has no usable provider — '
+                    'configure the Director, or set the VLM slot to "ollama" or "openai_compatible"'
+                )
+            return director_fallback, ""
         if current.vlm_provider == "ollama":
             root, model = self._ollama_target(current)
             if not root or not model:
-                return None
-            return OpenAICompatibleProvider(self._http, "ollama", model, base_url=f"{root}/v1", name="ollama")
+                return None, 'Settings → Vision → VLM is "ollama" but no server URL or model is configured (is Ollama running?)'
+            return OpenAICompatibleProvider(self._http, "ollama", model, base_url=f"{root}/v1", name="ollama"), ""
         base_url = current.vlm_base_url.rstrip("/") or app.openai_compatible_base_url.rstrip("/")
         model = current.vlm_model or app.openai_compatible_model
         if not base_url or not model:
-            return None
-        return OpenAICompatibleProvider(self._http, app.openai_compatible_api_key or "local", model, base_url=base_url, name="openai_compatible")
+            return None, 'Settings → Vision → VLM is "openai_compatible" but the base URL or model id is missing'
+        return OpenAICompatibleProvider(self._http, app.openai_compatible_api_key or "local", model, base_url=base_url, name="openai_compatible"), ""
 
     # ---- analysis -----------------------------------------------------------
 

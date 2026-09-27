@@ -13,9 +13,12 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, TypeVar, cast
+
+_T = TypeVar("_T")
 
 from PIL import Image
 
@@ -47,6 +50,42 @@ FLORENCE_MODELS: dict[str, FlorenceModelSpec] = {
     "florence-2-flux-large": FlorenceModelSpec("florence-2-flux-large", "gokaygokay/Florence-2-Flux-Large", "M", 1700, description="captions phrased for Flux/T5 prompts"),
 }
 DEFAULT_FLORENCE_MODEL = "florence-2-large"
+
+#: transformers ships Florence-2 natively since 4.55, and this codebase loads
+#: the native classes (no trust_remote_code). The ORIGINAL microsoft/* repos
+#: still carry their pre-port configs: their BART tokenizer defines no
+#: `image_token`, which the native Florence2Processor reads unconditionally
+#: (processing_florence2.py:121 in the locked 4.57.6) — so AutoProcessor dies
+#: with "BartTokenizerFast has no attribute image_token" (round-2 F-015) and
+#: captions/regions silently vanish downstream. These are the checkpoints
+#: converted for the native port; `load()` falls back to them when the
+#: original repo's artifacts are incompatible.
+NATIVE_CONVERSIONS: dict[str, str] = {
+    "microsoft/Florence-2-base": "florence-community/Florence-2-base",
+    "microsoft/Florence-2-large": "florence-community/Florence-2-large",
+    "microsoft/Florence-2-base-ft": "florence-community/Florence-2-base-ft",
+    "microsoft/Florence-2-large-ft": "florence-community/Florence-2-large-ft",
+}
+
+
+def load_with_native_fallback(repo_id: str, loader: "Callable[[str], _T]") -> "tuple[_T, str]":
+    """Load Florence artifacts from `repo_id`; when that fails and a
+    native-port conversion is known, retry from it. Returns (artifacts, the
+    repo actually used). A double failure names both repos so the error is
+    actionable rather than a bare tokenizer AttributeError."""
+    try:
+        return loader(repo_id), repo_id
+    except Exception as first:  # noqa: BLE001 - any load failure triggers the one known fallback
+        fallback = NATIVE_CONVERSIONS.get(repo_id)
+        if fallback is None:
+            raise
+        logger.warning("Florence-2 load from %s failed (%s); retrying from the native-port conversion %s", repo_id, first, fallback)
+        try:
+            return loader(fallback), fallback
+        except Exception as second:  # noqa: BLE001
+            raise RuntimeError(
+                f"Florence-2 could not load from {repo_id} ({first}) nor from its native-port conversion {fallback} ({second})"
+            ) from second
 
 #: Task token per public task name (adapted from kijai's task map).
 TASK_TOKENS: dict[str, str] = {
@@ -135,8 +174,17 @@ class Florence2:
         if self._cache_dir is not None:
             kwargs["cache_dir"] = str(self._cache_dir)
         logger.info("Loading %s (%s) on %s", self.spec.id, self.spec.repo_id, device)
-        self._processor = AutoProcessor.from_pretrained(self.spec.repo_id, **({"cache_dir": str(self._cache_dir)} if self._cache_dir else {}))  # pyright: ignore[reportUnknownMemberType]
-        model = Florence2ForConditionalGeneration.from_pretrained(self.spec.repo_id, **kwargs)  # pyright: ignore[reportUnknownMemberType]
+
+        def load_pair(repo: str) -> tuple[Any, Any]:
+            # Processor and model from the SAME repo, so configs and weights
+            # can never mix across the original and the converted checkpoint.
+            processor = cast(Any, AutoProcessor.from_pretrained(repo, **({"cache_dir": str(self._cache_dir)} if self._cache_dir else {})))  # pyright: ignore[reportUnknownMemberType]
+            model = cast(Any, Florence2ForConditionalGeneration.from_pretrained(repo, **kwargs))  # pyright: ignore[reportUnknownMemberType]
+            return processor, model
+
+        (self._processor, model), used_repo = load_with_native_fallback(self.spec.repo_id, load_pair)
+        if used_repo != self.spec.repo_id:
+            logger.info("Florence-2 %s loaded from the native-port conversion %s", self.spec.id, used_repo)
         self._model = model.to(device).eval()  # pyright: ignore[reportUnknownMemberType]
         self._device = device
 

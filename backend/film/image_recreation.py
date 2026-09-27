@@ -312,16 +312,25 @@ class ImageRecreation:
             parts.append("colour palette " + ", ".join(h for h in hexes if h))
         return ", ".join(p for p in parts if p)
 
-    def analyze(self, id: str, provider: LLMProvider | None) -> ImageAnalysis:
+    def analyze(self, id: str, provider: LLMProvider | None, *, vlm_note: str = "") -> ImageAnalysis:
         job = self.get(id)
         grounding = self._run_local_stack(job)
+        # Degradation must be legible in the response, never silent empty
+        # fields (round-2 F-015): say why the VLM was skipped and that a
+        # missing Florence caption reduces the spec to CLIP-tag grade.
+        if provider is None and vlm_note:
+            job.vision_notes["vlm"] = f"VLM skipped: {vlm_note}"
+        if not job.caption:
+            reason = job.vision_notes.get("caption", "Florence-2 produced no caption")
+            job.vision_notes["degraded"] = f"CLIP tags only — captioning unavailable: {reason}"
         if provider is None:
             prompt = self._offline_prompt(job)
             if not prompt.strip():
                 raise HTTPError(
                     400,
                     "No vision model produced anything: enable Florence-2 or a VLM in Settings → Vision "
-                    "(the local stack needs its weights downloaded from the Model Library).",
+                    "(the local stack needs its weights downloaded from the Model Library)."
+                    + (f" VLM: {vlm_note}." if vlm_note else ""),
                 )
             job.prompt = prompt
             job.description = job.caption

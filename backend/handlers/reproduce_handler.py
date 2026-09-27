@@ -207,7 +207,7 @@ class ReproduceHandler(StateHandlerBase):
     def _default_target(self) -> str:
         return resolve_target(self._image_model)[0].id if self._image_model else "z_image"
 
-    def analyze(self, job_id: str, provider: LLMProvider | None) -> ReproduceJob:
+    def analyze(self, job_id: str, provider: LLMProvider | None, *, vlm_note: str = "") -> ReproduceJob:
         """Offline stack → spec; VLM (optional) fills scene/lighting/narrative."""
         job = self.get(job_id)
         if job.is_busy:
@@ -228,13 +228,21 @@ class ReproduceHandler(StateHandlerBase):
         job.depth_path = Path(analysis.depth.depth_png).name if analysis.depth and Path(analysis.depth.depth_png).parent == self._dir(job.id) else job.depth_path
         job.why = self._why(analysis, job.spec)
         job.vision_model = "local-stack"
+        # Degradation is stated, never silent (round-2 F-015): why the VLM was
+        # skipped, and that a missing caption leaves a CLIP-tag-grade spec.
+        if provider is None and vlm_note:
+            job.why["vlm"] = f"VLM skipped: {vlm_note}"
+        degraded = analysis.caption is None
+        if degraded:
+            reason = analysis.notes.get("caption", "Florence-2 produced no caption")
+            job.why["caption_degraded"] = f"CLIP tags only — captioning unavailable: {reason}"
         if provider is not None:
             self._describe_with_vlm(job, analysis, provider)
         compiled = self._compile(job)
         job.prompt = job.prompt_override or compiled.prompt
         job.negative_prompt = compiled.negative_prompt
         job.status = "idle"
-        job.message = "Analysed"
+        job.message = "Analysed (captioning unavailable — CLIP tags only)" if degraded and provider is None else "Analysed"
         return self._save(job)
 
     def _describe_with_vlm(self, job: ReproduceJob, analysis: VisionAnalysis, provider: LLMProvider) -> None:

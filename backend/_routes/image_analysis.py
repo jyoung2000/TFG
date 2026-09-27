@@ -51,8 +51,10 @@ def delete_analysis(analysis_id: str, handler: AppHandler = Depends(get_state_se
 @router.post("/{analysis_id}/analyze", response_model=ImageAnalysis)
 def analyze_image(analysis_id: str, handler: AppHandler = Depends(get_state_service)) -> ImageAnalysis:
     # The vision slot (Settings → Vision), not the Director's text model.
-    vlm = handler.vision.optional_vlm(handler.film_director.optional_provider("storyboard"))
-    return handler.image_recreation.analyze(analysis_id, vlm)
+    # The reason a VLM is unavailable travels with the analysis, so the
+    # response can say WHY it degraded instead of silently emptying fields.
+    vlm, note = handler.vision.optional_vlm_with_reason(handler.film_director.optional_provider("storyboard"))
+    return handler.image_recreation.analyze(analysis_id, vlm, vlm_note=note)
 
 
 @router.post("/{analysis_id}/render", response_model=ImageAnalysis)

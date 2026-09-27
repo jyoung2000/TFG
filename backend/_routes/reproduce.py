@@ -88,7 +88,8 @@ def route_delete(job_id: str, handler: AppHandler = Depends(get_state_service)) 
 
 @router.post("/{job_id}/analyze", response_model=ReproduceJob)
 def route_analyze(job_id: str, handler: AppHandler = Depends(get_state_service)) -> ReproduceJob:
-    return handler.reproduce.analyze(job_id, _vlm(handler))
+    vlm, note = handler.vision.optional_vlm_with_reason(handler.film_director.optional_provider("storyboard"))
+    return handler.reproduce.analyze(job_id, vlm, vlm_note=note)
 
 
 @router.put("/{job_id}/spec", response_model=ReproduceJob)
