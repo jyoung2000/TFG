@@ -27,6 +27,10 @@ import json, os, queue, threading, time
 from pathlib import Path
 from types import SimpleNamespace
 
+# Simulate WanGP's slow first import: torch + gradio + CUDA DLLs take ~1 min and
+# hold the GIL. FAKE_WANGP_IMPORT_DELAY makes that cost controllable in tests.
+time.sleep(float(os.environ.get("FAKE_WANGP_IMPORT_DELAY", "0")))
+
 
 class _Events:
     def __init__(self):
@@ -343,5 +347,46 @@ class TestExtraArgForwarding:
             _wait_status(bridge)
             output = _render(bridge)
             assert Path(output).read_bytes() == b"fake-wangp-video"
+        finally:
+            launcher.stop()
+
+class TestWorkerReadiness:
+    """F-036: READY must mean "can serve", not "process launched".
+
+    WanGP's first import costs ~1 minute on this card and loads torch's CUDA
+    DLLs. The worker used to kick that off in a background thread and print
+    TFG_WANGP_WORKER_READY immediately, so the launcher reported a started
+    worker whose HTTP server could not answer for the whole import: every
+    request timed out (including a plain GET /status) and the first render
+    failed with "WanGP worker: timed out on /api/wangp/manifest".
+
+    FAKE_WANGP_IMPORT_DELAY stands in for that import cost.
+    """
+
+    def test_ready_is_announced_only_after_the_import_finishes(self, tmp_path: Path):
+        root = _checkout(tmp_path)
+        launcher = SubprocessWorkerLauncher(
+            python=sys.executable,
+            root=root,
+            output_dir=tmp_path / "outputs",
+            config_dir=tmp_path / "cfg",
+            video_model_type="ltx2_22B_distilled",
+            image_model_type="z_image",
+            extra_env={"FAKE_WANGP_DELAY": "0.1", "FAKE_WANGP_IMPORT_DELAY": "6"},
+            startup_timeout_s=60,
+        )
+        try:
+            t0 = time.time()
+            endpoint = launcher.ensure_started()
+            announced_after = time.time() - t0
+            # RED before the fix: READY arrives in ~0.1s, before the import.
+            assert announced_after >= 5, f"announced ready after only {announced_after:.1f}s, import still running"
+            # ...and it really can serve, not just claim to.
+            body = LoopbackHTTPClient().get(
+                f"{endpoint.base_url}/api/wangp/status",
+                headers={"Authorization": f"Bearer {endpoint.token}"},
+                timeout=10,
+            ).json()
+            assert isinstance(body, dict) and body["loading"] is False
         finally:
             launcher.stop()

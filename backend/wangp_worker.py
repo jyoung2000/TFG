@@ -94,20 +94,21 @@ class Worker:
         self._lock = threading.Lock()
         self._status: dict[str, object] = {"available": False, "reason": "WanGP worker is loading its libraries", "loading": True}
 
-    # The first import of WanGP (torch, gradio, …) takes a while; do it once in
-    # the background so /status stays instant and the first render is warm.
+    # The first import of WanGP (torch, gradio, …) takes ~1 minute and holds the
+    # GIL while its CUDA DLLs load. It must therefore finish BEFORE we print
+    # TFG_WANGP_WORKER_READY: announcing readiness first makes the launcher
+    # report a started worker whose ThreadingHTTPServer cannot answer for the
+    # whole import, so every request (including a plain GET /status) times out
+    # and the first render fails with "timed out on /api/wangp/manifest".
     def warm_up(self) -> None:
-        def run() -> None:
-            try:
-                status = self._bridge.get_status()
-                snapshot: dict[str, object] = {"available": bool(status.available), "reason": status.reason or "", "loading": False}
-            except Exception as exc:  # noqa: BLE001 - reported through /status
-                snapshot = {"available": False, "reason": f"Unable to import WanGP API: {exc}", "loading": False}
-            with self._lock:
-                self._status = snapshot
-            logger.info("WanGP worker status: %s", snapshot)
-
-        threading.Thread(target=run, name="wangp-warm-up", daemon=True).start()
+        try:
+            status = self._bridge.get_status()
+            snapshot: dict[str, object] = {"available": bool(status.available), "reason": status.reason or "", "loading": False}
+        except Exception as exc:  # noqa: BLE001 - reported through /status
+            snapshot = {"available": False, "reason": f"Unable to import WanGP API: {exc}", "loading": False}
+        with self._lock:
+            self._status = snapshot
+        logger.info("WanGP worker status: %s", snapshot)
 
     def status(self) -> dict[str, object]:
         with self._lock:
