@@ -54,8 +54,14 @@ class FakeLoraFetcher:
         with dest.open("wb") as handle:
             handle.write(self.content[:half])
             on_progress(half, self.size_bytes)
-            if self.cancel_mid_download or is_cancelled():
-                dest.unlink(missing_ok=True)
-                raise LoraDownloadCancelled()
-            handle.write(self.content[half:])
-            on_progress(len(self.content), self.size_bytes)
+            cancelled = self.cancel_mid_download or is_cancelled()
+            if not cancelled:
+                handle.write(self.content[half:])
+                on_progress(len(self.content), self.size_bytes)
+        # Remove the partial file only after the handle is closed: Windows
+        # refuses to unlink a file that is still open (PermissionError,
+        # WinError 32), which turned a cancellation into a failure.
+        # RequestsLoraFetcher.download already unlinks outside its `with`.
+        if cancelled:
+            dest.unlink(missing_ok=True)
+            raise LoraDownloadCancelled()
