@@ -456,3 +456,15 @@
 Nothing pending in this session. Real-GPU acceptance (docs/RTX_4070_TEST_MATRIX.md) and `pnpm build:win` need the 4070
 machine; a live `hermes mcp test tfg` needs a Hermes install. Watch the PR for review comments. Hermes audit PR #2
 (scoped to 64bb6a3) is open into hermes-review; the LoRA-download feature and this redesign are newer than its scope.
+
+## Off-hardware fixes after round 4 (2026-09-27)
+- F-058: VRAM thresholds 5200 / 5400 from max(History, sampler) − baseline (round 4 used the sampler only).
+- F-059 (F-054): WanGP step counts now cross worker → container route → desktop bridge; frontend fallback
+  curve (`frontend/lib/generation-progress.ts`) replaces the 45 s straight line that froze at ~91–95%.
+- F-060 (F-056): backend `/api/wangp/status` reports the app's own render as busy; remote manifests get 409 meanwhile.
+- F-061 (F-053): set_overrides docstring corrected; `{}` via the settings API is a no-op, `0` drops an override.
+- CI (`ci.yml`) now runs on push/PR to `latest`, including the installer jobs. CI has no e2e job, although
+  CLAUDE.md lists `pnpm e2e` among the PR checks.
+- Home copy quotes measured times.
+- Round-5 GPU prompt: docs/ROUND5_GPU_PROMPT.md (verify the above on the card; F-057 variance with RAM/paging
+  logging; F-052 crash capture; installer in Windows Sandbox; blocked matrix rows; remaining GUI screens).
