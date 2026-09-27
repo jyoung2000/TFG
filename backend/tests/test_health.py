@@ -92,3 +92,29 @@ class TestGpuInfo:
         assert data["gpu_available"] is True
         assert data["gpu_name"] == "Apple Silicon (MPS)"
         assert data["vram_gb"] == 36
+
+
+class TestWanGPHealthAgreesWithTheLibrary:
+    """Round 3: /health and the Model Library must answer "installed?" from
+    the same predicate. Round 2 saw them disagree live: the checkpoint was
+    on disk (library: installed=True) while /health's `downloaded` echoed
+    bridge availability — environment health, not weight presence."""
+
+    def _enable_wangp(self, test_state, fake_services, *, installed: bool, available: bool):
+        test_state.config.wangp_enabled = True
+        fake_services.wangp_bridge.available = available
+        fake_services.wangp_bridge.definitions = [
+            {"id": "ltx2_22B_distilled", "name": "LTX-2 22B distilled", "installed": installed},
+        ]
+
+    def test_weights_on_disk_report_downloaded_even_when_the_worker_is_broken(self, client, test_state, fake_services):
+        # Round 2's live state: checkpoint installed, worker unavailable (F-038).
+        self._enable_wangp(test_state, fake_services, installed=True, available=False)
+        status = client.get("/health").json()["models_status"][0]
+        assert status["downloaded"] is True, status
+        assert status["loaded"] is False, status
+
+    def test_missing_weights_report_not_downloaded_even_when_the_bridge_is_healthy(self, client, test_state, fake_services):
+        self._enable_wangp(test_state, fake_services, installed=False, available=True)
+        status = client.get("/health").json()["models_status"][0]
+        assert status["downloaded"] is False, status
