@@ -28,6 +28,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+#: F-034 bounds: 16-multiple sides between these are honest work; anything
+#: outside is a typo or an attack on the card, refused before CUDA sees it.
+_MIN_DIM = 64
+_MAX_DIM = 4096
+
 
 class ImageGenerationHandler(StateHandlerBase):
     def __init__(
@@ -63,6 +68,11 @@ class ImageGenerationHandler(StateHandlerBase):
         """Render images. `job_id` reuses an existing History job; `seed` pins the seed (re-runs)."""
         if self._generation.is_generation_running():
             raise HTTPError(409, "Generation already in progress")
+        # F-034: bound dimensions before any pipeline or CUDA work — 99999²
+        # used to reach the card and come back as a raw 500 CUDA OOM.
+        for side, value in (("width", req.width), ("height", req.height)):
+            if not (_MIN_DIM <= value <= _MAX_DIM):
+                raise HTTPError(400, f"{side} must be between {_MIN_DIM} and {_MAX_DIM} pixels (got {value})")
         tracked = self._open_job(req, job_id, seed)
         peak_mb: int | None = None
         try:
