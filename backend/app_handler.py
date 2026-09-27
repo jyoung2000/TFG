@@ -534,6 +534,7 @@ class AppHandler:
             outputs_dir=config.outputs_dir,
             task_runner=task_runner,
             jobs=self.jobs,
+            generation=self.generation,
         )
         self.scene = SceneHandler(
             state=self.state,

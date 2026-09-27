@@ -20,6 +20,7 @@ from typing import Any, cast
 
 from _routes._errors import HTTPError
 from handlers.base import StateHandlerBase
+from handlers.generation_handler import GenerationHandler
 from handlers.jobs_handler import JobsHandler
 from server_utils.path_policy import is_within
 from services.interfaces import TaskRunner
@@ -37,6 +38,8 @@ class ManifestJob:
     status: str = "queued"  # queued | running | complete | failed | cancelled
     phase: str = ""
     progress: float | None = None
+    current_step: int | None = None
+    total_steps: int | None = None
     outputs: list[str] = field(default_factory=list[str])
     error: str = ""
     cancelled: bool = False
@@ -53,9 +56,11 @@ class WanGPServerHandler(StateHandlerBase):
         outputs_dir: Path,
         task_runner: TaskRunner,
         jobs: JobsHandler | None = None,
+        generation: GenerationHandler | None = None,
     ) -> None:
         super().__init__(state, lock)
         self._bridge = bridge
+        self._generation = generation
         self._outputs_dir = outputs_dir
         self._uploads = outputs_dir / "remote_inputs"
         self._tasks = task_runner
@@ -70,7 +75,18 @@ class WanGPServerHandler(StateHandlerBase):
         status = self._bridge.get_status()
         with self._io:
             active = self._active
+        if not active:
+            # F-056: the app's own renders never pass through the manifest
+            # queue, so without this a busy backend reported busy:false.
+            active = self._local_render_job()
         return {"available": status.available, "reason": status.reason, "busy": bool(active), "active_job": active}
+
+    def _local_render_job(self) -> str:
+        """The History job id of this backend's own running render ("local" when
+        it is untracked), or "" when nothing is rendering."""
+        if self._generation is None or not self._generation.is_generation_running():
+            return ""
+        return self._generation.running_job_id() or "local"
 
     def definitions(self) -> list[dict[str, object]]:
         return self._bridge.list_model_definitions()
@@ -105,6 +121,8 @@ class WanGPServerHandler(StateHandlerBase):
             if not isinstance(params, dict):
                 raise HTTPError(400, "Every manifest entry needs a params object")
             self._check_paths(cast(dict[str, object], params))
+        if self._local_render_job():
+            raise HTTPError(409, "This backend is busy with its own render")
         with self._io:
             if self._active:
                 raise HTTPError(409, "The remote WanGP is busy with another job")
@@ -178,10 +196,12 @@ class WanGPServerHandler(StateHandlerBase):
             job.status = "running"
             job.phase = "starting"
 
-        def on_progress(phase: str, progress: int, _eta: int | None, _detail: int | None) -> None:
+        def on_progress(phase: str, progress: int, current_step: int | None, total_steps: int | None) -> None:
             with self._io:
                 job.phase = phase
                 job.progress = float(progress)
+                job.current_step = current_step
+                job.total_steps = total_steps
             if job.job_id and self._jobs is not None:
                 self._jobs.progress(job.job_id, float(progress), phase)
 

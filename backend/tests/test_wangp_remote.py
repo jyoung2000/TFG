@@ -79,6 +79,21 @@ class TestServerRoutes:
         assert status["available"] is True and status["busy"] is False
         assert client.get("/api/wangp/definitions").json()["definitions"][0]["id"] == "ltx2_22B_distilled"
 
+    def test_status_reports_the_apps_own_render_as_busy(self, client, test_state, fake_services):
+        """F-056 (round 4): during a local render the app's own WanGP status said
+        `busy:false, active_job:""`, because only remote manifests counted."""
+        fake_services.wangp_bridge.available = True
+        test_state.generation.start_api_generation("gen-1", job_id="job_local")
+        status = client.get("/api/wangp/status").json()
+        assert status["busy"] is True and status["active_job"] == "job_local"
+
+    def test_remote_job_is_refused_while_the_app_renders(self, client, test_state, fake_services):
+        """Status and admission agree: a busy backend answers 409, not a second GPU job."""
+        fake_services.wangp_bridge.available = True
+        test_state.generation.start_api_generation("gen-1", job_id="job_local")
+        r = client.post("/api/wangp/manifest", json={"manifest": [{"id": 1, "params": {"prompt": "p"}}], "media_suffixes": [".mp4"]})
+        assert r.status_code == 409
+
     def test_manifest_inputs_must_be_uploaded_files(self, client, fake_services, tmp_path: Path):
         fake_services.wangp_bridge.available = True
         secret = tmp_path / "secret.png"
@@ -134,6 +149,19 @@ class TestRemoteBridge:
         # And the container's own History recorded the remote job.
         job = client.get("/api/jobs", params={"kind": "video_gen", "limit": 1}).json()["jobs"][0]
         assert job["provider"] == "wangp-remote" and job["status"] == "complete"
+
+    def test_step_counts_cross_from_the_container_to_the_desktop(self, client, fake_services, tmp_path: Path):
+        """F-054: WanGP's current/total steps must survive the HTTP hop, or the
+        desktop's progress bar has nothing real to show."""
+        fake_services.wangp_bridge.available = True
+        bridge, _ = _bridge(client, tmp_path)
+        seen: list[tuple[str, int | None, int | None]] = []
+        bridge.generate_images(prompt="p", width=512, height=512, num_steps=8, num_images=1, seed=3,
+                               on_progress=lambda phase, _pct, cur, tot: seen.append((phase, cur, tot)), is_cancelled=lambda: False)
+        assert any(cur is not None and tot == 8 for _, cur, tot in seen), seen
+        job_id = client.get("/api/jobs", params={"kind": "image_gen", "limit": 1}).json()["jobs"][0]["inputs"]["remote_job"]
+        body = client.get(f"/api/wangp/jobs/{job_id}").json()
+        assert (body["current_step"], body["total_steps"]) == (8, 8)
 
     def test_generate_images_round_trip(self, client, fake_services, tmp_path: Path):
         fake_services.wangp_bridge.available = True

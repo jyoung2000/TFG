@@ -54,7 +54,7 @@ class FakeWanGPBridge(WanGPBridge):
             raise RuntimeError(self.fail_with)
         if is_cancelled():
             raise RuntimeError("Generation was cancelled")
-        on_progress("inference", 50, None, None)
+        on_progress("inference", 50, 4, 8)
         self._serial += 1
         self._output_dir.mkdir(parents=True, exist_ok=True)
         if ".mp4" in media_suffixes:
@@ -63,5 +63,5 @@ class FakeWanGPBridge(WanGPBridge):
         else:
             out = self._output_dir / f"wangp-fake-{self._serial}.png"
             Image.new("RGB", (64, 64), (20, 200, 120)).save(out)
-        on_progress("complete", 100, None, None)
+        on_progress("complete", 100, 8, 8)
         return [str(out)]

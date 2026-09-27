@@ -29,12 +29,23 @@ class ManifestJobResponse(BaseModel):
     status: str
     phase: str
     progress: float | None
+    current_step: int | None = None
+    total_steps: int | None = None
     outputs: list[str]
     error: str
 
 
 def _job_response(job: Any) -> ManifestJobResponse:
-    return ManifestJobResponse(id=job.id, status=job.status, phase=job.phase, progress=job.progress, outputs=list(job.outputs), error=job.error)
+    return ManifestJobResponse(
+        id=job.id,
+        status=job.status,
+        phase=job.phase,
+        progress=job.progress,
+        current_step=job.current_step,
+        total_steps=job.total_steps,
+        outputs=list(job.outputs),
+        error=job.error,
+    )
 
 
 @router.get("/status")

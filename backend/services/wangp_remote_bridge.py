@@ -121,9 +121,15 @@ class RemoteWanGPBridge(WanGPBridge):
             status = self._get_json(f"/api/wangp/jobs/{job_id}", timeout=15)
             phase = str(status.get("phase", "") or "")
             progress = status.get("progress")
+            current_step, total_steps = status.get("current_step"), status.get("total_steps")
             if phase and phase != last_phase or isinstance(progress, (int, float)):
                 last_phase = phase
-                on_progress(phase or "rendering", int(progress) if isinstance(progress, (int, float)) else 0, None, None)
+                on_progress(
+                    phase or "rendering",
+                    int(progress) if isinstance(progress, (int, float)) else 0,
+                    current_step if isinstance(current_step, int) else None,
+                    total_steps if isinstance(total_steps, int) else None,
+                )
             state = str(status.get("status", ""))
             if state in ("complete", "failed", "cancelled"):
                 break

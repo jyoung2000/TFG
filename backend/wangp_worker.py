@@ -106,6 +106,9 @@ class _Job:
     status: str = "queued"  # queued | running | complete | failed | cancelled
     phase: str = ""
     progress: float | None = None
+    #: WanGP's own step counts for the current phase (None when it has none).
+    current_step: int | None = None
+    total_steps: int | None = None
     outputs: list[str] = field(default_factory=list[str])
     error: str = ""
     cancelled: bool = False
@@ -116,6 +119,8 @@ class _Job:
             "status": self.status,
             "phase": self.phase,
             "progress": self.progress,
+            "current_step": self.current_step,
+            "total_steps": self.total_steps,
             "outputs": list(self.outputs),
             "error": self.error,
         }
@@ -194,9 +199,10 @@ class Worker:
                 return
             job.status, job.phase = "running", "starting"
 
-        def on_progress(phase: str, progress: int, _current: int | None, _total: int | None) -> None:
+        def on_progress(phase: str, progress: int, current: int | None, total: int | None) -> None:
             with self._lock:
                 job.phase, job.progress = phase, float(progress)
+                job.current_step, job.total_steps = current, total
 
         def is_cancelled() -> bool:
             with self._lock:

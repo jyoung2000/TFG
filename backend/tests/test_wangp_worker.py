@@ -632,3 +632,38 @@ class TestReadinessProbe:
             assert isinstance(body, dict) and body["available"] is True
         finally:
             launcher.stop()
+
+
+class _SteppingBridge:
+    """Emits one step-level progress event, then holds the job until released."""
+
+    def __init__(self) -> None:
+        import threading as _threading
+
+        self.release = _threading.Event()
+        self.reported = _threading.Event()
+
+    def run_manifest(self, *, manifest, media_suffixes, on_progress, is_cancelled):  # noqa: ARG002
+        on_progress("inference_stage_1", 40, 3, 8)
+        self.reported.set()
+        self.release.wait(5)
+        return []
+
+
+class TestWorkerStepProgress:
+    def test_job_payload_carries_wangps_step_counts(self):
+        """F-054 (round 4): the worker dropped current/total steps, so the app's
+        progress bar fell back to a 45 s guess and froze at 95%."""
+        import wangp_worker
+
+        bridge = _SteppingBridge()
+        worker = wangp_worker.Worker(bridge)
+        code, job = worker.submit([{"params": {"prompt": "p"}}], [".mp4"])
+        assert code == 200
+        assert bridge.reported.wait(5)
+        try:
+            _, payload = worker.get(str(job["id"]))
+            assert payload["phase"] == "inference_stage_1"
+            assert (payload["current_step"], payload["total_steps"]) == (3, 8)
+        finally:
+            bridge.release.set()
