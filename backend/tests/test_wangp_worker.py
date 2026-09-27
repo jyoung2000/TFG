@@ -416,3 +416,37 @@ class TestStartupTimeoutCoversTheImport:
         # Measured cold import: 55.8s. Anything under ~5 minutes reintroduces
         # the race on a slower disk or a busier machine.
         assert launcher._timeout >= 300, f"startup timeout {launcher._timeout}s cannot cover WanGP's cold import"
+
+
+class TestLauncherFailureDetail:
+    """Round 3, task 1a: a worker that fails to start must never fail silently.
+
+    Four round-2 attempts could not localise F-038 because the only signal was
+    "The WanGP worker did not start (no output)" — no exit code, no timeout, no
+    tail. The launcher error must carry all three.
+    """
+
+    def test_error_names_exit_code_deadline_and_output_tail(self, tmp_path: Path):
+        crasher = tmp_path / "crasher.py"
+        crasher.write_text(
+            "import sys\n"
+            "print('stage: loading doom', file=sys.stderr, flush=True)\n"
+            "print('boom: cannot find the flux capacitor', file=sys.stderr, flush=True)\n"
+            "sys.exit(7)\n"
+        )
+        launcher = SubprocessWorkerLauncher(
+            python=sys.executable,
+            root=_checkout(tmp_path),
+            output_dir=tmp_path / "outputs",
+            config_dir=tmp_path / "cfg",
+            video_model_type="ltx2_22B_distilled",
+            image_model_type="z_image",
+            startup_timeout_s=15,
+            script=crasher,
+        )
+        with pytest.raises(WanGPWorkerError) as excinfo:
+            launcher.ensure_started()
+        message = str(excinfo.value)
+        assert "exit code 7" in message, message
+        assert "flux capacitor" in message, message
+        assert "15" in message, message  # the deadline that governed

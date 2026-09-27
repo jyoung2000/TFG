@@ -20,6 +20,7 @@ import os
 import secrets
 import socket
 import subprocess
+import time
 import sys
 import threading
 from collections import deque
@@ -271,14 +272,31 @@ class SubprocessWorkerLauncher:
         assert proc.stdout is not None
         threading.Thread(target=drain, args=(proc.stdout,), name="wangp-worker-output", daemon=True).start()
         if not ready.wait(self._timeout) or not port:
-            proc.kill()
-            proc.wait(timeout=5)
-            detail = " | ".join(list(self._tail)[-6:]) or "no output"
-            raise WanGPWorkerError(f"The WanGP worker did not start ({detail})")
+            raise self._startup_failure(proc, deadline_note=f"startup deadline {self._timeout:.0f}s")
         self._proc = proc
         self._endpoint = WorkerEndpoint(base_url=f"http://127.0.0.1:{port[0]}", token=token)
         logger.info("WanGP worker started (pid %s) at %s", proc.pid, self._endpoint.base_url)
         return self._endpoint
+
+    def _startup_failure(self, proc: subprocess.Popen[str], *, deadline_note: str) -> WanGPWorkerError:
+        """Kill the worker and build an error that carries everything four
+        round-2 localisation attempts lacked: how the child ended (exit code,
+        or that we killed a still-running one), which deadline governed, and
+        the tail of its output — where the worker's stage markers and
+        faulthandler stack dumps land, so a stall names the exact stage."""
+        exited_code = proc.poll()
+        if exited_code is None:
+            proc.kill()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            pass
+        # Give the drain thread a beat to flush the last lines into the tail.
+        time.sleep(0.2)
+        how = f"exit code {exited_code}" if exited_code is not None else "still running — killed"
+        tail = list(self._tail)[-12:]
+        detail = "\n  ".join(tail) if tail else "no output at all"
+        return WanGPWorkerError(f"The WanGP worker did not start ({how}; {deadline_note}). Last output:\n  {detail}")
 
     def stop(self) -> None:
         with self._lock:

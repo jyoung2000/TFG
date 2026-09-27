@@ -25,6 +25,7 @@ the bearer token the backend put in ``TFG_WANGP_WORKER_TOKEN``.
 from __future__ import annotations
 
 import argparse
+import faulthandler
 import hmac
 import importlib.util
 import json
@@ -32,6 +33,7 @@ import logging
 import os
 import sys
 import threading
+import time
 import uuid
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -45,6 +47,20 @@ TOKEN_ENV = "TFG_WANGP_WORKER_TOKEN"
 _MAX_BODY_BYTES = 8 * 1024 * 1024
 
 logger = logging.getLogger("wangp_worker")
+
+_STARTED_AT = time.monotonic()
+
+
+def _trace(stage: str) -> None:
+    """One flushed, timestamped stage marker to stderr (the launcher merges
+    stderr into the pipe it drains and keeps as the error tail).
+
+    Round 2's F-038 burned four localisation attempts on a worker whose only
+    failure signal was "did not start (no output)": with zero markers there
+    was no way to tell an argparse death from a wedged DLL load. Every
+    startup stage now announces itself, so a stall names the stage it
+    stalled in."""
+    print(f"[wangp-worker +{time.monotonic() - _STARTED_AT:8.3f}s] {stage}", file=sys.stderr, flush=True)
 
 
 def _load_bridge_module() -> ModuleType:
@@ -275,12 +291,23 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s", stream=sys.stdout)
+    _trace(f"started (python {sys.version.split()[0]}, pid {os.getpid()})")
+    # A wedged startup must dump every thread's stack instead of going silent:
+    # crash tracebacks via enable(), and a periodic all-thread dump while any
+    # stage is still pending (cancelled once READY is out). faulthandler's
+    # watchdog is a C thread that needs no GIL, so it fires even when the
+    # main thread is stuck inside a DLL load holding the GIL — exactly the
+    # F-038 state py-spy caught (create_module under numpy, CPU flat).
+    faulthandler.enable(file=sys.stderr)
+    faulthandler.dump_traceback_later(60.0, repeat=True, exit=False, file=sys.stderr)
     token = os.environ.get(TOKEN_ENV, "")
     if len(token) < 16:
         print(f"{TOKEN_ENV} must be set by the backend that starts this worker", file=sys.stderr)
         return 2
 
+    _trace("loading the bridge module")
     bridge_module = _load_bridge_module()
+    _trace("bridge module loaded")
     bridge = bridge_module.WanGPBridge(
         enabled=True,
         root=Path(args.root),
@@ -295,9 +322,14 @@ def main(argv: list[str] | None = None) -> int:
     worker = Worker(bridge)
     server = ThreadingHTTPServer(("127.0.0.1", args.port), _make_handler(worker, token))
     server.daemon_threads = True
+    _trace(f"http server bound on 127.0.0.1:{server.server_address[1]}")
     threading.Thread(target=_exit_when_stdin_closes, name="wangp-parent-watch", daemon=True).start()
+    _trace("importing WanGP (shared.api — torch, gradio, CUDA DLLs; the slow part)")
     worker.warm_up()
+    _trace("WanGP import finished")
     print(f"{READY_PREFIX} {server.server_address[1]}", flush=True)
+    faulthandler.cancel_dump_traceback_later()
+    _trace("ready — serving")
     try:
         server.serve_forever(poll_interval=0.5)
     finally:
