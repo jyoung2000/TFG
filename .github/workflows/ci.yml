@@ -2,9 +2,11 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, latest]
   push:
-    branches: [main]
+    # `latest` is the single working branch (docs/HERMES_ROUND4_PROMPT.md):
+    # without it here, no gate ever ran on the work.
+    branches: [main, latest]
   workflow_dispatch:
 
 concurrency:
