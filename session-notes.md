@@ -434,6 +434,11 @@
   changed — the round-3 prompt orders app-path measurement first (needs the 4070).
 - Docs: HERMES_REVIEW.md "Round 3" appended (rounds 1-2 untouched); DEBUG_REPORT rows F-042..F-051 appended.
   No matrix changes: nothing was measured in this container. No screenshots: no desktop here.
+- Round-4 hardware prompt: docs/HERMES_ROUND4_PROMPT.md (branch review/hermes-round4 off fix/hermes-round3; F-038
+  verdict from the new stage markers/stack dumps; app-path image + Fast video with per-render baselines; stress:
+  409/cancel/backend-kill/worker-kill; real Florence caption + which repo loaded; VLM routing on/off; measure Fast +
+  Balanced then commit RENDER_NEEDS_MB from data; Electron GUI sweep with screenshots). PR #4 CI: none — ci.yml only
+  runs on main; local gates are the evidence.
 
 ## Next step
 Nothing pending in this session. Real-GPU acceptance (docs/RTX_4070_TEST_MATRIX.md) and `pnpm build:win` need the 4070
