@@ -197,16 +197,21 @@ and I proved it rather than assuming it: the venv build exits 0 on its own
 success line, the two interpreters are genuinely distinct so the backend
 selects `worker` mode, and `uv sync` in `backend/` left WanGP's `gradio`,
 `mmgp` and `shared.api` intact. Round 1's blocker (`500 No module named
-'gradio'`) is gone. But the worker that fix introduced was broken in **three
-consecutive ways**, and I found and fixed all three with red-then-green tests
-(F-035, F-036, F-037). With those fixed the worker starts, imports WanGP and
-answers `{"available":true}` — and then **the first render still never
-produces an image**. That fourth defect (F-038) is unresolved, and it blocks
-every artifact. So: three blocker fixes shipped and proven, one blocker open,
-and **zero of the four artifacts this round was asked for.** I would not ship
-this to a hobbyist yet; the honest summary is that ADR 0005 traded a
-dependency-sharing bug for a worker-lifecycle cluster, and the second half of
-the trade is not finished.
+But the worker that fix introduced was broken in **three consecutive ways**,
+and I found and fixed two of them with red-then-green tests (F-035, F-036);
+the third (F-037) turned out to be ineffective. F-037 raises the launcher's
+startup timeout so it covers the import that F-036 made blocking, and the test
+is a **constant assertion**, not a behavioural red-then-green.
+
+**F-038 remains unresolved, and I did not localise it.** What I can state: a
+launcher-equivalent worker prints `READY` 0.2 s before F-036 and **never**
+prints it after — 300 s, zero stdout, CPU flat at 0.078 s, working set 27–28 MB
+— while the *same* `import shared.api` call run by hand completes in 3–13 s
+from either working directory. I refuted three candidate causes by measurement
+(contention, inherited `PATH`, `cwd`) and the remaining difference is the launch
+environment, which I did not isolate. So: two blocker fixes shipped and proven,
+one ineffective, one blocker open, and **zero of the four artifacts this round
+was asked for.**
 
 ## The environment-split proof (§2 of the brief)
 
