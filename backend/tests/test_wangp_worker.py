@@ -297,3 +297,51 @@ class TestWorkerProcess:
         )
         status = bridge.get_status()
         assert status.available is False and status.reason is not None and "ensure-wangp-venv" in status.reason
+
+class TestExtraArgForwarding:
+    """F-035: the launcher's argument construction must survive argparse.
+
+    `WANGP_EXTRA_ARGS` carries WanGP's *own* options — `_resolve_wangp_extra_args`
+    appends ("--attention", "sdpa") for the embedded interpreter — and argparse
+    refuses to consume a token that starts with "-" as a value. Passing them as
+    separate tokens made the worker fail to start with
+    "argument --extra-arg: expected one argument", so no render ever ran.
+    """
+
+    def test_option_like_extra_args_reach_the_worker_and_it_starts(self, tmp_path: Path):
+        root = _checkout(tmp_path)
+        launcher = SubprocessWorkerLauncher(
+            python=sys.executable,
+            root=root,
+            output_dir=tmp_path / "outputs",
+            config_dir=tmp_path / "cfg",
+            video_model_type="ltx2_22B_distilled",
+            image_model_type="z_image",
+            # Exactly what _resolve_wangp_extra_args() produces on this machine.
+            extra_args=("--attention", "sdpa"),
+            extra_env={"FAKE_WANGP_DELAY": "0.1"},
+            startup_timeout_s=30,
+        )
+        bridge = WorkerWanGPBridge(
+            launcher=launcher,
+            root=root,
+            python_executable=sys.executable,
+            config_dir=tmp_path / "cfg",
+            output_dir=tmp_path / "outputs",
+            video_model_type="ltx2_22B_distilled",
+            image_model_type="z_image",
+            camera_motion_prompts={},
+            poll_seconds=0.05,
+        )
+        try:
+            endpoint = launcher.ensure_started()  # red before the fix: WanGPWorkerError
+            assert endpoint.token and endpoint.base_url.startswith("http://127.0.0.1:")
+            # The options arrive intact, as options.
+            assert launcher._args.count("--extra-arg=--attention") == 1
+            assert "--extra-arg=sdpa" in launcher._args
+            assert not any(a == "--extra-arg" for a in launcher._args)
+            _wait_status(bridge)
+            output = _render(bridge)
+            assert Path(output).read_bytes() == b"fake-wangp-video"
+        finally:
+            launcher.stop()

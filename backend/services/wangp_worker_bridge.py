@@ -193,7 +193,12 @@ class SubprocessWorkerLauncher:
             "--image-model-type", image_model_type,
         ]
         for arg in extra_args:
-            self._args += ["--extra-arg", arg]
+            # `--extra-arg=<value>`, never `--extra-arg <value>`: the values are
+            # WanGP's own options (e.g. "--attention", "sdpa"), and argparse
+            # refuses to consume a token that starts with "-" as a value, so
+            # the split form makes the worker fail to start with
+            # "argument --extra-arg: expected one argument".
+            self._args += [f"--extra-arg={arg}"]
         self._extra_env = dict(extra_env or {})
         self._timeout = startup_timeout_s
         self._lock = threading.Lock()
