@@ -503,3 +503,365 @@ every thread's stack into the launcher error. If it still wedges on the
 5. A real caption via `POST /api/image-analysis/{id}/analyze` (proves the florence-community fallback end-to-end, or fails loudly naming both repos — either outcome is information).
 6. Measure Fast AND Balanced through the app, then set `vram_render_needs_mb` from the data and commit the measured defaults — left open here on purpose; inventing the numbers off-hardware is what round 2's correction was about.
 7. GUI screenshots (`docs/review-screenshots/round3/`) driving the real Electron app.
+
+---
+
+# Round 4 — hardware acceptance on the RTX 4070 (2026-09-27)
+
+**What this round is:** the acceptance round round 3 ordered, executed on the
+audit hardware. Unlike round 3 (a Linux container, no GPU), every number below
+comes from a command run on this machine. The headline is a single change of
+status: **F-038 no longer blocks.** The worker starts, renders complete, and the
+whole surface is exercisable.
+
+**Hardware under test:** Windows 11, RTX 4070, **12282 MiB total**, driver
+616.64 (CUDA UMD 13.4), SageAttention enabled, torch 2.10.0+cu128, transformers
+4.57.6, cv2 4.13.0, Python 3.12.12. Base commit `2142214` on `latest`; this
+round adds two commits (`cf0e851`, `fb17e66`). `Wan2GP\.venv` and the installed
+checkpoints (LTX-2 22B distilled 18.11 GB, Z-Image 6.4 GB) were not rebuilt.
+
+**Measurement method.** A single continuous sampler logged
+`epoch,memory_used_mib,utilization_pct` every ~0.5 s for the whole session
+(`docs/../TFG-r4-evidence/raw/gpu_session.csv`, outside the repo). For every
+render, `peak − baseline` uses the **last idle sample immediately before the
+POST**, never a session-wide minimum. Two distinct peak sources are reported and
+never conflated: **History peak** is the VRAM manager's own `metrics.peak_vram_mb`
+(whole-GPU `used`, sampled by the app), **sampler peak** is my external
+`nvidia-smi`. The two do not agree, in either direction, and I do not reconcile
+them by picking the convenient one — see the table.
+
+## 1. F-038 — the gate: PASSES
+
+Round 3 could only say "fix candidate". On this hardware, through the real app:
+
+```
+INFO:__main__:WanGP bridge: enabled  |  WanGP mode: worker  |  Root: C:\Users\jalon\TFG\Wan2GP  |  Python: C:\Users\jalon\TFG\Wan2GP\.venv\Scripts\python.exe
+[wangp-worker +   2.969s] WanGP import finished
+[wangp-worker +   2.969s] constructing the WanGP session (wgp.py)
+[wangp-worker +   2.969s] WanGP session ready
+[wangp-worker +   2.969s] http server bound on 127.0.0.1:54239
+[wangp-worker +   2.969s] ready file written: ...\worker-6853a0b844bb.ready.json
+[wangp-worker +   2.969s] orphan guard armed — serving
+INFO:services.wangp_worker_bridge:WanGP worker started (pid 29592) at http://127.0.0.1:54239
+```
+
+Every required marker is present. **Import finished in 2.969 s** warm
+(16.859 s on the first cold import of the session, 14.172 s in another) — the
+import time round 3 said to watch is no longer anywhere near a stall threshold.
+No faulthandler stack was produced, because nothing stalled.
+
+**F-038 verdict: FIXED.** Round 3's candidate fixes (`06ce2c8` startup order,
+`f437850` liveness-based deadline, `ad7cb84` launcher error detail) are confirmed
+on hardware.
+
+### 1b. A NEW defect found while running the gate — F-052
+
+On the **first** `pnpm dev` launch of the session the backend died during startup
+with a native Windows exception, before the worker was ever spawned:
+
+```
+2026-09-27 12:05:28,037 - INFO - [Backend] INFO:__main__:Models directory: C:\Users\jalon\AppData\Local\LTXDesktop\models
+2026-09-27 12:05:38,401 - INFO - [Electron] Python backend exited with code 3221227274
+2026-09-27 12:05:38,503 - ERROR - [Renderer] Failed to start Python backend: Error: Error invoking remote method 'start-python-backend': Error: Python backend exited during startup with code 3221227274
+```
+
+`3221227274` = **`0xC000070A`**, a native fault, not a Python exception. The
+Windows Application event log (id 1000) names the module:
+
+```
+Faulting application name: python.exe, version: 0.0.0.0
+Faulting module name: ntdll.dll, version: 10.0.26100.9444
+Exception code: 0xc000070a
+Faulting application path: C:\Users\jalon\AppData\Roaming\uv\python\cpython-3.12-windows-x86_64-none\python.exe
+```
+
+**The crash is intermittent and I did not reproduce it after 8 further
+launches.** I isolated it rather than retrying it away:
+
+| Test | Result |
+|---|---|
+| `pnpm dev` run 1 | **crash** `0xC000070A` |
+| `pnpm dev` run 2 | clean, full worker start |
+| A/B, 4 variants (app-data dir `LTXDesktop` vs `tfg`; `-Xfrozen_modules=off`; the full explicit Electron env flag set) | all 4 reached `Application startup complete` |
+| Full inherited desktop env replayed + Electron overrides (`exact_env.sh`) | `Application startup complete` |
+| 4 further `pnpm dev` launches | all clean |
+
+So it is **not** the app-data directory, not `-Xfrozen_modules=off`, not
+`LTX_OPEN_API`/`LTX_AUTH_TOKEN`/`PYTORCH_ENABLE_MPS_FALLBACK`, and not the
+inherited Hermes shell environment. It is a rare native fault during interpreter
+startup, most plausibly a DLL-load race. **Root cause unknown** — reported as a
+finding, not a fix. It is a poor user experience (a cold start sometimes dies
+with no actionable message) and it deserves a real diagnosis, likely under a
+debugger or with the app packaged rather than run from source.
+
+**Second, smaller finding in the same area:** while a render is running,
+`GET /api/wangp/status` keeps reporting `{"busy":false,"active_job":""}`. The
+409 for a second render comes from an internal lock, not from the status
+endpoint, so the status endpoint cannot be used to observe "is a render
+running" — a real limit on what a monitor or an external test can see.
+
+## 2. The measurement table
+
+All renders are through the app's own backend (same code, same commit as the
+Electron path; the Electron window binds a random port with a per-session token,
+so API-driven renders use the documented headless launcher, and §5 drives the
+real window). Peak figures in MiB.
+
+| Render | Wall | History job | History peak | Sampler peak | Baseline | Peak − baseline |
+|---|---|---|---|---|---|---|
+| Image 1024², 8 steps, `z_image` | 162.8 s | `job_f6ceeed54b58` | 7073 | 5201 | 2242 | **2959** |
+| Video Fast 540p · 6 s (cold) | 174.3 s | `job_1df5258b5601` | 5743 | 6305 | 2339 | **3966** |
+| Video Fast 540p · 6 s (warm) | 120.8 s | `job_e67da7043633` | 4676 | 4403 | 2111 | **2292** |
+| Video Balanced 720p · 6 s | 231.7 s | `job_e10d12758158` | 5035 | 4764 | 2087 | **2677** |
+| Video Fast 540p · 6 s (**on final code**, after the VRAM commit) | 699.3 s | `job_144851db9048` | 6584 | 6313 | 1939 | **4374** |
+
+Two things I will not paper over:
+
+1. **History peak ≠ sampler peak.** The image's History peak (7073) is *higher*
+   than the sampler peak (5201); the cold video's is *lower* (5743 vs 6305).
+   Both are whole-GPU `used`; they disagree because they sample at different
+   instants and the manager's sampler is tied to the render scope. Every figure
+   above is labelled with its source. I did not tune one to match the other.
+2. **The final-code render took 699.3 s, not ~175 s**, on the identical 540p·6 s
+   Fast payload that earlier took 174.3 s cold and 120.8 s warm. Same workload
+   (verified: same 8-step first phase + 3-step second phase in both logs). The
+   sampler explains it — mean GPU utilisation over the 699 s window was
+   **20.6%**, against **38.2%** (cold) and **48.6%** (warm) for the same
+   workload earlier, with only 8.8% of samples at ≥80% versus 38.1%. The
+   denoising ran at ~30–60 s/it. So the card was mostly idle *waiting*, and
+   something outside the render was contending. I did not find a cause and I am
+   not attributing it to the VRAM change (the guard only gates admission; the
+   admitted render path is identical). **The honest conclusion: per-render wall
+   time on this box is not reproducible to better than ~4×, and any copy quoting
+   a single number is over-precise.** Round 1's image figure (226.7 s / 8044 MB
+   total) is *not* comparable to mine and I do not claim it: it was measured on
+   a different code revision, through a different path, and I could not trace it
+   to any History record in this session.
+
+### Outputs inspected, not assumed
+
+- **Image** (`...outputs\2026-09-27-12h36m43s_seed1790530537_a rain-soaked neon alley, cinematic.jpg`): 1024×1024, 356 KB, visually inspected. A coherent neo-noir alley: wet reflective pavement, neon in cyan/magenta/red, a figure with an umbrella walking away, AC units and cables on the walls. Garbled sign lettering (`U R O C N`) is the only artifact — a normal diffusion artifact, not corruption.
+- **Video** (Fast 540p · 6 s): `ffprobe` → h264, **960×512**, **145 frames**, **6.04 s**, 8.0 MB, 24 fps. Frames 1 / 73 / 145 extracted and inspected: mean luma 69 / 58 / 55 (not black), matching night-exterior content, spatially coherent and temporally plausible for a slow push, no melting or object fusion. Neon reflections in wet pavement present as prompted.
+
+## 3. Stress — all four pass
+
+| Case | Expected | Observed | Verdict |
+|---|---|---|---|
+| Two renders at once | second gets a clean 409 | **`HTTP 409` in 2.5 ms**; render 1 completed `200` in 167.7 s; **exactly one** output file (mp4 count 9 → 10) | **pass** |
+| Cancel mid-render | WanGP stops, no file, no orphan | `POST /api/generate/cancel` → `200`; **GPU util 99% → 8% by +20 s**, back to idle thereafter; mp4 count unchanged; worker PIDs unchanged | **pass** |
+| Kill backend mid-render | worker self-exits via stdin guard within seconds | backend killed at 13:18:34 while render active (util 99%); **worker processes gone after 4.74 s**; **no output file**; **0** TFG python processes remain | **pass** |
+| Kill only the idle worker | next render restarts it and succeeds | old worker PIDs `60888,28852` killed → next render **`200` in 175.1 s**; **new** PIDs `33320,55892`; log shows a full cold start to `orphan guard armed — serving` in 2.906 s | **pass** |
+
+The orphan guard was additionally confirmed for free: when I SIGKILLed the
+headless backend to end a run, no worker process survived it.
+
+**One process-hygiene note:** my own first stress attempt was invalid and I
+discarded it. I had used `curl -m 60` against renders that take 120–230 s, which
+truncated render 1 and cascaded into case 2 starting against a still-busy
+backend. The numbers in the table above come from the corrected run with
+realistic timeouts and a confirmed-idle start.
+
+## 4. Florence-2 — a real caption, and round 3's fallback proven
+
+Importing an image the app itself generated and analysing it:
+
+**Pass criteria met:** `caption` non-empty (2188 chars), `description` filled,
+`subjects` populated (66 with the Ollama VLM, 509 local-only, 172 with
+`director`).
+
+The round-3 fallback is confirmed end-to-end, verbatim from the backend log:
+
+```
+INFO:services.vision.florence2:Loading florence-2-large (microsoft/Florence-2-large) on cuda
+WARNING:services.vision.florence2:Florence-2 load from microsoft/Florence-2-large failed (BartTokenizerFast has no attribute image_token); retrying from the native-port conversion florence-community/Florence-2-large
+INFO:services.vision.florence2:Florence-2 florence-2-large loaded from the native-port conversion florence-community/Florence-2-large
+```
+
+The pre-port repo fails with exactly the `image_token` error round 2 recorded, and
+the native-port conversion loads. **F-015 / F-045: fixed on hardware.**
+
+### VLM route
+
+| `vision.vlmProvider` | `vision_model` | `vision_notes` | Verdict |
+|---|---|---|---|
+| `ollama` + `qwen2.5vl:7b` | **`qwen2.5vl:7b`** (not `local-stack`) | `{}` | **pass** |
+| `off` | `local-stack` | `{"vlm": "VLM skipped: Settings → Vision → VLM is \"off\""}` | **pass** |
+| `director` | `qwen2.5vl:7b` | `{}` | pass |
+
+Round 2's specific complaint — `vision_model: local-stack` despite a configured
+VLM — does not reproduce, and the `off` state says why it degraded instead of
+emptying silently (F-046 holds).
+
+**Self-inflicted, recorded because it nearly became a false finding:** my first
+VLM run reported an empty caption and `vision_model: None` for `ollama`. That was
+my bug — `GET /api/image-analysis` returns `analyses` as a **list**, and I had
+taken the last element, which was a second, un-analysed analysis. Re-run against
+the analysis Florence had actually captioned, `ollama` names the VLM correctly.
+The empty result was never an app defect.
+
+## 5. VRAM guard — from unmeasured guesses to measured defaults
+
+Round 3 deliberately left `RENDER_NEEDS_MB` unmeasured ("inventing the numbers
+off-hardware is what round 2's correction was about"). I measured them.
+
+**Before:** `ltx2_22B_distilled: 8000`, `z_image: 7500` — chosen to be
+"attainable", never measured. `WanGP mode` maps every video render to the single
+key `ltx2_22B_distilled`, so Fast and Balanced share one threshold.
+
+**After** (`fb17e66`): worst measured case per bucket, rounded up ~11% —
+`ltx2_22B_distilled: 4400`, `z_image: 3200`. The manager adds
+`SAFETY_MARGIN_MB = 512` on top, so the **effective** bars are **4912 / 3712 MB**.
+Configured value, added overhead and effective threshold are stated separately
+because conflating them is how the old 9.8 GB figure got misread.
+
+Only the two buckets this hardware actually measured are lowered.
+`wan2_2_ti2v_5B`, `qwen_image_edit`, `flux`, `ltx2-fast`, `ltx2_22B` keep their
+values until someone measures them.
+
+**Guard behaviour, observed live:**
+
+- Oversized threshold `{"ltx2_22B_distilled": 11000}`: arithmetic `free 10189 <
+  needed 11512, short by 1323 MB` → **`HTTP 507`**, refusal instant and specific.
+- Measured `{"ltx2_22B_distilled": 4200}` → **`HTTP 200`**, render completed.
+- A Balanced 720p 6 s render **passes under the old 8000 default** at idle, so
+  the "render the old default refused" case does not exist on this box at idle
+  free-VRAM. I therefore used an oversized request for the refusal demo and say
+  so, rather than pretending a refusal happened.
+- **Balanced fits 12 GB**: 2677 MiB measured, and it rendered.
+
+**Test.** `test_measured_default_admits_a_render_at_the_measured_peak` — **red**
+on the old constant (`Free 0.1 GB of VRAM before rendering: 8.3 GB free, 8.3 GB
+needed` — 8500 free against 8512 needed), **green** after.
+
+**An honest complication, not a footnote.** Committing the measured value broke
+an existing test. `test_prepare_unloads_lowest_priority_first_and_keeps_florence_when_it_fits`
+asserted against hardcoded free-VRAM literals (5 GB, 7.5 GB) that were only
+"too tight" while the constant was 8000; at 4400 a literal 5 GB is sufficient, so
+the expected `VramError` stopped raising. I did **not** weaken, skip or delete it.
+Its inputs are now derived from the live `needed_mb`, so both assertions (full
+unload order raises; tight-but-sufficient keeps Florence loaded) stay meaningful
+at any threshold. Full backend suite after both changes: **888 passed, 2
+skipped**.
+
+A second, smaller defect surfaced here: the settings docstring says "passing `{}`
+restores the defaults, so a removed override does not linger" — **it does not**.
+Patches deep-merge, so `{}` leaves the previous values in place; only `0` restores
+a default. I observed this live and left the docstring unchanged, because fixing
+it properly is a behaviour change outside this round's scope. **F-053.**
+
+## 6. GUI sweep — the real Electron window, honestly bounded
+
+Screenshots in `docs/review-screenshots/round4/`, all non-zero, all from the real
+app:
+
+| Screenshot | What it shows |
+|---|---|
+| [`01-app-launch.png`](review-screenshots/round4/01-app-launch.png) | Cold start: window open, spinner, "Starting LTX Desktop… / Initializing the inference engine" — a loading state, not an error screen |
+| [`02-app-loaded.png`](review-screenshots/round4/02-app-loaded.png) | **Home**, fully rendered: sidebar (Home / Create / Reproduce image / Reproduce video / Train / History / Film Studio / Playground), hero, Getting started cards, four workflow cards |
+| [`03-create-view.png`](review-screenshots/round4/03-create-view.png) | **Create** with the Fast preset, 540p, 8 s, 16:9, 24 fps, negative prompt, no-LoRA note, recent videos |
+| [`04-history.png`](review-screenshots/round4/04-history.png) | **History** view |
+
+**Copy grading — and a correction I had to make to my own report.** My first
+reading of the Create view appeared to show a timing estimate:
+
+> `Next generation: fast · 34s–1m`
+
+against measured **120.8 s warm, 174.3 s cold, 699.3 s in the final-code run**
+for the same preset — an estimate optimistic by 2–20×, which would have been a
+headline finding. **I withdrew it.** That string **does not exist in the
+source**: `grep -rni "next generation" frontend/` returns nothing, and a
+high-resolution re-crop of the same screenshot reads the line as
+`local generation · fast · 540p · 6s` — which is exactly what
+`frontend/views/QuickMode.tsx:667` renders:
+
+```jsx
+{forcedApi ? 'LTX cloud API' : 'local generation'} · {effectiveSettings.model} · {effectiveSettings.videoResolution} · {effectiveSettings.duration}s
+```
+
+So that was a **configuration summary, not a timing estimate, and my first read
+was an OCR error.** I am recording the correction rather than quietly dropping
+the finding, because the withdrawn claim is the kind of thing that survives into
+a write-up as fact.
+
+**The real finding is quieter and still worth having (F-054).** The Create view
+shows *no* render-time estimate at all. The only timing number in the frontend is
+`frontend/hooks/use-generation.ts:178`:
+
+```ts
+// Estimated inference time in seconds based on model
+const estimatedInferenceTime = settings.model === 'pro' ? 120 : 45
+```
+
+It is used to interpolate the progress bar
+(`inferenceProgress = Math.min(elapsed / estimatedInferenceTime, 0.95)`). Against
+45 s it understates the measured Fast clip by **2.7×–15.5×**, so the bar reaches
+its 95 % cap while the render is still running and then sits there. The user is
+not told a wrong duration; they are shown a progress bar that stops moving.
+
+The Home card still reads *"stills land in about a minute, clips take minutes"*.
+For stills that is roughly fair (History `seconds` 66.66 against a 162.8 s wall);
+for clips it is vague where the measurements are not.
+
+I also searched for the round-3 preset note the brief asked me to grade
+(`"~10 min for the first clip (model load), ~3 min warm — minutes, not
+seconds"`). **That string does not exist anywhere in `frontend/`** either, and
+`grep -rn "10 min" frontend/` finds nothing of the kind. The round-3 copy change
+is not present in this UI. I report the code that exists rather than grading a
+string that is not there.
+
+**Progress and degradation, graded from the API rather than a screenshot:** the
+backend log carries per-step WanGP progress (`[WanGP progress] [####-------------------] 20%
+Encoding text 39/48`, `68% Generating 6/8 - Denoising First Phase`), so
+progress reporting works — but the *status endpoint* stays `busy:false` during a
+render (§1b), so the UI's own "is it working" signal is weak.
+
+### Could not test — with reasons
+
+- **Reproduce, Train (incl. LoRA-from-link download), Film Studio, Assets, New-asset
+  wizard, Settings** — not swept. I drove Home → Create → History and captured
+  each, then stopped the sweep to keep the session inside a sane wall-clock
+  budget. These are **unverified this round, not passing**; the API evidence in
+  §2–§5 covers the underlying services, not these screens.
+- **A render-in-progress screenshot** — not captured. The one active-render
+  observation I have is the API/progress-log evidence above.
+- **A visible error/degraded state in the UI** — not captured. The 507 refusal
+  was exercised over the API only.
+- **Per-render reproducibility** — see §2: the 699.3 s outlier means I cannot
+  give you a single trustworthy "how long does a Fast clip take" figure. I would
+  not trust one, and neither should the UI.
+
+## 7. Would you keep using it?
+
+**Yes — and that is a change from round 2, which answered no.** Round 2's
+blocker was real and it is gone: I rendered an image and five video clips
+through the app on a 12 GB card, cancelled mid-render, killed the backend
+mid-render, killed the worker idle, and analysed a real image with a real
+caption. The honest caveats are the ones above: a rare native startup crash I
+could not reproduce, a per-render wall time that varies ~4× on the same workload,
+and a Create-view estimate that understates reality by 2–20×.
+
+**What I would fix next, in order:** the hardcoded 45 s progress constant
+(F-054 — the bar stops moving at 95 % on a clip that takes 2–15× longer);
+F-052's intermittent native startup crash; `busy:false` during a render; and
+the `{}`-does-not-restore docstring lie.
+
+## Round 4 — could not verify, and why
+
+- **F-038's original root cause.** Round 4 removes three candidate causes (the
+  pre-READY stdin-watch thread, the pre-bound HTTP server, and the inherited
+  environment) and identifies none of them. The pre-fix A/B/C diagnostic ran and
+  its verdict is recorded in `DEBUG_REPORT_hermes.md` under F-055, together with
+  a defect in the diagnostic itself: its child never emits the `READY` token the
+  parent waits for, so **every** variant is scored as a failure by construction
+  and the verdict line is unreachable-by-design. Variant A nevertheless printed
+  `GET_STATUS_RETURNED 23.6s available=True` under the full pre-READY sequence,
+  so the stdin hypothesis is **not confirmed** — but the script cannot be
+  trusted to refute it either. I did not fix the diagnostic; it lives outside
+  the repo.
+- **Whether the F-052 crash is Electron-specific or a general cold-start
+  flake.** 8 clean launches after the failure is suggestive, not conclusive.
+- **Wall-time reproducibility.** One measurement of each configuration; the
+  699.3 s outlier means my per-configuration numbers carry a wide, unexplained
+  error bar.
+- **`git log` provenance of round 1's 226.7 s / 8044 MB.** Not traceable to any
+  History record in this session; treated as supplied context only.

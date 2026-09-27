@@ -7,11 +7,19 @@ is the acceptance checklist a tester runs on that card. **Nothing here is a
 measurement unless the Status column says `MEASURED <date>`** with the
 driver in *Setup under test*.
 
-**Last run: 2026-09-26** on real hardware — Windows 11 Home build 26200,
-RTX 4070 12282 MiB, driver 616.64 (CUDA UMD 13.4), SageAttention enabled,
-torch 2.10.0+cu128, TFG `hermes-review` @ `64bb6a3`, Wan2GP `4fbc9827`,
-by Hermes. Rows that could not be run say so, and why. Full narrative:
-`docs/HERMES_REVIEW.md`; debugging detail: `docs/DEBUG_REPORT_hermes.md`.
+**Last run: 2026-09-27** on real hardware — Windows 11, RTX 4070 12282 MiB,
+driver 616.64 (CUDA UMD 13.4), SageAttention enabled, torch 2.10.0+cu128,
+transformers 4.57.6, cv2 4.13.0, TFG `latest` @ `fb17e66` (base `2142214`),
+by Hermes. Round 4 re-ran the generation, robustness and vision rows; rows not
+re-attempted keep their earlier `BLOCKED` reason and their 2026-09-26 numbers.
+Full narrative: `docs/HERMES_REVIEW.md` → *Round 4*; debugging detail:
+`docs/DEBUG_REPORT_hermes.md` → *Round 4*.
+
+**Round 4's headline: F-038 no longer blocks.** The worker starts
+(`WanGP mode: worker`, `orphan guard armed — serving`) and every generation row
+below that was previously `refused` now completes. Two new rows are open: the
+intermittent native cold-start crash (F-052) and the ~4× wall-time variance
+(F-057).
 
 If a default turns out not to fit when measured, downgrade the default
 (preset, profile, config) and say so in the row — never hide it.
@@ -25,9 +33,9 @@ If a default turns out not to fit when measured, downgrade the default
 | Install method | source checkout + `pnpm setup:dev:win` (no installer build — see G1) |
 | Preset | `GET /api/settings` → `hardwarePreset: "rtx-4070-12gb"`, applied and **persisting across a backend restart** (measured) |
 | Execution mode | `GET /health` → `"active_model": "wangp"`, `sage_attention: true` (measured) |
-| Video model | `ltx2_22B_distilled` — **not installed** (19.4 GB quantised int8 checkpoint); image model `z_image` (installed) |
-| Vision stack | CLIP ViT-L/14 **working**; Depth-Anything-V2-small **working**; **Florence-2-large non-functional** (`BartTokenizerFast has no attribute image_token`) |
-| System VRAM | 12282 MiB total; **~8.95 GB free at idle** once the Windows compositor and other apps are counted |
+| Video model | `ltx2_22B_distilled` — **installed** (18.11 GB `ltx-2.3-22b-distilled_diffusion_model_quanto_int8.safetensors`); image model `z_image` (6.4 GB, installed) |
+| Vision stack | Florence-2-large **working** via the native-port conversion `florence-community/Florence-2-large` (measured 2026-09-27); `microsoft/Florence-2-large` still fails with `BartTokenizerFast has no attribute image_token`; CLIP / Depth / DINO working |
+| System VRAM | 12282 MiB total; **~10.1 GB free at idle** in this round (2046–2372 MiB used), composited desktop |
 
 Fill *Seconds* and *Peak VRAM* from History (`metrics.seconds`,
 `metrics.peak_vram_mb`, both recorded by the VRAM manager after each job)
@@ -37,13 +45,13 @@ and from `nvidia-smi` during the run.
 
 | # | Case | Steps | Expected on 12 GB | Status | Seconds | Peak VRAM | Notes |
 |---|---|---|---|---|---|---|---|
-| A1 | Create image | Home → Create → image, Z-Image, 8 steps, 1024×1024 | fits; < 30 s after warm-up | **MEASURED 2026-09-26** | **226.7 s cold / 30.0 s warm** | **8044 MB** (app) / **7773 MB** (my `nvidia-smi`) | Real 1024×1024 RGB JPEG, 337 KB, visually inspected twice: coherent, prompt-accurate, no structural failures (garbled sign lettering only). Warm 768²/6-step: 9.4 / 9.6 / 10.2 s. **Meets the < 30 s warm target.** `image_generate_image` over MCP is the same path. |
-| A2 | Create video · Fast | Quick video, profile Fast (540p · 6 s · 8 steps) | fits (WanGP low-VRAM path); ~1 min | **MEASURED 2026-09-26 (refused, no render)** | 0.0 | — | **No clip produced.** The VRAM guard refuses first: `507 "Free 1.3 GB of VRAM before rendering: 8.5 GB free, 9.8 GB needed. Loaded: nothing this app owns."` The 19.4 GB checkpoint is also absent. The refusal is honest and instant, but **a 12 GB card can never satisfy 9.8 GB free** — see A3. |
-| A3 | Create video · Balanced | profile Balanced (720p · 8 s) | fits; ~3× A2 | **MEASURED 2026-09-26 (refused, no render)** | 0.0 | — | Same guard, same outcome. **A2 and A3 both contradict the preset that offers them.** `RENDER_NEEDS_MB["ltx2_22B_distilled"]=9500` + `SAFETY_MARGIN_MB=512` = 9.8 GB, and the comment "overridable in settings" is false — no caller passes `render_needs_mb`. **Recommended action: lower the video figure until a 12 GB card passes, and record the new number here.** The preset's own note ("a clip in about a minute on a 4070") is currently untrue. |
+| A1 | Create image | Home → Create → image, Z-Image, 8 steps, 1024×1024 | fits; < 30 s after warm-up | **MEASURED 2026-09-27** | **162.8 s** wall (`job_f6ceeed54b58`) | **7073 MB** (History) / **5201 MB** (sampler) / **2959 MB** sampler peak − 2242 MB baseline | Real 1024×1024 RGB JPEG, 356 KB, visually inspected: coherent neo-noir alley, wet reflective pavement, neon in cyan/magenta/red, figure with umbrella. Only artifact is garbled sign lettering (`U R O C N`) — normal for diffusion, not corruption. **Does not meet the < 30 s target** (see F-057: wall time on this box varies ~4× for identical work). |
+| A2 | Create video · Fast | Quick video, profile Fast (540p · 6 s · 8 steps) | fits (WanGP low-VRAM path) | **MEASURED 2026-09-27 (renders)** | **174.3 s** cold · **120.8 s** warm · **699.3 s** on final code (`job_1df5258b5601`, `job_e67da7043633`, `job_144851db9048`) | **5743 / 4676 / 6584 MB** (History) · sampler peak − baseline **3966 / 2292 / 4374 MB** | **No longer refused — renders complete.** Cold/warm/final-code all produced real clips. `ffprobe` on the 540p clip: h264, **960×512**, **145 frames**, **6.04 s**, 8.0 MB, 24 fps; frames 1/73/145 extracted and inspected (mean luma 69/58/55, not black, coherent, no melting). The 2026-09-26 guard refusal (`9.8 GB needed`) is gone — `RENDER_NEEDS_MB` is now **measured**, not guessed (`fb17e66`). |
+| A3 | Create video · Balanced | profile Balanced (720p · 6 s) | fits; ~3× A2 | **MEASURED 2026-09-27 (renders)** | **231.7 s** (`job_e10d12758158`) | **5035 MB** (History) · sampler peak − baseline **2677 MB** (2087 baseline, 4764 peak) | **Fits 12 GB and renders** — 1280×704, 145 frames, 6.04 s. Passes under the *old* 8000 default too, so no refusal to demonstrate at idle free-VRAM; the before/after refusal demo used an oversized 11000 threshold instead (**HTTP 507**, short by 1323 MB). See F-050. |
 | A4 | Create video · I2V + LoRA | reference image + a trained LoRA at 0.8 | fits | **BLOCKED — ENVIRONMENT** | | | Not run: blocked by A2. The `activated_loras` / `loras_multipliers` keys were verified against the real checkout (VF-014 re-verified 2026-09-26). |
 | A5 | Create video · end frame + refs | `endFramePath`, two `referenceImagePaths` | fits | **BLOCKED — ENVIRONMENT** | | | Not run: blocked by A2. `image_end` + `image_refs` keys verified against the real checkout. |
 | A6 | Wan 2.2 5B TI2V as second profile | only if the WanGP checkout lists a 5B TI2V model | **not offered** until the model key is verified on the checkout (VF-020) | **BLOCKED — VERIFY** | | | Still not offered, and I found no 5B TI2V key in the checkout. Consistent with VF-020. |
-| A7 | *Concurrent renders (added 2026-09-26 — the "two renders at once" break-it)* | two `POST /api/generate-image` fired 3 s apart | second refused, not crashed | **MEASURED 2026-09-26** | A: 18.9 s · B: 0.0 s | — | B → `409 "Generation already in progress"`. No OOM; GPU healthy afterwards. |
+| A7 | *Concurrent renders (added 2026-09-26 — the "two renders at once" break-it)* | two `POST /api/generate` fired while render 1 is demonstrably active | second refused, not crashed | **MEASURED 2026-09-27** | A: 167.7 s · B: 0.0 s | — | **B → `HTTP 409` in 2.5 ms** while A was at 99% GPU util. A completed `200` in 167.7 s. **Exactly one** output file (mp4 count 9 → 10). No OOM; GPU healthy afterwards. (A second attempt returned `HTTP 000 t=0.000000s` from curl — a client-side artifact, not a server response; the 2.5 ms 409 above is the authoritative reading.) |
 | A8 | *Out-of-range image (added 2026-09-26)* | `{"width":99999,"height":99999}` | refused before CUDA | **MEASURED 2026-09-26 (fails)** | — | — | **`500 CUDA error: out of memory`** — a raw crash, unlike every other VRAM path in the app. Needs a range check. |
 
 ## B. Reproduce
@@ -68,7 +76,7 @@ and from `nvidia-smi` during the run.
 | D2 | LoRA smoke train | 8-image character dataset → auto-caption → Z-Image, character preset, 200 steps | completes within 12 GB with fp8 + block swap; loss sparkline; samples; LoRA in registry | **BLOCKED — ENVIRONMENT** | | | Not run: depends on D1. What I *did* verify: dataset import **skips non-image files correctly** (3 of 5 files imported from a folder holding an `.mp4` and a `.txt`); paths with spaces and unicode work (`日本語 データセット ✨` → 200); auto-caption **carries the trigger word** — but the captions contain **no descriptive content**, because captioning depends on Florence-2. |
 | D3 | Apply | A1 with the LoRA from D2 at 0.8 | trigger word honoured; visible likeness | **BLOCKED — ENVIRONMENT** | | | Not run: depends on D2. The binding path is covered by e2e against the mock. |
 | D4 | Video LoRA refusal | pick Wan 2.2 / LTX-2 target | refused before start with the 24 GB / 32 GB reason | **MEASURED 2026-09-26 — with a hole, now fixed** | instant | — | On the honest path (`/api/training/suggest` → 24000 / 32768 MB) both targets are refused correctly and no trainer is touched. **But the guard read `estimated_vram_mb` from the request body**, so `{"target":"wan22","estimated_vram_mb":1}` returned **HTTP 200 and trained a 24 GB LoRA to completion on this 12 GB card.** Fixed in `eac8f42` with a regression test. |
-| D5 | *Vision stack (added 2026-09-26)* | `POST /api/vision/analyze` on a real image | caption + regions + tags + depth | **MEASURED 2026-09-26 (partial)** | 296 s cold | — | CLIP tags are real and good ("a minimalist painting", "minimalism", "Karl Gerstner"); Depth-Anything produced a real depth map. **Florence-2 captioning and grounding return nothing** — `Florence2Processor` needs `tokenizer.image_token`, absent in transformers 4.57.6's BART tokenizer. `/api/vision/status` still reports the component `available: true`. This silently empties the Reproduce spec (B1) and the 3D scene (C1). |
+| D5 | *Vision stack (added 2026-09-26)* | `POST /api/vision/analyze` on a real image | caption + regions + tags + depth | **MEASURED 2026-09-27 (works)** | see notes | — | **Florence-2 now works on hardware.** Log, verbatim: `Florence-2 load from microsoft/Florence-2-large failed (BartTokenizerFast has no attribute image_token); retrying from the native-port conversion florence-community/Florence-2-large` then `Florence-2 florence-2-large loaded from the native-port conversion florence-community/Florence-2-large`. Round 3's `9c40605` fallback is confirmed end-to-end. Via `POST /api/image-analysis/{id}/analyze` on an app-generated image: `caption` 2188 chars, `description` filled, `subjects` 66 (ollama VLM) / 509 (local) / 172 (director). VLM routing: `ollama`+`qwen2.5vl:7b` → `vision_model = "qwen2.5vl:7b"` (**not** `local-stack`); `off` → `vision_notes = {"vlm": "VLM skipped: Settings → Vision → VLM is \"off\""}`. Unblocks the captioning half of B1 and C1 — **those rows are not re-measured this round.** |
 
 ## E. Robustness
 
