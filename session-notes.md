@@ -410,6 +410,31 @@
   + render halves of U7/U9/U12; audit f4508cb..db98b4a; Florence root cause; 4070 preset copy). Live prompts/ADR 0004
   now name the real shutdown tool `health_shutdown` (round-1 F-030).
 
+## Round 3 fix pass (branch fix/hermes-round3, off-hardware — cloud container)
+- Base: origin/review/hermes-round2 @ 8e759ff (Hermes round 2: F-035..F-041 + PR #3, open, unmerged).
+- D-055 (F-038): wangp_worker startup reordered — the WanGP import runs FIRST on a pristine main thread (stdin
+  orphan guard arms only after READY; a parent dead during startup still gets READY then a clean exit), the HTTP
+  server binds after the import WITHOUT socket.getfqdn (reverse-DNS stall class), readiness = READY line OR atomic
+  per-launch ready-file, both confirmed by an authorized /api/wangp/status probe; wgp.py session constructed at
+  startup (bridge.warm_session()). Root cause remains a HYPOTHESIS — py-spy put the wedge inside a DLL load under
+  the import with both undiscriminated variables present; both are now out of the window and every stage is traced
+  (stderr markers + faulthandler stall watchdog re-armed per stage, one-shot 120s). Launcher failures carry exit
+  code + governing deadline + 12-line tail. Deadline is liveness-based: silence_timeout_s=180 replaces the fixed
+  300s (startup_timeout_s removed; recorded red: chatty worker killed at 1.7s under the old fixed 1.5s).
+- D-056 (F-015): Florence-2 native-port fallback — microsoft/* repos are pre-port (tokenizer lacks image_token;
+  verified in the locked transformers 4.57.6 wheel, processing_florence2.py:121); load retries florence-community/*
+  (UNVERIFIED here — HF proxy-blocked — wrong id degrades to a loud two-repo error). optional_vlm_with_reason()
+  + explicit degradation notes ("VLM skipped: …", "CLIP tags only — captioning unavailable: …") in image-analysis
+  and reproduce responses.
+- Also: F-034 dimension bounds (64..4096 → 400 pre-CUDA); F-040 opencv pin >=4.10,<4.14 + verify_cv2() at startup;
+  /health downloaded now uses weights_installed() (library's predicate); preset/hero/README copy carries measured
+  numbers (632.5s cold / 181.2s warm video, ~4.4-4.6 GiB deltas) instead of "about a minute"/"6 GB";
+  verify-hermes-ready detects the narrow-refspec trap; assets.spec.ts:31 cold-start headroom;
+  scripts/wangp_direct_render.py (reconstructed oracle). vram_render_needs_mb numeric defaults intentionally NOT
+  changed — the round-3 prompt orders app-path measurement first (needs the 4070).
+- Docs: HERMES_REVIEW.md "Round 3" appended (rounds 1-2 untouched); DEBUG_REPORT rows F-042..F-051 appended.
+  No matrix changes: nothing was measured in this container. No screenshots: no desktop here.
+
 ## Next step
 Nothing pending in this session. Real-GPU acceptance (docs/RTX_4070_TEST_MATRIX.md) and `pnpm build:win` need the 4070
 machine; a live `hermes mcp test tfg` needs a Hermes install. Watch the PR for review comments. Hermes audit PR #2

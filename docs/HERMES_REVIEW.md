@@ -455,3 +455,51 @@ review documents and `MANIFEST.json` contained zero mentions of `reimg`,
 was confined to my summaries to you, which is still the exact rule this audit
 exists to enforce, and it is the second time in this run I stated unobserved
 things as fact.
+
+
+---
+
+# Round 3 — code fixes off-hardware (Claude Code, Linux cloud container, 2026-09-27)
+
+**What this round is:** the fix pass the round-3 prompt ordered, executed in a
+cloud container with **no GPU, no Windows, no WanGP venv and no desktop** — so
+it contains code changes with red-then-green tests, and **zero measurements,
+zero renders, zero screenshots**. Nothing in this section claims hardware
+behaviour; every claim maps to a test run in this container, and the
+"needs the 4070" list at the end is the acceptance that remains.
+
+## What changed (one commit per fix, branch `fix/hermes-round3`)
+
+| Fix | Commit | Proof in this container |
+|---|---|---|
+| Task 1a — a failing worker is never silent: per-stage stderr markers, a faulthandler stall watchdog (C thread, fires under a GIL-holding DLL load — the exact py-spy state), launcher errors carry exit code + deadline + 12-line tail | `ad7cb84` | `TestLauncherFailureDetail` red on the old generic error, green after |
+| F-038 structural candidates removed: the WanGP import runs FIRST on a pristine main thread (no stdin-watch thread, no bound socket — the two variables every succeeding standalone repro lacked); `server_bind` skips `socket.getfqdn` (reverse-DNS, the classic Windows http.server stall); readiness = READY line **or** an atomic per-launch ready-file, both confirmed by an authorized `GET /api/wangp/status` probe; `wgp.py` (the session) is constructed at startup, not in the first render's job thread | `06ce2c8` | 3 red tests: a `sitecustomize` making `getfqdn` sleep 300 s wedged the old worker to its deadline and leaves the new one untouched; a worker whose parent pipe is already closed used to die silently before READY and now finishes then exits; a worker that serves but never gets its READY line across the pipe now counts as up |
+| F-037 properly: the startup deadline is liveness-based (fail after `silence_timeout_s`=180 s of NO output), not a wall clock; every stage marker re-arms a one-shot stack dump 120 s out, so a stalled stage dumps every thread and dies with the stacks in the error | `f437850` | behavioural red recorded: the old launcher killed a worker printing every 0.4 s at 1.7 s ("still running — killed; startup deadline 2s"); green: the same chatty worker starts, and a silent-but-running one dies at the window with its tail |
+| F-015 — Florence-2: the code loads transformers' NATIVE classes but from the pre-port `microsoft/*` repos, whose tokenizer defines no `image_token`; the native `Florence2Processor` reads it unconditionally (verified in the locked 4.57.6 wheel, `processing_florence2.py:121`). Loading now falls back to the native-port conversions (`florence-community/*`), processor+weights always from one repo, double failure names both | `9c40605` | 4 unit tests on the fallback. **Honest limit:** huggingface.co is proxy-blocked here (CONNECT 403), so the conversion repos were not fetched; a wrong repo id degrades to a loud two-repo error, and the real caption on the 4070 remains the acceptance |
+| F-015's second half — silent degradation: `optional_vlm_with_reason()` names the setting that kept a configured VLM out of the path (round 2's shape: the `"director"` default with no usable Director provider); image-analysis and reproduce responses carry `VLM skipped: <why>` and `CLIP tags only — captioning unavailable: <reason>` | `9c40605` | 3 red tests on silent responses, green with the notes present |
+| F-034 — 99999×99999 → raw 500 CUDA OOM | `91641e9` | red: 200 through the fake pipeline (a real render attempt); green: 400 naming 64..4096, zero pipeline calls |
+| F-040 — corrupt cv2 (namespace package) | `926cdf2` | pin bounded (`>=4.10,<4.14`, lock at 4.13.0.92 — round 2's repair version); `verify_cv2()` at startup names the corruption and the repair command; corrupt shapes unit-tested, plus a gate test on the running venv |
+| /health vs Model Library disagreement | `55c0012` | red (handler reverted): weights-on-disk + broken worker → `downloaded=False`; both endpoints now share `weights_installed()` |
+| Overselling copy | `aec66e7` | preset: "a clip in about a minute" → measured ~10 min cold / ~3 min warm (WanGP-direct 2026-09-26); Home hero separates stills from clips; README's 6 GB claims → measured deltas + "below 12 GB untested" |
+| Audit tooling | `a3d2dcb` | assets.spec.ts:31 cold-start headroom; verify-hermes-ready detects the narrow-refspec trap with the exact repair; `scripts/wangp_direct_render.py` = parameterised reconstruction of the round-2 oracle (labelled as such — the original lives outside the repo) |
+
+## On F-038's root cause — still a hypothesis, deliberately
+
+`diag_preready.py` was still not run (it lives on the audit machine; this
+container has no Windows and no WanGP venv). The round-2 py-spy dump rules
+getfqdn out as the observed wedge (the main thread was already inside
+numpy's DLL load) and rules nothing else in. So round 3 removes BOTH
+undiscriminated variables from the import window instead of betting on one,
+and instruments every stage so a recurrence names its exact stage and dumps
+every thread's stack into the launcher error. If it still wedges on the
+4070, the tail now contains the answer four rounds lacked.
+
+## Needs the 4070 (unchanged acceptance, in order)
+
+1. `git config --replace-all remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*' && git fetch origin` (verify-hermes-ready now checks this), check out `fix/hermes-round3`.
+2. Optionally run `diagnostics\diag_preready.py` (A/B/C) first — it still discriminates the old code's variables and its verdict is worth recording verbatim.
+3. Through the app: `POST /api/generate-image` (the round-1 prompt, 1024², 8 steps) and a Fast video. Report wall / History peak / own `nvidia-smi` peak / peak − a baseline taken immediately before. Round 1 measured 226.7 s cold, 8044 MB total for the image — divergence is reportable, not fittable.
+4. Two concurrent renders (second gets a clean 409) and a mid-render cancel (WanGP actually stops; no orphan `wangp_worker.py`).
+5. A real caption via `POST /api/image-analysis/{id}/analyze` (proves the florence-community fallback end-to-end, or fails loudly naming both repos — either outcome is information).
+6. Measure Fast AND Balanced through the app, then set `vram_render_needs_mb` from the data and commit the measured defaults — left open here on purpose; inventing the numbers off-hardware is what round 2's correction was about.
+7. GUI screenshots (`docs/review-screenshots/round3/`) driving the real Electron app.

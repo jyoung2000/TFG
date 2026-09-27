@@ -212,7 +212,7 @@ design). Record seconds and peak VRAM from History (drawer → metrics) and
 | # | Scenario | What a user expects |
 |---|---|---|
 | U1 | **Create an image**: "a rain-soaked neon alley, cinematic" (Z-Image, 8 steps) | a good still in < 30 s after warm-up; History shows it with prompt and seed |
-| U2 | **Create a video, Fast**: same prompt, 540p · 6 s | a clip in about a minute; visible progress; cancel mid-render works and frees VRAM |
+| U2 | **Create a video, Fast**: same prompt, 540p · 6 s | a clip in minutes (measured on a 4070: ~10 min cold, ~3 min warm); visible progress; cancel mid-render works and frees VRAM |
 | U3 | **Create a video, Balanced**: 720p · 8 s | fits in 12 GB; visibly sharper; roughly 3× slower |
 | U4 | **Image-to-video** from U1's still, with an end frame and one reference image | motion from the still; the end frame honoured |
 | U5 | **Reproduce image**: three references (portrait, landscape, product shot) → Analyse → Start loop (6 per round, 3 rounds, target 0.9) | believable evidence panel; candidates improve; the best resembles the reference (verify with your own visual diff); pin and fix canvas work |
