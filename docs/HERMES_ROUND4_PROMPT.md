@@ -61,6 +61,13 @@ checkpoints (LTX-2 22B distilled, 18.11 GB; Z-Image, 6.4 GB). `uv sync` in
 
    Look at each output yourself. Round 1 measured the image at 226.7 s cold, 8044 MB total. If yours differs a lot, report the difference; don't adjust anything to make it match.
 4. Before you move on, run `diag_preready.py` (A/B/C) against the **pre-fix** worker at `8e759ff`, and record its verdict word for word. If the stdin-pipe hypothesis is ever to be confirmed or refuted, this is where it happens.
+   - Put the old code in a **separate worktree**. Never check `8e759ff` out in `C:\Users\jalon\TFG`, which must stay on `latest`:
+     ```powershell
+     git worktree add ..\tfg-8e759ff 8e759ff
+     ```
+   - Point the script at `..\tfg-8e759ff\backend\wangp_worker.py`. `Wan2GP\` is gitignored, so the worktree has no copy of it: keep using the existing `C:\Users\jalon\TFG\Wan2GP` and its `.venv`. Don't create another one.
+   - Stop the app first. Nothing else should be running while you do this.
+   - Afterwards, remove the worktree with `git worktree remove ..\tfg-8e759ff`.
 
 ## 2. The worker under stress
 
@@ -97,7 +104,7 @@ Round 2 only tested the API. This time:
 - Save screenshots to `docs/review-screenshots/round4/`.
 - Grade what a user sees:
   - Progress while a render runs.
-  - The copy, especially the Fast preset's new "~10 min cold, ~3 min warm" note: does the measured reality match it now?
+  - The copy, especially the Fast preset's new note, which reads "~10 min for the first clip (model load), ~3 min warm — minutes, not seconds": does the measured reality match it now?
   - Error messages, and whether degradation is visible.
 
 ## 6. Deliver
