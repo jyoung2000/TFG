@@ -210,8 +210,11 @@ prints it after — 300 s, zero stdout, CPU flat at 0.078 s, working set 27–28
 from either working directory. I refuted three candidate causes by measurement
 (contention, inherited `PATH`, `cwd`) and the remaining difference is the launch
 environment, which I did not isolate. So: two blocker fixes shipped and proven,
-one ineffective, one blocker open, and **zero of the four artifacts this round
-was asked for.**
+one ineffective, one blocker open, and **zero of the four artifacts rendered
+through TFG** — superseded in part by the *Round 2 addendum* below, which
+records three WanGP-**direct** renders (image, text→video, and image→video
+conditioned on the user's own file) that prove the model stack works and
+therefore isolate F-038 to TFG's launcher. Those are not app outputs.
 
 ## The environment-split proof (§2 of the brief)
 
@@ -326,3 +329,67 @@ e2e` run gave `1 failed, 30 passed` on `assets.spec.ts:31`; that spec passes
 in isolation here, the full suite passes on base `82cbe97`, and a full-suite
 re-run on this branch passed 31/31, so it was a load-dependent flake (F-041),
 not a regression.
+---
+---
+
+# Round 2 addendum — WanGP-direct renders (labelled, NOT TFG outputs)
+
+This addendum corrects a claim made earlier in this section and in PR #3's
+description. The review said "zero of the four artifacts were produced". That
+was true when it was written and is now superseded on three counts.
+
+## What changed
+
+Every render **through TFG** failed, because F-038 is unresolved: a
+launcher-started worker never prints `TFG_WANGP_WORKER_READY`, so the launcher
+times out and reports `The WanGP worker did not start (no output)`.
+
+To separate "is the app broken" from "is the model stack broken", I drove
+`Wan2GP/shared/api.py`'s `WanGPSession` **directly**, in WanGP's own
+interpreter, bypassing TFG's worker and launcher. The manifest shape is copied
+from the bridge's own builder (`backend/services/wangp_bridge.py:229-237` for
+video, `:303-310` for image), not guessed. Three renders completed:
+
+| Artifact | Case | Verified | Wall | peak VRAM | peak − baseline |
+|---|---|---|---|---|---|
+| `WANGP_DIRECT_image.jpg` | text→image, Z-Image Turbo (6.4 GB int8) | valid JPEG (SOI/EOI), 1024×1024, 334 384 B | 52.4 s | 6577 MiB | **4605 MiB** (baseline 1972, 90 samples) |
+| `WANGP_DIRECT_video_text2video.mp4` | text→video, LTX-2 22B distilled (18.11 GB int8) | h264 768×512, 49 frames, 6.125 s = `compute_num_frames(6,8)`, 2 781 996 B | 632.5 s | 6100 MiB | **4414 MiB** (baseline 1686, 967 samples) |
+| `WANGP_DIRECT_video_i2v_from_userfile.mp4` | image→video **conditioned on the user's own `reverse-image-input.png`** | h264 576×640 portrait, tracking the 558×594 source aspect; 49 frames, 6.125 s, 2 790 194 B | 181.2 s | 5919 MiB | **4392 MiB** (baseline 1527, 308 samples) |
+
+**These are not app outputs and are not presented as such.** They are in
+`Downloads\HermesRound2\proof\` prefixed `WANGP_DIRECT_` precisely so they
+cannot be mistaken for TFG results, and `MANIFEST.json` records
+`WANGP_DIRECT_RENDERS_not_through_TFG` with the same labelling.
+
+## Why this matters for F-038
+
+This is the isolation the earlier runs could not provide. On the same card,
+the same 6.4 GB image checkpoint, the same 18.11 GB video checkpoint and the
+same WanGP checkout:
+
+- WanGP boots (`Powered by WanGP v13.1313`, INT8 CUDA backend), accepts a
+  manifest, decodes, and writes a real file — every time.
+- **TFG's launcher cannot get a worker to the point of answering one request.**
+
+So the model stack, the weights, the card and the driver are all fine, and
+F-038 is confined to TFG's worker/launcher. That is a much more useful bug
+report than "video does not work".
+
+It also makes the two measurements I could not take any other way real: a
+video render on this card needs **4414 MiB above idle** (not the 9.8 GB
+round 1's guard demanded, and not the 8000 MB default now in
+`vram_manager.py`), and the image path needs **4605 MiB**. Those are the
+figures §3.3 of the round-2 brief asked for. They are measured through
+WanGP directly, not through the app's guard, and the guard's own numbers
+remain unverified.
+
+## Still not delivered through TFG
+
+- generated image — blocked on F-038
+- generated video — blocked on F-038
+- Reproduce image render — analysis half works (`ia-fcfefd85cd88`); render half blocked
+- Reproduce video render — detect half works (`va-2235244ab978`, shot `vs-25c743227d` 0.0–6.125 s, `uniform`); no render conditioned on the user's **video** was produced. The i2v clip above is conditioned on the user's **image**.
+
+The Electron GUI was still not driven by hand, and the two files
+`reverse-image-input.png` / `reverse-video-input.mp4` remain **source
+copies** (SHA-256 in `SHA256SUMS-sources.txt`), not outputs.
