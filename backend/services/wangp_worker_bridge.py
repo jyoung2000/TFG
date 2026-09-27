@@ -179,7 +179,13 @@ class SubprocessWorkerLauncher:
         image_model_type: str,
         extra_args: Sequence[str] = (),
         extra_env: Mapping[str, str] | None = None,
-        startup_timeout_s: float = 60.0,
+        # The worker now finishes WanGP's first import *before* it prints
+        # TFG_WANGP_WORKER_READY (F-036), so this timeout has to cover that
+        # import and not just process launch. Measured on the RTX 4070: 55.8s
+        # cold, which the old 60s default raced - the worker was killed
+        # ("The WanGP worker did not start (no output)") seconds before it
+        # would have announced itself.
+        startup_timeout_s: float = 300.0,
         script: Path = WORKER_SCRIPT,
     ) -> None:
         self._python = python

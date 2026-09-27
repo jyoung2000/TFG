@@ -390,3 +390,29 @@ class TestWorkerReadiness:
             assert isinstance(body, dict) and body["loading"] is False
         finally:
             launcher.stop()
+
+class TestStartupTimeoutCoversTheImport:
+    """F-037: the launcher must wait long enough for the import F-036 made blocking.
+
+    After F-036 the worker finishes WanGP's first import before printing
+    TFG_WANGP_WORKER_READY, so `startup_timeout_s` governs the import, not just
+    process launch. The default was 60s; a cold import measured 55.8s on the
+    RTX 4070, so the launcher killed the worker seconds before it announced
+    itself and every render failed with "The WanGP worker did not start
+    (no output)".
+
+    Live reproduction of the red state is in docs/DEBUG_REPORT_hermes.md (F-037).
+    """
+
+    def test_default_startup_timeout_outlasts_a_cold_import(self, tmp_path: Path):
+        launcher = SubprocessWorkerLauncher(
+            python=sys.executable,
+            root=_checkout(tmp_path),
+            output_dir=tmp_path / "outputs",
+            config_dir=tmp_path / "cfg",
+            video_model_type="ltx2_22B_distilled",
+            image_model_type="z_image",
+        )
+        # Measured cold import: 55.8s. Anything under ~5 minutes reintroduces
+        # the race on a slower disk or a busier machine.
+        assert launcher._timeout >= 300, f"startup timeout {launcher._timeout}s cannot cover WanGP's cold import"
