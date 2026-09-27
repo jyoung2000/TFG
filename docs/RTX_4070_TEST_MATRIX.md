@@ -133,3 +133,24 @@ as labelled.
 When a row is measured, replace its status with `MEASURED <date>`, fill the
 numbers and add the driver to *Setup under test*. A row is PASS only from a
 measurement, never from reasoning.
+
+---
+
+# Round 2 (2026-09-26, branch `review/hermes-round2`, base `82cbe97`)
+
+Rows above are round 1 and are unchanged. Round-2 outcomes:
+
+| Row | Round-2 status | Evidence |
+|---|---|---|
+| A1 (create image) | **BLOCKED — F-038** | Weights present (`ZImageTurbo_quanto_bf16_int8.safetensors`, 6.4 GB) yet the job sits in `starting_wangp` indefinitely at flat ~1990 MiB (sampler min 1530 / max 2514 over 7526 samples), with no manifest, no output, no History terminal state. Round 1's same path succeeded at 226.7 s cold / 8044 MB, so the weights are loadable. |
+| A2/A3 (video) | **BLOCKED — F-038** | Not reached. The 18.11 GB `ltx-2.3-22b-distilled_diffusion_model_quanto_int8.safetensors` **is** installed (`GET /api/models/library` → `installed=true`), so round 1's "weights absent" reason no longer applies. |
+| A4/A5/A6 | **BLOCKED — F-038** | Unchanged from round 1; now blocked by the worker, not by the guard. |
+| A7 (concurrent renders) | not re-run | — |
+| A8 (out-of-range image) | not re-run | — |
+| B1 (image Reproduce 3 refs) | **PARTIAL — analysis half works** | `POST /api/image-analysis/ia-fcfefd85cd88/analyze` → 11 s, real palette (6 hex values), luminance 0.1405, contrast 0.0633, saturation 0.0628, edge density 0.0288, vector_likeness 0.508, a written depth map, and tags. `description`/`subjects`/`composition`/`lighting` are empty because **F-015 reproduced live**: `vision_notes.caption = "BartTokenizerFast has no attribute image_token"`. Render half blocked by F-038. |
+| B2 (video Reproduce) | **PARTIAL — detect half works** | `POST /api/video-analysis/va-2235244ab978/detect` → 1 s, shot `vs-25c743227d` 0.0–6.125 s, method `uniform` (correct: the 6.125 s source has no cut). Analyse/recreate/stitch blocked by F-038. |
+| C1 (3D storyboard → Deliver → render) | not re-run | — |
+
+**Idle baseline re-measured 2026-09-26** (Warframe closed): **1826-1844 MiB, mean ~1836**. Any future `peak - baseline` must subtract ~1836, never the 1530 minimum.
+
+**Not measured at all this round:** every VRAM peak for a render, because no render completed. No estimates are recorded.

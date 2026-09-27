@@ -174,3 +174,150 @@ Seven commits on `review/hermes`, each with the evidence that proved it:
 
 Full detail, root causes with file:line, and the external facts I verified against
 the real installation are in `docs/DEBUG_REPORT_hermes.md`.
+
+---
+
+# Round 2 — video on the RTX 4070 (branch `review/hermes-round2`)
+
+Audited 2026-09-26 from `hermes-review` @ `82cbe97`. Round 1 (above) is left
+byte-for-byte intact. One review per run; every number below is from
+`nvidia-smi`, the History API, or a sampler I ran alongside — never estimated.
+
+**Environment.** Windows 11 Home build 26200 · RTX 4070, 12282 MiB, driver
+616.64, CUDA UMD 13.4 · Node 22.23.2 · pnpm 10.30.3 · uv 0.12.3 · torch
+2.10.0+cu128 · **Wan2GP `.venv` 7.4 GB** (`WanGP import OK - CUDA available:
+True`) · checkpoint `ltx-2.3-22b-distilled_diffusion_model_quanto_int8.safetensors`
+18.11 GB on disk · idle VRAM baseline with Warframe closed: **1826-1844 MiB,
+mean ≈1836**.
+
+## Verdict in one paragraph
+
+Round 1's structural fix — ADR 0005, WanGP in its own environment — **works**,
+and I proved it rather than assuming it: the venv build exits 0 on its own
+success line, the two interpreters are genuinely distinct so the backend
+selects `worker` mode, and `uv sync` in `backend/` left WanGP's `gradio`,
+`mmgp` and `shared.api` intact. Round 1's blocker (`500 No module named
+'gradio'`) is gone. But the worker that fix introduced was broken in **three
+consecutive ways**, and I found and fixed all three with red-then-green tests
+(F-035, F-036, F-037). With those fixed the worker starts, imports WanGP and
+answers `{"available":true}` — and then **the first render still never
+produces an image**. That fourth defect (F-038) is unresolved, and it blocks
+every artifact. So: three blocker fixes shipped and proven, one blocker open,
+and **zero of the four artifacts this round was asked for.** I would not ship
+this to a hobbyist yet; the honest summary is that ADR 0005 traded a
+dependency-sharing bug for a worker-lifecycle cluster, and the second half of
+the trade is not finished.
+
+## The environment-split proof (§2 of the brief)
+
+| Claim | Result |
+|---|---|
+| `ensure-wangp-venv.ps1` builds `Wan2GP/.venv` | **pass** — exit 0, 7.4 GB, final line `WanGP import OK - torch 2.10.0+cu128 - CUDA available: True` |
+| `uv sync` in `backend/` cannot remove WanGP's packages | **pass** — `uv sync --extra dev --extra test` exit 0; `gradio`, `mmgp`, `shared.api` still import in the WanGP venv |
+| Backend runs WanGP as a separate process | **pass** — `WanGP mode: worker`, `Python: …\Wan2GP\.venv\Scripts\python.exe`, second Python `wangp_worker.py` alongside |
+| The one approved download (LTX-2 distilled) | **done** — 18.11 GB on disk, `GET /api/models/library` → `ltx2_22B_distilled installed=True` |
+
+## Video and image measurements
+
+| Case | Grade | Verdict | Seconds | Peak VRAM | What happened |
+|---|---|---|---|---|---|
+| Image, Z-Image 1024², 8 steps (U1) | **D** | **Broken** | — | — | **No image produced.** Job sits in `starting_wangp` indefinitely at flat ~1990 MiB, never returning a manifest, an output, or a History terminal state. Round 1 measured this exact path at 226.7 s cold / 8044 MB, so the weights are loadable — the stall is upstream of model load. F-038. |
+| Video Fast 540p · 6 s (U2) | — | **Blocked** | — | — | Not reached: blocked by the same worker path (F-038). The checkpoint is installed, so round 1's "weights absent" excuse no longer applies. |
+| Video Balanced 720p · 8 s (U3) | — | **Blocked** | — | — | Same. |
+| Image-to-video (U4) | — | **Blocked** | — | — | Same. |
+| Reproduce video (U6) | — | **Blocked** | — | — | Same. |
+
+**No `peak − baseline` figure is recorded for any render, because no render
+completed.** I am not going to put an estimate in that column.
+
+## What round 1's findings look like now
+
+| Round-1 finding | Status |
+|---|---|
+| F-002/F-007/F-017 — shared venv, `uv sync` breaks WanGP | **Resolved.** ADR 0005's split is real and `uv sync` no longer touches WanGP. |
+| F-018 — VRAM table "overridable in settings" | Partly addressed upstream: `vram_render_needs_mb` + `set_overrides` (D-051). Not re-measured, because no render completed. |
+| F-020 — silent 19.4 GB download during a render | **Resolved** (D-052 weights pre-check, 409 → Models tab). The checkpoint is now installed via the Model Library with a proper `download` History job. |
+| F-015 — Florence-2 dead | **Still open, reproduced live.** `POST /api/image-analysis/{id}/analyze` returns `vision_notes.caption = "BartTokenizerFast has no attribute image_token"`, leaving `description`/`subjects`/`composition`/`lighting` empty. Wiring `directorProvider` to Ollama `qwen2.5vl:7b` succeeded (read back fine) but did **not** reach this path: the response says `vision_model: local-stack`. |
+| F-013 — corrupted `cv2` install | **Recurred** (F-040) and cost 57 pyright errors. Repaired in the environment; the loose `opencv-python-headless>=4.8.0` pin that permits it is *not* fixed. |
+| F-034 — out-of-range image returns a raw CUDA 500 | Not re-tested this round. |
+
+## New-feature verdicts (§4 of the brief)
+
+- **LoRA download (`f4508cb`)** — code path is sound and unit-tested; the key
+  hygiene test passes. **But it is red on Windows and was already red on base
+  `82cbe97`**: `FakeLoraFetcher` unlinked the partial file *inside* its open
+  handle, which Windows refuses (`WinError 32`), so a cancellation reported
+  `failed` and left the file behind. Fixed in F-039, red-then-green. Real-host
+  downloads (HF/Civitai) I did not perform.
+- **Assets tab (`99190d2`)** — one `pnpm e2e` run gave `1 failed, 30 passed`
+  on `assets.spec.ts:31`. The spec passes in isolation (39.1 s), the full suite
+  passes on base `82cbe97` (31 passed), and a full-suite re-run on this branch
+  passed **31/31** — so it was a load-dependent flake, not a regression (my
+  diff touches no frontend file). Logged as F-041, now closed.
+- **Render guard / weights check / loud captions (`ff96202`)** — the guard and
+  the 409 pre-check behaved correctly in every attempt (no silent 19.4 GB
+  download ever occurred). The guard's own numbers remain unmeasured.
+- **WanGP worker (`db98b4a`)** — three defects found and fixed (F-035, F-036,
+  F-037); a fourth open (F-038). The design is right, the lifecycle is not.
+
+## Would you keep using it?
+
+For stills, this round got *worse* than round 1 in one specific way: round 1
+could render an image (226.7 s cold, 8044 MB) and I could not. That is not the
+model's fault — the same weights are on disk and the same card is in the
+machine — it is the worker process that ADR 0005 introduced. A user following
+the README today gets a backend that boots, reports `worker` mode, and then
+produces nothing, with no error in the UI beyond a spinner. The dependency
+isolation is correct and worth keeping; the worker lifecycle needs one more
+fix before the app is usable on this card.
+
+## Round-2 blockers, ranked by user pain
+
+1. **F-038 — no render completes at all.** Image *and* video. *Repro: `POST
+   /api/generate-image` with Z-Image installed; job stays `starting_wangp` at
+   ~1990 MiB, no output, no terminal History state.* Blocks the entire product.
+2. **F-040 — `pyright` fails with 57 errors out of the box.** *Repro:
+   `backend\.venv\Scripts\pyright`; all errors are `cv2` because
+   `site-packages/cv2/__init__.py` is missing.* Round 1's F-013 recurrence.
+3. **F-015 — Florence-2 still dead**, so every "reverse engineering" result is
+   built on empty `description`/`subjects`. *Repro: any
+   `POST /api/image-analysis/{id}/analyze`.*
+4. **F-041 — a one-off e2e failure on `assets.spec.ts:31` (now closed).** *First
+   `pnpm e2e` gave `1 failed, 30 passed`; the spec passes in isolation, the full
+   suite passes on base `82cbe97`, and a full-suite re-run here passed 31/31,
+   so it was a load-dependent flake and not a regression.*
+
+## Could not test, and why
+
+- **All four requested artifacts** (generated image, generated video, Reproduce
+  image, Reproduce video) — blocked on F-038. `Downloads\HermesRound2\proof\`
+  contains the two **source** inputs (hashes recorded) and an honest
+  `MANIFEST.json`; those are not outputs and are not presented as any.
+- **Reproduce's analysis half did work** and is real partial evidence:
+  image analysis `ia-fcfefd85cd88` produced a measured palette, luminance
+  0.1405, contrast 0.0633, a written depth map and tags; video analysis
+  `va-2235244ab978` detected 1 shot (`vs-25c743227d`, 0.0–6.125 s, `uniform` —
+  correct, the source has no cut).
+- **The Electron GUI by hand** — everything was driven through the REST API.
+  The Playwright suite passes against the mock backend. I make no claim about
+  how the desktop app looks or feels.
+- **A genuinely clean `ensure-wangp-venv.ps1` run** — `Wan2GP/` was already
+  checked out, so "succeeded on a clean run" is not something I can claim.
+- **Real-host LoRA downloads** — not attempted.
+
+## What I fixed on this branch
+
+| Commit | Fix | Evidence |
+|---|---|---|
+| `772c408` | F-035 `--extra-arg=<value>` | reverted → exact production argparse error; applied → passes |
+| `47a8345` | F-036 import before READY | reverted → `announced ready after only 0.2s, import still running`; applied → passes |
+| `bfa31c2` | F-037 launcher timeout 60 s → 300 s | reverted → `startup timeout 60.0s cannot cover WanGP's cold import`; applied → 12 passed. **This is a constant assertion, not a behavioural red-then-green** — it cannot observe a real cold import in CI. |
+| `4b9c61d` | F-039 unlink after closing the handle | reverted → `assert 'failed' == 'cancelled'`; applied → 14 passed. Pre-existing on base. |
+
+Gates on this branch: `pyright` **0 errors** (after the F-040 env repair),
+`typecheck:ts` **pass**, `test:frontend` **58 passed**, backend **864 passed,
+2 skipped**, `build:frontend` **pass**, `e2e` **31 passed**. One earlier `pnpm
+e2e` run gave `1 failed, 30 passed` on `assets.spec.ts:31`; that spec passes
+in isolation here, the full suite passes on base `82cbe97`, and a full-suite
+re-run on this branch passed 31/31, so it was a load-dependent flake (F-041),
+not a regression.
