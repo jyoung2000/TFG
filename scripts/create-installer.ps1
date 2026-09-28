@@ -77,7 +77,8 @@ if ($Unpack) {
     Write-Host "Run: $ExePath" -ForegroundColor Cyan
     Write-Host "`nTip: Just restart the app after code changes - no rebuild needed!" -ForegroundColor Green
 } else {
-    $Installer = Get-ChildItem -Path $ReleaseDir -Filter "*.exe" | Where-Object { $_.Name -like "*Setup*" } | Select-Object -First 1
+    . (Join-Path $PSScriptRoot "lib/find-built-installer.ps1")
+    $Installer = Find-BuiltInstaller -ReleaseDir $ReleaseDir
     if ($Installer) {
         $InstallerSize = [math]::Round($Installer.Length / 1MB, 2)
         Write-Host "`nInstaller: $($Installer.Name)" -ForegroundColor Cyan
