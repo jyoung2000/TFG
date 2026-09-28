@@ -51,7 +51,8 @@ function Invoke-WangGPBuild {
     if (-not (Test-Path $ConfigFile)) { Fail "missing $ConfigFile - this is the wrong repo" 2 }
 
     # The identity guard: refuse to run with any other builder config.
-    $cfg = Get-Content $ConfigFile -Raw
+    # Comment lines are ignored: the config explains the Lightricks hazard in prose.
+    $cfg = (Get-Content $ConfigFile | Where-Object { $_ -notmatch '^\s*#' }) -join "`n"
     if ($cfg -notmatch 'productName:\s*LTX Desktop WanGP') {
         Fail "$ConfigFile does not declare productName 'LTX Desktop WanGP'. Refusing to build." 3
     }
