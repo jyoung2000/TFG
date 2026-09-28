@@ -37,7 +37,9 @@ import platform
 # them to the session log file. This ensures *all* output (including early
 # import errors and unhandled tracebacks) reaches the log, not just messages
 # that go through Python's logging module.
-console_handler = logging.StreamHandler(sys.stdout)
+from logging_policy import console_handler as _console_handler  # noqa: E402
+
+console_handler = _console_handler(sys.stdout)
 console_handler.setLevel(logging.INFO)
 
 logging.basicConfig(level=logging.INFO, handlers=[console_handler])

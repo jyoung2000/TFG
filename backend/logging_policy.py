@@ -3,8 +3,10 @@ plus secret redaction for every log record and error body."""
 
 from __future__ import annotations
 
+import io
 import logging
 import re
+from typing import TextIO
 
 from fastapi import Request
 
@@ -50,6 +52,21 @@ class SecretRedactingFilter(logging.Filter):
             record.msg = redacted
             record.args = ()
         return True
+
+
+def console_handler(stream: TextIO) -> logging.StreamHandler[TextIO]:
+    """The backend's console handler (Electron captures it into the session log).
+
+    On Windows a piped stdout uses the ANSI code page (cp1252), which cannot
+    encode the block characters in the tqdm bars the WanGP bridge relays, so
+    every progress line raised inside the handler. Electron decodes the pipe
+    as UTF-8, so switch the stream to UTF-8 (and never let an unencodable
+    character cost a log line).
+    """
+    wrapper: object = stream
+    if isinstance(wrapper, io.TextIOWrapper) and stream.encoding.replace("-", "").lower() != "utf8":
+        wrapper.reconfigure(encoding="utf-8", errors="backslashreplace")
+    return logging.StreamHandler(stream)
 
 
 def install_secret_redaction() -> None:
