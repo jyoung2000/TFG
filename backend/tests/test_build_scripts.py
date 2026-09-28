@@ -87,3 +87,26 @@ def test_wangp_flavor_is_its_own_app_on_its_own_update_feed() -> None:
     wangp_dirs = wangp.get("directories", base_dirs)
     assert isinstance(base_dirs, dict) and isinstance(wangp_dirs, dict)
     assert wangp_dirs.get("output", base_dirs["output"]) != base_dirs["output"]
+
+
+def _wan2gp_packaging_filter() -> list[str]:
+    lines = (REPO_ROOT / "electron-builder.yml").read_text(encoding="utf-8").splitlines()
+    start = lines.index("  - from: Wan2GP")
+    patterns: list[str] = []
+    for line in lines[start + 1 :]:
+        if line.startswith("  - "):
+            break
+        item = line.strip()
+        if item.startswith("- "):
+            patterns.append(item[2:].strip().strip('"'))
+    return patterns
+
+
+def test_installer_never_bundles_downloaded_wangp_weights() -> None:
+    # Round 5: a 1.3 GB LoRA that WanGP downloaded into Wan2GP/loras/ltx2 on
+    # first use of the reference-image mode turned the 283 MB WanGP installer
+    # into a 1.2 GB one. Checkpoints were excluded; downloaded LoRAs were not.
+    patterns = _wan2gp_packaging_filter()
+    assert "!ckpts/**" in patterns
+    assert "!loras/**" in patterns, "downloaded LoRA weights would ship inside the installer"
+

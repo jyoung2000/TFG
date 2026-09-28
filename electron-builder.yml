@@ -38,6 +38,7 @@ extraResources:
       - "!**/__pycache__/**"
       - "!**/*.pyc"
       - "!ckpts/**"
+      - "!loras/**"
       - "!outputs/**"
       - "!release/**"
   - from: python-deps-hash.txt
