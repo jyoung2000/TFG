@@ -143,3 +143,24 @@ class TestFlexibleLists:
         assert VisualAnalysis(subjects="").subjects == []
         assert VisualAnalysis(subjects=["astronaut", " ", 3]).subjects == ["astronaut"]  # type: ignore[list-item]
         assert VisualAnalysis(background=["dark space"]).background == "dark space"  # type: ignore[arg-type]
+
+
+class TestStartLoopUsesTheSelectedTarget:
+    def test_the_tab_on_screen_is_the_prompt_the_loop_renders(self, client, create_fake_model_files, tmp_path) -> None:
+        # Round 5: Start loop sent only budget/seed/VLM/LoRAs, so switching the
+        # target tab to FLUX previewed a FLUX prompt but the loop rendered the
+        # job's saved Z-Image prompt.
+        create_fake_model_files(include_zit=True)
+        client.post("/api/settings", json={"vision": {"vlmProvider": "off"}})
+        imported = client.post("/api/reproduce/import", json={"path": str(_png(tmp_path / "reference.png"))}).json()
+        job = client.post(f"/api/reproduce/{imported['id']}/analyze").json()
+        assert job["target"] == "z_image"
+        flux_prompt = client.post("/api/prompts/compile-spec/all", json={"spec": job["spec"], "targets": ["flux"], "styles": ["narrative"]}).json()
+        expected = next(iter(flux_prompt["results"].values()))["prompt"]
+
+        started = client.post(f"/api/reproduce/{job['id']}/start", json={"budget": {"candidates_per_round": 1, "max_rounds": 1}, "seed": 3, "target": "flux", "style": "narrative"})
+        assert started.status_code == 200, started.text
+        done = client.get(f"/api/reproduce/{job['id']}").json()
+        assert done["target"] == "flux" and done["style"] == "narrative"
+        assert done["rounds"][0]["target"] == "flux"
+        assert done["rounds"][0]["prompt"] == expected

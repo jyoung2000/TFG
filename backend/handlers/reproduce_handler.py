@@ -358,10 +358,29 @@ class ReproduceHandler(StateHandlerBase):
 
     # ---- the loop -----------------------------------------------------------------
 
-    def start(self, job_id: str, budget: ReproduceBudget | None, *, seed: int | None, provider: LLMProvider | None, loras: Sequence[LoraUse] = ()) -> ReproduceJob:
+    def start(
+        self,
+        job_id: str,
+        budget: ReproduceBudget | None,
+        *,
+        seed: int | None,
+        provider: LLMProvider | None,
+        loras: Sequence[LoraUse] = (),
+        target: str | None = None,
+        style: PromptStyle | None = None,
+    ) -> ReproduceJob:
         job = self.get(job_id)
         if job.is_busy:
             raise HTTPError(409, "A reproduce run is already in progress")
+        if target or style is not None:
+            # What the target tab shows is what the loop renders.
+            if target:
+                job.target = resolve_target(target)[0].id
+            if style is not None:
+                job.style = style
+            compiled = self._compile(job)
+            job.prompt = job.prompt_override or compiled.prompt
+            job.negative_prompt = compiled.negative_prompt
         if not job.prompt.strip() and not job.prompt_override.strip():
             raise HTTPError(400, "Analyse the reference first, or enter a prompt")
         job.loras = [l for l in loras if Path(l.name).is_file()]

@@ -44,8 +44,9 @@ export const reproduceApi = {
     request<ReproduceJob>(`/api/reproduce/${enc(id)}/spec`, { method: 'PUT', body: JSON.stringify({ sections, locks }) }),
   setPrompt: (id: string, prompt: string, target?: string, style?: PromptStyle | null) =>
     request<ReproduceJob>(`/api/reproduce/${enc(id)}/prompt`, { method: 'PUT', body: JSON.stringify({ prompt, target, style }) }),
-  start: (id: string, budget: ReproduceBudget, seed: number | null, useVlm: boolean, loras: { name: string; multiplier: number }[] = []) =>
-    request<ReproduceJob>(`/api/reproduce/${enc(id)}/start`, { method: 'POST', body: JSON.stringify({ budget, seed, use_vlm: useVlm, loras }) }),
+  // `target`/`style` are the tab and style on screen: the loop renders that prompt.
+  start: (id: string, budget: ReproduceBudget, seed: number | null, useVlm: boolean, loras: { name: string; multiplier: number }[] = [], target?: string, style?: PromptStyle) =>
+    request<ReproduceJob>(`/api/reproduce/${enc(id)}/start`, { method: 'POST', body: JSON.stringify({ budget, seed, use_vlm: useVlm, loras, target, style }) }),
   cancel: (id: string) => request<ReproduceJob>(`/api/reproduce/${enc(id)}/cancel`, { method: 'POST' }),
   pin: (id: string, candidateId: string) => request<ReproduceJob>(`/api/reproduce/${enc(id)}/pin/${enc(candidateId || 'source')}`, { method: 'POST' }),
   pick: (id: string, candidateId: string) => request<ReproduceJob>(`/api/reproduce/${enc(id)}/pick/${enc(candidateId)}`, { method: 'POST' }),

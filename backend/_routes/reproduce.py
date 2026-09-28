@@ -45,6 +45,9 @@ class StartRequest(BaseModel):
     use_vlm: bool = False
     #: LoRAs applied to every candidate (from the registry picker).
     loras: list[LoraUse] = Field(default_factory=list[LoraUse])
+    #: The target tab and prompt style on screen; the loop renders that prompt.
+    target: str | None = None
+    style: PromptStyle | None = None
 
 
 class FixRequest(BaseModel):
@@ -104,7 +107,7 @@ def route_prompt(job_id: str, req: PromptRequest, handler: AppHandler = Depends(
 
 @router.post("/{job_id}/start", response_model=ReproduceJob)
 def route_start(job_id: str, req: StartRequest, handler: AppHandler = Depends(get_state_service)) -> ReproduceJob:
-    return handler.reproduce.start(job_id, req.budget, seed=req.seed, provider=_vlm(handler) if req.use_vlm else None, loras=req.loras)
+    return handler.reproduce.start(job_id, req.budget, seed=req.seed, provider=_vlm(handler) if req.use_vlm else None, loras=req.loras, target=req.target, style=req.style)
 
 
 @router.post("/{job_id}/cancel", response_model=ReproduceJob)

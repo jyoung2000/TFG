@@ -9,6 +9,7 @@ import { logger } from '../../lib/logger'
 import { reproduceApi, reproduceMediaUrl } from '../../lib/reproduce-api'
 import { toFileUrl } from '../../lib/file-url'
 import { PROMPT_STYLES, SPEC_TARGETS, type PromptStyle, type SpecSection } from '../../types/shotspec'
+import { requestSettings } from '../../lib/error-messages'
 import { isBusy, type ReproduceCandidate, type ReproduceJob } from '../../types/reproduce'
 import { CandidateCompare, MetricBars } from './CandidateCompare'
 import { FixCanvas } from './FixCanvas'
@@ -170,14 +171,15 @@ export function ImageReproduce() {
             <>
               <section className="flex items-center gap-2 flex-wrap">
                 <h2 className="text-sm font-semibold text-white">{job.title}</h2>
-                <span className="text-xs text-zinc-500">{job.width}×{job.height} · {job.image_model}{job.vision_model ? ` · read by ${job.vision_model}` : ''}</span>
+                <span className="text-xs text-zinc-500">{job.width}×{job.height} · renders with {job.image_model}{job.vision_model ? ` · read by ${job.vision_model}` : ''}</span>
+                <button onClick={() => requestSettings('vision')} className="text-xs text-violet-300 hover:text-violet-200 underline-offset-2 hover:underline" title="Choose the vision AI that reads the reference (Settings → Vision), then Analyse again">change vision AI</button>
                 <span className={`text-xs ${job.status === 'failed' ? 'text-red-300' : busyJob ? 'text-violet-300' : 'text-zinc-400'}`} data-testid="reproduce-status">{job.status}{busyJob ? ` ${Math.round(job.progress)}% · ${job.message}` : job.message ? ` · ${job.message}` : ''}</span>
                 <div className="ml-auto flex gap-1.5">
                   <button onClick={() => void run('Analysing', () => reproduceApi.analyze(job.id))} disabled={!!busy || busyJob} className="btn-chip">{busy === 'Analysing' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />} Analyse</button>
                   {busyJob ? (
                     <button onClick={() => void run('Cancelling', () => reproduceApi.cancel(job.id))} className="btn-chip text-red-300"><Square className="h-3.5 w-3.5" /> Cancel</button>
                   ) : (
-                    <button onClick={() => void run('Starting', () => reproduceApi.start(job.id, budget, seed.trim() ? Number(seed) : null, useVlm, loras))} disabled={!!busy || !shownPrompt} className="btn-chip bg-violet-700 hover:bg-violet-600 text-white"><Play className="h-3.5 w-3.5" /> Start loop</button>
+                    <button onClick={() => void run('Starting', () => reproduceApi.start(job.id, budget, seed.trim() ? Number(seed) : null, useVlm, loras, target, style))} disabled={!!busy || !shownPrompt} className="btn-chip bg-violet-700 hover:bg-violet-600 text-white"><Play className="h-3.5 w-3.5" /> Start loop</button>
                   )}
                 </div>
               </section>
@@ -206,6 +208,7 @@ export function ImageReproduce() {
                 </section>
 
                 <section className="space-y-2">
+                  <p className="text-[11px] text-zinc-500" data-testid="target-caption">These tabs choose which model the prompt is written for; Start loop uses the tab and style shown. Candidates always render with {job.image_model}.</p>
                   <div className="flex items-center gap-1 flex-wrap" role="tablist" aria-label="Compile target">
                     {SPEC_TARGETS.map(t => (
                       <button key={t} role="tab" aria-selected={target === t} onClick={() => setTarget(t)} className={`px-2 py-1 rounded-md text-[11px] ${target === t ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:text-white'}`}>{TARGET_LABEL[t] ?? t}</button>
