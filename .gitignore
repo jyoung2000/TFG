@@ -8,7 +8,7 @@ dist/
 dist-electron/
 .vite/
 release/
-release-wangp/
+release-wangp*/
 *.tsbuildinfo
 
 # Python
