@@ -1037,6 +1037,37 @@ class TestGenerationProgress:
         assert data["currentStep"] is None
         assert data["totalSteps"] is None
 
+    def test_progress_never_goes_backwards_across_wangp_phases(self, client, test_state):
+        # The sequence the backend reported for a Fast 540p 6 s render on the
+        # RTX 4070 (round 5): WanGP restarts its own percentage at each phase
+        # (text encoding, first denoise, second denoise, VAE decode), so the
+        # bar fell 95 -> 20 and 94 -> 15 before the clip finished.
+        _fake_running_generation_state(test_state)
+        reported = [
+            ("encoding_text", 21, 47, 48),
+            ("inference", 15, None, None),
+            ("inference", 20, 0, 8),
+            ("inference", 76, 7, 8),
+            ("decoding", 95, 8, 8),
+            ("inference", 20, 0, 3),
+            ("inference", 63, 2, 3),
+            ("decoding", 95, 3, 3),
+            ("decoding", 85, 0, 70),
+            ("decoding", 94, 65, 70),
+            ("decoding", 90, None, None),
+            ("inference", 15, None, None),
+        ]
+        seen: list[int] = []
+        for phase, percent, step, total in reported:
+            test_state.generation.update_progress(phase, percent, step, total)
+            data = client.get("/api/generation/progress").json()
+            seen.append(data["progress"])
+            assert data["phase"] == phase
+            assert data["currentStep"] == step
+            assert data["totalSteps"] == total
+        assert seen == sorted(seen), f"progress went backwards: {seen}"
+        assert seen[-1] == 95
+
 
 class TestGenerateImage:
     def test_happy_path(self, client, create_fake_model_files):

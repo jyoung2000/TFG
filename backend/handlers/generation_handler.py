@@ -118,9 +118,9 @@ class GenerationHandler(StateHandlerBase):
         total_steps: int | None = None,
     ) -> None:
         job_id = self.running_job_id()
-        self._update_progress_locked(phase, progress, current_step, total_steps)
-        if job_id and self._jobs is not None:
-            self._jobs.progress(job_id, progress, phase)
+        shown = self._update_progress_locked(phase, progress, current_step, total_steps)
+        if job_id and self._jobs is not None and shown is not None:
+            self._jobs.progress(job_id, shown, phase)
 
     @with_state_lock
     def _update_progress_locked(
@@ -129,28 +129,30 @@ class GenerationHandler(StateHandlerBase):
         progress: int,
         current_step: int | None = None,
         total_steps: int | None = None,
-    ) -> None:
+    ) -> float | None:
         match self._running_slot():
             case "gpu":
                 match self.state.gpu_slot:
                     case GpuSlot(generation=GenerationRunning() as running):
-                        running.progress.phase = phase
-                        running.progress.progress = progress
-                        running.progress.current_step = current_step
-                        running.progress.total_steps = total_steps
+                        pass
                     case _:
-                        return
+                        return None
             case "api":
                 match self.state.api_generation:
                     case GenerationRunning() as running:
-                        running.progress.phase = phase
-                        running.progress.progress = progress
-                        running.progress.current_step = current_step
-                        running.progress.total_steps = total_steps
+                        pass
                     case _:
-                        return
+                        return None
             case _:
-                return
+                return None
+        # WanGP restarts its own percentage at every phase (text encoding,
+        # each denoise pass, VAE decode), so within one generation the bar
+        # only moves forward; phase and step counts follow the latest report.
+        running.progress.phase = phase
+        running.progress.progress = max(running.progress.progress, progress)
+        running.progress.current_step = current_step
+        running.progress.total_steps = total_steps
+        return running.progress.progress
 
     def cancel_generation(self) -> CancelResponse:
         job_id = self.running_job_id()
