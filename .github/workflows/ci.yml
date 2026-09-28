@@ -206,6 +206,23 @@ jobs:
             Write-Error "vc_redist.x64.exe is not validly signed by Microsoft"; exit 1
           }
 
+      # The packaged app compares python-deps-hash.txt with the staged runtime's
+      # deps-hash.txt. It is gitignored and written by scripts/prepare-python.sh
+      # (the Linux job runs it); compute it the same way, in bash so the bytes
+      # hashed match that script's on any OS.
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86 # v5.4.2
+        with:
+          version: "latest"
+
+      - name: Write python-deps-hash.txt (as scripts/prepare-python.sh does)
+        shell: bash
+        run: |
+          uv export --frozen --no-hashes --no-editable --no-emit-project \
+              --no-header --no-annotate --project backend > backend/requirements-dist.txt
+          sha256sum backend/requirements-dist.txt | cut -d' ' -f1 > python-deps-hash.txt
+          echo "deps hash: $(cat python-deps-hash.txt)"
+          rm backend/requirements-dist.txt
+
       - name: Build frontend + Electron main (WanGP brand)
         env:
           VITE_APP_BRAND: wangp
