@@ -236,20 +236,26 @@ def apply_vlm(spec: ShotSpec, fields: dict[str, Any], confidence: float = 0.5) -
     measured/detected value, and is capped when it disagrees with the tagger."""
     conf = max(0.0, min(1.0, confidence))
 
-    def text(key: str) -> str:
-        value = fields.get(key, "")
-        if isinstance(value, list):
-            return ", ".join(str(v) for v in cast(list[object], value) if str(v).strip())
-        return str(value).strip() if value is not None else ""
+    def text(*keys: str) -> str:
+        """The first non-empty value among `keys` (callers spell some fields two ways)."""
+        for key in keys:
+            value = fields.get(key, "")
+            if isinstance(value, list):
+                joined = ", ".join(str(v) for v in cast(list[object], value) if str(v).strip())
+            else:
+                joined = str(value).strip() if value is not None else ""
+            if joined:
+                return joined
+        return ""
 
     scene = SpecScene(
         location=text("location"),
         environment=text("environment"),
         time_of_day=_pick_vocab(text("time_of_day"), TIME_OF_DAY_VOCAB),
         weather=text("weather"),
-        fg=text("foreground"),
-        mg=text("midground"),
-        bg=text("background"),
+        fg=text("foreground", "fg"),
+        mg=text("midground", "mg"),
+        bg=text("background", "bg"),
     )
     if any(scene.model_dump().values()) and _write(spec, "scene", "vlm", conf):
         spec.scene = scene
@@ -271,7 +277,7 @@ def apply_vlm(spec: ShotSpec, fields: dict[str, Any], confidence: float = 0.5) -
     if not spec.is_locked("camera"):
         camera_fields = {
             "angle": text("angle"),
-            "height": text("camera_height"),
+            "height": text("camera_height", "height"),
             "lens_estimate": text("lens_estimate") or text("lens"),
             "focus": text("focus"),
             "aperture": text("aperture"),
@@ -284,8 +290,8 @@ def apply_vlm(spec: ShotSpec, fields: dict[str, Any], confidence: float = 0.5) -
         if not spec.camera.shot_size and text("shot_size"):
             spec.camera.shot_size = text("shot_size")
             wrote = True
-        if not spec.camera.dof and text("depth_of_field"):
-            spec.camera.dof = _pick_vocab(text("depth_of_field"), DOF_VOCAB) or text("depth_of_field")
+        if not spec.camera.dof and text("depth_of_field", "dof"):
+            spec.camera.dof = _pick_vocab(text("depth_of_field", "dof"), DOF_VOCAB) or text("depth_of_field", "dof")
             wrote = True
         if wrote and "camera" not in spec.provenance:
             spec.set_section("camera", "vlm", conf)
@@ -317,10 +323,41 @@ def apply_vlm(spec: ShotSpec, fields: dict[str, Any], confidence: float = 0.5) -
 
     # Subjects only when detection found nothing.
     if not spec.subjects and not spec.is_locked("subjects"):
-        raw = fields.get("subjects")
-        names = [str(n).strip() for n in cast(list[object], raw) if str(n).strip()] if isinstance(raw, list) else ([text("subject")] if text("subject") else [])
-        if names and _write(spec, "subjects", "vlm", min(0.6, conf)):
-            spec.subjects = [SpecSubject(label=name.lower(), count=1) for name in names[:6]]
+        named = _vlm_subjects(fields)
+        if named and _write(spec, "subjects", "vlm", min(0.6, conf)):
+            spec.subjects = named[:6]
+        elif not named and scene.fg and _write(spec, "subjects", "vlm", min(0.4, conf)):
+            # Models often describe the person only as the foreground
+            # ("woman in black leather outfit"); a derived subject beats an
+            # empty block, at a confidence that says it was derived.
+            spec.subjects = [SpecSubject(label=scene.fg.lower()[:80], count=1)]
+
+
+def _vlm_subjects(fields: dict[str, Any]) -> list[SpecSubject]:
+    """Subjects in the shapes vision models actually return: a list of names,
+    a list of objects (label/name/subject, count, attributes/wardrobe/pose),
+    or a single `subject` / `people` / `characters` entry."""
+    raw: object = next((fields[k] for k in ("subjects", "subject", "people", "characters") if fields.get(k)), None)
+    items: list[object] = cast(list[object], raw) if isinstance(raw, list) else ([raw] if raw else [])
+    subjects: list[SpecSubject] = []
+    for item in items:
+        if isinstance(item, dict):
+            entry = cast(dict[str, object], item)
+            label = str(entry.get("label") or entry.get("name") or entry.get("subject") or entry.get("description") or "").strip()
+            count_raw = entry.get("count", 1)
+            count = count_raw if isinstance(count_raw, int) and count_raw > 0 else 1
+            attributes: list[str] = []
+            for key in ("attributes", "wardrobe", "pose", "details"):
+                value = entry.get(key)
+                if isinstance(value, list):
+                    attributes += [str(v).strip() for v in cast(list[object], value) if str(v).strip()]
+                elif isinstance(value, str) and value.strip():
+                    attributes.append(value.strip())
+            if label:
+                subjects.append(SpecSubject(label=label.lower(), count=count, attributes=attributes))
+        elif str(item).strip():
+            subjects.append(SpecSubject(label=str(item).strip().lower(), count=1))
+    return subjects
 
 
 def apply_user(spec: ShotSpec, patch: dict[str, Any], *, lock: bool = True) -> ShotSpec:

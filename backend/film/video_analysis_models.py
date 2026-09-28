@@ -55,7 +55,7 @@ def _coerce_list_shape(v: object) -> object:
 
 #: A list[str] field that accepts every shape the small models emit:
 #: 'astronaut', ['astronaut'], ['a', 'b'], '', None.
-FlexibleStrList = Annotated[list[str], BeforeValidator(_coerce_list_shape), BeforeValidator(_flatten_shape)]
+FlexibleStrList = Annotated[list[str], BeforeValidator(_coerce_list_shape)]
 
 #: A str field that accepts a list of strings too ('globe' / ['globe']).
 FlexibleStr = Annotated[str, BeforeValidator(_flatten_shape)]

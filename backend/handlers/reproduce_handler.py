@@ -259,10 +259,11 @@ class ReproduceHandler(StateHandlerBase):
             if part
         )
         instruction = (
-            "You describe ONE image for a cinematographer. Reply with JSON only with string fields: location, environment, "
+            "You describe ONE image for a cinematographer. Reply with JSON only with: subjects (list of objects with label, "
+            "count and attributes such as wardrobe and pose; every person, animal and key object), and string fields: location, environment, "
             "time_of_day, weather, foreground, midground, background, lighting_quality, light_direction, color_temp, mood, "
             "shot_size (xwide|wide|full|medium|mcu|closeup|xcu), angle, camera_height, lens_estimate, depth_of_field "
-            "(shallow|medium|deep), focus, what_happens, purpose, style, medium (vector|photo|3d-render|painting|pixel-art|"
+            "(shallow|medium|deep), focus, what_happens, purpose, beat, style, medium (vector|photo|3d-render|painting|pixel-art|"
             "line-art|anime), negatives (list) and confidence (0-1). Measured facts below are ground truth; do not contradict them."
         )
         try:
@@ -280,7 +281,10 @@ class ReproduceHandler(StateHandlerBase):
         confidence = fields.get("confidence", 0.5)
         apply_vlm(job.spec, fields, float(confidence) if isinstance(confidence, (int, float)) else 0.5)
         job.vision_model = f"{provider.name}:{provider.model}"
-        job.why["vlm"] = f"{provider.name}:{provider.model} filled scene, lighting and narrative"
+        filled = [block for block in ("subjects", "scene", "camera", "lighting", "style", "narrative") if job.spec.provenance.get(block) == "vlm"]
+        job.why["vlm"] = f"{provider.name}:{provider.model} filled " + (", ".join(filled) if filled else "nothing the other readers had not")
+        if not job.spec.subjects:
+            job.why["subjects_empty"] = f"No subjects: object detection found none and {provider.model} named none"
 
     @staticmethod
     def _why(analysis: VisionAnalysis, spec: ShotSpec) -> dict[str, Any]:
