@@ -920,3 +920,218 @@ the render keeps going.
   progress constant), F-055 (`diag_preready.py` cannot score a pass), F-056
   (`busy:false` mid-render), F-057 (~4× wall-time variance), and the GUI
   screens not yet swept (Reproduce, Train, Film Studio, Assets, Settings).
+
+---
+
+# Round 5 — the round-4 fixes on the card, F-057, F-052, the installer (Claude Code on the RTX 4070, 2026-09-27/28)
+
+**Hardware and method.** Windows 11 **Home** 26200, RTX 4070 12282 MiB, driver
+616.64, **32 581 MB RAM**, checkpoints on `C:`. Base `8e619be`. A 1 s sampler
+logged `nvidia-smi` (util, used, SM clock, power, temperature, throttle reasons)
+plus `Available MBytes`, `Pages/sec`, `Page Reads/sec` and `C:` read MB/s for
+every render; the baseline is the idle `nvidia-smi` reading taken just before
+each click. Renders went through the real Electron window (`pnpm dev` with a CDP
+port); the app's own endpoints were polled from inside the renderer, so the
+session token never left the app. Raw data and scripts:
+`C:\Users\jalon\TFG-r5-evidence` (outside the repo).
+
+**This round's commits:** `968a4bf` (progress never goes backwards), `a2d7535`
+(UTF-8 console), `e6f1cd7` (build summary names the right installer), `329e118`
++ `6691e77` (WanGP flavor on its own update feed and output dir; `pnpm
+wangp:ship`), plus this docs commit.
+
+## 1. The off-hardware fixes, on the card
+
+One Fast 540p · 6 s clip from the Create view (`job_6cc8b2dae4ae`, 596.48 s).
+
+- **F-054 / F-059 — pass, with a new defect.** `currentStep` / `totalSteps` were
+  non-null in 228 of 278 running samples (text encoding 0–47/48, denoise 0–7/8
+  and 0–3/3, VAE decode 0–65/70) and the bar kept moving until the clip landed
+  ([`01-create-midrender-28pct.jpg`](review-screenshots/round5/01-create-midrender-28pct.jpg):
+  `Generating...` at 28 %). But the backend's own `progress` went **backwards**
+  at every WanGP phase boundary: 21→15, 95→20 (second denoise pass), 95→85
+  (decode), 94→90→15 just before `complete`. **F-062, fixed in `968a4bf`**
+  (red on exactly that sequence). Not re-observed on hardware after the fix.
+- **F-056 / F-060 — pass.** `GET /api/wangp/status` said `busy:true`,
+  `active_job:"job_6cc8b2dae4ae"` in all 278 running samples and `busy:false`
+  afterwards.
+- **F-058 — pass.** Admitted under 5200. Worst `max(History, sampler) −
+  baseline` in the whole round was **4657** (table below), so no threshold moved.
+- **Found on the way — F-063, fixed in `a2d7535`.** Every tqdm line the WanGP
+  bridge relays raised `UnicodeEncodeError: 'charmap'` inside the log handler
+  (49 twenty-line tracebacks in one render): the backend's piped stdout is cp1252
+  on Windows. After the fix the log reads `orphan guard armed — serving` with the
+  em-dash intact on every cold start.
+
+## 2. F-057 — the wall-time variance: mechanism found, trigger not
+
+Same payload (Fast 540p · 6 s, same prompt), app restarted between runs 3 and 4,
+then three more runs with WanGP's memory profile switched from 4 to 5 as a test.
+
+| Render | History job | Wall (History s) | History peak | Sampler peak | Baseline | max − baseline | Free RAM before (MB) | Avail RAM mean (MB) | C: read (GB) | GPU util mean |
+|---|---|---|---|---|---|---|---|---|---|---|
+| §1, cold (profile 4) | `job_6cc8b2dae4ae` | 596.48 | 6238 | 5972 | 1861 | **4377** | 8004 | 1041 | 124.1 | 24.0 % |
+| v1 | `job_3d057f6836e3` | 199.80 | 4393 | 4122 | 1815 | **2578** | 1484 | 356 | 28.6 | 38.8 % |
+| v2 | `job_e5393c6e6960` | 249.66 | 4406 | 4135 | 1829 | **2577** | 2060 | 326 | 45.1 | 30.1 % |
+| v3 | `job_f271fa7b6b86` | 172.46 | 4413 | 4142 | 1837 | **2576** | 564 | 321 | 32.4 | 41.0 % |
+| v4, cold after restart | `job_d97bae2d46c7` | 264.47 | 6317 | 5235 | 1676 | **4641** | 13265 | 2258 | 56.1 | 30.9 % |
+| v5 | `job_090d121a0b33` | 153.61 | 4445 | 4171 | 1860 | **2585** | 361 | 484 | 28.4 | 46.8 % |
+| p1, profile 5, cold | `job_78213afc3e40` | 205.40 | 6348 | 4823 | 1691 | **4657** | 14099 | — | 53.1 | 36.2 % |
+| p2, profile 5 | `job_351ad98fd5e5` | 159.88 | 4445 | 4171 | 1867 | **2578** | 286 | — | 30.4 | 42.3 % |
+| p3, profile 5 | `job_39d94749d70e` | 160.30 | 4453 | 4182 | 1836 | **2617** | 266 | — | 27.9 | 41.4 % |
+| E3 (§5), cold | `job_27b54466524a` | 863.16 | 6125 | 5847 | 1485 | **4640** | 3992 | 609 | 156.8 | 20.1 % |
+
+An idle 613 s window with the app loaded, for contrast: GPU util 15.9 % (other
+desktop apps), available RAM 1866 MB, 2168 pages/s, 6.3 MB/s from `C:`.
+
+**What the data shows.** Every render on this box is paging-bound: available
+RAM was under 500 MB in 65–89 % of samples, the system ran 40 000–67 000
+pages/s, and one render read 28–157 GB from `C:` for an 18 GB checkpoint. The
+first denoise pass is the same work every time, so it is the cleanest
+comparison:
+
+| Run | Denoise 1 (8 steps) | s/step | Hard page reads/s | GPU util |
+|---|---|---|---|---|
+| v4 (fresh session) | 38 s | 4.8 | 822 | 56.8 % |
+| v3 | 84 s | 10.5 | 3374 | 37.5 % |
+| v5 | 89 s | 11.1 | 4007 | 35.8 % |
+| §1 run | 254 s | 31.8 | 4592 | 21.9 % |
+
+Step speed follows hard page reads (pages fetched back from disk), and the slow
+run's throttle reason is `0x1` (GPU idle) in 74 % of samples, against 46–57 % in
+faster runs: the card waits on the page file. At render time the WanGP worker
+held 22 854 MB of private commit, and profile 4 pins host RAM
+(`The model was partially pinned to reserved RAM: 59 large blocks spread across 12857.31 MB`);
+system commit was 67 369 MB of a 70 572 MB limit. The desktop also runs Parsec,
+Discord, Brave, Steam, WaveSpeed Desktop, ollama and others.
+
+**Ruled out:** free RAM *before* a render (r = 0.52 against wall time; the
+fastest run started with 361 MB free, v4 with 13 265 MB took 264 s); the WanGP
+memory profile (profile 5's warm runs, 159.9 / 160.3 s, sit inside profile 4's
+range, and its first-denoise paging is unchanged at 3320–4350 reads/s);
+thermal (max 71 °C). **Not identified:** what makes one session page 3–5× more
+than another. **No app fix shipped**, because nothing I tested moved the number;
+the config was restored to profile 4. The honest user-facing consequence is
+F-068: Home's *"a clip 2–4 minutes in testing"* is too narrow for 153.6–863.2 s.
+
+## 3. F-052 — 10 of 10 cold starts clean; round 4's dump read
+
+Ten cold starts (`pnpm dev`, every TFG process killed between starts; no
+reboot, per the prompt): **all clean**, WanGP import 3.594–16.781 s, zero
+Application Error events. Round 4's crash had left a full dump,
+`%LOCALAPPDATA%\CrashDumps\python.exe.16232.dmp` (696 MB, 2026-09-27 12:05:38),
+matching event id 1000 verbatim: `Faulting module name: ntdll.dll, version:
+10.0.26100.9444 | Exception code: 0xc000070a | Fault offset:
+0x00000000000c87a4`. Parsed with the `minidump` package: faulting thread
+`0xab68`, exception parameters `0xffffffffc0000024, 0x85c, 0x2d8cebe5240, 0x0,
+0x7ffb53f6ee00`. At the crash **`torch_cuda.dll`, `nvcuda.dll`, the cuDNN DLLs and
+`libtriton.pyd` were already loaded**, so round 4's "during interpreter startup"
+framing was too early. A raw scan of that thread's stack finds one non-Windows
+module, `nvdiagclt64.dll+0x7f32d`. That is a scan, not an unwound call stack:
+a lead, not a cause.
+
+## 4. The installer — built; not installed, and why that is the finding
+
+`pnpm build:win` → exit 0 in 122 s. Its summary named the wrong file (a 3-day-old
+`LTX Desktop WanGP-Setup.exe`, 189.42 MB): **F-064, fixed in `e6f1cd7`**. A
+concurrent WanGP build was running in the same checkout during my first build,
+so I rebuilt with a watcher running: uncontended, exit 0 in 124 s,
+**`release/LTX Desktop-Setup.exe`, 283 212 711 bytes, SHA-256
+`97e71e63554e4debf8151af0ec3b4a34d3927e681c9a31ed9a0b18a9e0fbd5f2`, `NotSigned`**.
+
+**Where it could be installed: nowhere safe.** There is no Windows Sandbox or VM
+here (Windows 11 Home: no `WindowsSandbox.exe`, no VirtualBox or VMware). On the
+host, the uninstall registry lists **LTX Desktop 1.2.7, publisher Lightricks**:
+upstream's real app. The fork's normal installer uses the **same** `appId:
+com.lightricks.ltx-desktop` and product name at version 1.0.1, so installing it
+would replace the user's upstream app. I did not install it. **F-066 (P0).**
+
+Run unpacked from `release\win-unpacked\` instead (nothing installed; the user's
+data backed up and the runtime folders renamed aside first, then restored):
+
+- first run began staging a **3 258 476 731-byte** Python runtime from
+  `https://github.com/Lightricks/ltx-desktop/releases/download/v1.0.1`: upstream's
+  runtime, not one built for this fork's backend;
+- within 18 s the updater logged `[updater] Update downloaded: v1.2.7`, and
+  `updater.ts` calls `autoUpdater.quitAndInstall(false, true)` once the runtime
+  pre-download ends. **I force-killed the process tree before that point.**
+
+So `/api/health`, Home and a render in the packaged app were **not reached**, and
+install and uninstall were **not run**. Checklist §2 is not satisfied. The upstream
+1.2.7 installer that run staged is still in
+`%LOCALAPPDATA%\ltx-desktop-updater\pending\`; disarming it was refused by this
+session's permission classifier, so it is left for the user. (An earlier staged
+copy had already been renamed to `pending.DISARMED-20260928-024952` two minutes
+before my run; I did not do that.)
+
+**The WanGP flavor and the user's question.** Mid-round the user asked that
+changes land on the installed **LTX Desktop WanGP**, not the normal app. That
+flavor had the same inherited hazard: its packaged `app-update.yml` pointed at
+Lightricks, and it staged into the same `release/`. **F-065, fixed in `329e118`
++ `6691e77`**: own feed (`jyoung2000/TFG`), own `release-wangp/`, a test that fails
+if the WanGP config ever inherits Lightricks' feed again, `pnpm wangp:ship`
+(build → install only the WanGP app → verify, refusing the normal one), and an
+AGENTS.md rule so both Claude Code and Hermes ship that way. The config and
+wrapper were drafted by a concurrent session on this machine; I corrected three
+bugs in the wrapper that would have made `ship` always fail. **The installed
+WanGP app is not yet rebuilt from these commits**: `pnpm wangp:ship` stops at
+`EBUSY: resource busy or locked, unlink '…\release-wangp\win-unpacked\resources\app.asar'`,
+and I could not find the handle holder without admin tools. The installed exe
+(`…\Programs\LTX Desktop WanGP\LTX Desktop WanGP.exe`, 2026-09-28 02:40:44) was
+built before `e6f1cd7`, `329e118` and `6691e77`, with the Lightricks feed baked in.
+
+## 5. The blocked matrix rows
+
+| Row | Result |
+|---|---|
+| A4 I2V + LoRA | **BLOCKED**: no LoRA exists anywhere on the box (`Wan2GP/loras/*` empty, no registry); depends on D2 |
+| A5 end frame + refs | **MEASURED — fails.** Not in the GUI at all (`frontend/` never uses `endFramePath` / `referenceImagePaths`). Through the app's backend: two refs → **HTTP 500** `Only one Reference Image is supported by this model mode` (`Wan2GP/wgp.py:1387`), History `failed`. **F-067.** One ref + end frame: started, then **interrupted** when the Electron window exited mid-render (cause not established); no result |
+| B2, B3 video Reproduce | **not reached** this round (time went to F-057 and F-066) |
+| D2, D3 LoRA train / apply | **BLOCKED**: trainer venv absent and no training weights configured |
+| E3 History live updates | **MEASURED — passes.** The card showed `inference · running 44%` and then `complete` with its thumbnail in the same open view, no reload ([`02`](review-screenshots/round5/02-history-running-44pct.jpg), [`03`](review-screenshots/round5/03-history-complete.jpg)). `queued` not observed |
+| A6 5B TI2V | checkout lists `ti2v_2_2` now; the app never offers it and its weights are absent: not run |
+| F1–F3 | not run (Docker Desktop was running; not attempted in this round's time) |
+| F5 | no fal key |
+
+## 6. GUI screens
+
+Graded only what I drove: **Create**: progress while working **good** (a moving
+bar with real step counts; the backwards jumps are fixed in source), no degraded
+state met. **History**: live updates **good**, the failed A5 job recorded with
+WanGP's message. **Reproduce, Train, Film Studio, Assets + New-asset wizard,
+Settings: not swept this round.** Unverified, not passing.
+
+## 7. Would you keep using it?
+
+**From source, yes — with the same caveat as round 4, now explained.** The dev
+app starts 10 times out of 10, renders every time, reports real progress and a
+truthful busy state. Render time on this 32 GB desktop is decided by RAM paging
+(2.6–14.4 min for the same clip), which the app neither causes nor controls
+today; closing other apps is the obvious lever, and I did not test it.
+
+**As an installed product, no.** The normal installer is upstream's identity and
+update feed (F-066): on a machine with the real LTX Desktop it replaces it, and on
+first launch it pulls upstream's runtime and upstream's update. The WanGP flavor
+is fixed in source (F-065) but the installed copy has not been rebuilt yet.
+
+## Round 5 — things I did to this machine, on the record
+
+- **I killed five `Hermes.exe` processes** by mistake at about 02:51: my kill
+  filter matched any command line containing `win-unpacked`, and Hermes runs from
+  one. A `Hermes.exe` was running again later in the session.
+- The staged upstream installer in `ltx-desktop-updater\pending\` (above) and an
+  830 MB partial runtime download, renamed `*.r5-packaged-run` in
+  `%LOCALAPPDATA%\LTXDesktop\`, are left for the user to remove.
+- WanGP's `wgp_config.json` went to profile 5 for the A/B and was restored to 4;
+  the runtime folders I renamed aside were restored; a backup of settings, History
+  and outputs is in `C:\Users\jalon\TFG-r5-evidence\userdata-backup`.
+
+## Round 5 — unfinished, and why
+
+- **§4:** install, first-run staging to completion, packaged `/api/health`, Home,
+  a render, and uninstall. No sandbox or VM exists, and a host install replaces the
+  user's upstream app (F-066). The WanGP rebuild is blocked by the `EBUSY` lock.
+- **§5:** B2, B3, the one-reference A5; A4, D2, D3 (environment).
+- **§6:** five screens unswept.
+- F-057's trigger, F-052's cause.
+
