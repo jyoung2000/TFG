@@ -28,6 +28,25 @@ LTX Desktop is an Electron app for AI video generation using LTX models. Three-l
 
 Run a single backend test: `cd backend && uv run pytest tests/test_generation.py -v --tb=short`
 
+## Shipping to the installed app (Claude Code and Hermes)
+
+The product on this desktop is **LTX Desktop WanGP**
+(`electron-builder-wangp.yml`, appId `com.tfg.ltx-desktop-wangp`, installed in
+`%LOCALAPPDATA%\Programs\LTX Desktop WanGP`). `git push` never updates an
+installed app; only a build + install does.
+
+- Ship changes with `pnpm wangp:ship` (build `release-wangp/`, install only the
+  WanGP app, verify the installed exe matches the build). `pnpm wangp:verify`
+  re-checks an install.
+- Never run `pnpm build:win` or `local-build.ps1` without `-Config
+  electron-builder-wangp.yml` to ship: that builds the **normal** LTX Desktop,
+  whose appId `com.lightricks.ltx-desktop` is upstream Lightricks' app. Never
+  install `release/LTX Desktop-Setup.exe` on this machine: it replaces the
+  user's upstream LTX Desktop.
+- The WanGP config must never inherit upstream's `publish:` block (Lightricks/
+  ltx-desktop): the updater would download upstream and `quitAndInstall` over
+  the fork. `backend/tests/test_build_scripts.py` enforces this.
+
 ## CI Checks
 
 PRs must pass: `pnpm typecheck` + `pnpm test:frontend` + `pnpm backend:test` + `pnpm e2e` (Playwright against `pnpm dev:ui`, see `docs/TESTING.md`) + frontend Vite build.

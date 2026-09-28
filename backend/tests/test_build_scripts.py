@@ -42,3 +42,48 @@ def test_build_summary_names_the_installer_just_built_not_a_stale_one(tmp_path: 
         check=True,
     )
     assert out.stdout.strip() == "LTX Desktop-Setup.exe"
+
+
+def _builder_config(name: str) -> dict[str, dict[str, str] | str]:
+    """Top-level scalars and one-level blocks of an electron-builder YAML file."""
+    config: dict[str, dict[str, str] | str] = {}
+    block: dict[str, str] | None = None
+    for raw in (REPO_ROOT / name).read_text(encoding="utf-8").splitlines():
+        line = raw.split(" #", 1)[0].rstrip()
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        if not line.startswith(" "):
+            key, _, value = line.partition(":")
+            if value.strip():
+                config[key] = value.strip()
+                block = None
+            else:
+                block = {}
+                config[key] = block
+        elif block is not None and line.startswith("  ") and not line.startswith("   ") and ":" in line:
+            key, _, value = line.strip().partition(":")
+            block[key] = value.strip()
+    return config
+
+
+def test_wangp_flavor_is_its_own_app_on_its_own_update_feed() -> None:
+    # Round 5 on the audit box: `electron-builder-wangp.yml` extends the base
+    # config and inherited its `publish:` block, so the installed LTX Desktop
+    # WanGP shipped `app-update.yml` -> owner: Lightricks, repo: ltx-desktop.
+    # On first launch it downloaded upstream v1.2.7 and staged its installer,
+    # and updater.ts then calls quitAndInstall -- the fork replaced by upstream.
+    # It also staged into the same release/ as the normal app.
+    base = _builder_config("electron-builder.yml")
+    wangp = _builder_config("electron-builder-wangp.yml")
+    assert wangp["extends"] == "electron-builder.yml"
+
+    publish = wangp.get("publish", base["publish"])  # `extends` inherits the base block
+    assert isinstance(publish, dict)
+    assert publish.get("owner") != "Lightricks", "the WanGP build would auto-update to upstream LTX Desktop"
+    assert wangp["appId"] != base["appId"]
+    assert wangp["productName"] == "LTX Desktop WanGP"
+
+    base_dirs = base["directories"]
+    wangp_dirs = wangp.get("directories", base_dirs)
+    assert isinstance(base_dirs, dict) and isinstance(wangp_dirs, dict)
+    assert wangp_dirs.get("output", base_dirs["output"]) != base_dirs["output"]
