@@ -70,6 +70,41 @@ jobs:
       - name: "Vitest (pure modules: solver, motion, conversion, error mapping)"
         run: pnpm run test:frontend
 
+  e2e:
+    name: E2E (Playwright, mock backend)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - uses: pnpm/action-setup@41ff72655975bd51cab0327fa583b6e92b6d3061 # v4.2.0
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Install Chromium for Playwright
+        run: pnpm exec playwright install --with-deps chromium
+
+      # playwright.config.ts starts `pnpm dev:ui` (the mock backend: no Python,
+      # GPU or models) and checks every view renders with zero console errors.
+      - name: Playwright
+        run: pnpm e2e
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7
+
   test-python:
     name: Python Tests (${{ matrix.os }})
     runs-on: ${{ matrix.runner }}
@@ -130,8 +165,14 @@ jobs:
   # Linux uses the runtime-only bundle (LTX_PYTHON_DEPS=skip) documented in
   # docs/INSTALLER.md. Publishing a GitHub Release stays a manual step.
   # ---------------------------------------------------------------------------
+  # The Windows installer is the LTX Desktop WanGP flavor
+  # (electron-builder-wangp.yml): the base config carries upstream Lightricks'
+  # appId and update feed, and installing it replaces a user's upstream LTX
+  # Desktop (F-066 in docs/DEBUG_REPORT_hermes.md). Same steps as
+  # `pnpm build:win:wangp`: VITE_APP_BRAND=wangp for the frontend, then
+  # electron-builder with the WanGP config, into release-wangp/.
   installer-windows:
-    name: Windows Installer (NSIS, unsigned)
+    name: Windows Installer — LTX Desktop WanGP (NSIS, unsigned)
     runs-on: windows-latest
     needs: [typecheck, build-check]
     timeout-minutes: 45
@@ -152,39 +193,46 @@ jobs:
         shell: pwsh
         run: powershell -ExecutionPolicy Bypass -File scripts/ensure-wan2gp.ps1
 
-      - name: Build frontend + Electron main
+      - name: Build frontend + Electron main (WanGP brand)
+        env:
+          VITE_APP_BRAND: wangp
         run: pnpm run build:frontend
 
       - name: Package NSIS installer (unsigned, no publish)
         shell: pwsh
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
-        run: pnpm exec electron-builder --win --publish never
+        run: pnpm exec electron-builder --win --config electron-builder-wangp.yml --publish never
 
       - name: Verify installer artifact
         shell: pwsh
         run: |
-          $installer = Get-ChildItem -Path release -Filter "*Setup*.exe" | Select-Object -First 1
-          if (-not $installer) { Write-Error "No *Setup*.exe produced in release/"; exit 1 }
+          $installer = Get-Item "release-wangp/LTX Desktop WanGP-Setup.exe" -ErrorAction SilentlyContinue
+          if (-not $installer) { Write-Error "No 'LTX Desktop WanGP-Setup.exe' produced in release-wangp/"; exit 1 }
           $sizeMb = [math]::Round($installer.Length / 1MB, 1)
           Write-Host "Installer: $($installer.Name) ($sizeMb MB)"
           if ($installer.Length -lt 60MB) { Write-Error "Installer is suspiciously small ($sizeMb MB)"; exit 1 }
           # The unpacked tree must carry the backend, the Wan2GP checkout and the deps hash.
-          $unpacked = "release/win-unpacked/resources"
+          $unpacked = "release-wangp/win-unpacked/resources"
           foreach ($required in @("backend/ltx2_server.py", "backend/pyproject.toml", "Wan2GP/wgp.py", "python-deps-hash.txt", "app.asar")) {
             if (-not (Test-Path (Join-Path $unpacked $required))) { Write-Error "Missing from package: $required"; exit 1 }
           }
-          if (Test-Path "release/win-unpacked/resources/backend/tests") { Write-Error "Backend tests must not ship"; exit 1 }
+          if (Test-Path "$unpacked/backend/tests") { Write-Error "Backend tests must not ship"; exit 1 }
+          # The packaged updater must never point at upstream: it would download
+          # upstream LTX Desktop and quitAndInstall it over this app.
+          $feed = Get-Content "$unpacked/app-update.yml" -Raw
+          Write-Host "app-update.yml:`n$feed"
+          if ($feed -match 'owner:\s*Lightricks') { Write-Error "Updater points at Lightricks/ltx-desktop"; exit 1 }
           Get-FileHash $installer.FullName -Algorithm SHA256 | Format-List
-          "$($installer.Name)`nSHA256: $((Get-FileHash $installer.FullName -Algorithm SHA256).Hash)`nSize: $sizeMb MB" | Out-File release/INSTALLER-VERIFICATION.txt
+          "$($installer.Name)`nSHA256: $((Get-FileHash $installer.FullName -Algorithm SHA256).Hash)`nSize: $sizeMb MB" | Out-File release-wangp/INSTALLER-VERIFICATION.txt
 
       - name: Upload installer
         uses: actions/upload-artifact@v4
         with:
-          name: ltx-desktop-windows-installer
+          name: ltx-desktop-wangp-windows-installer
           path: |
-            release/*Setup*.exe
-            release/INSTALLER-VERIFICATION.txt
+            release-wangp/*Setup.exe
+            release-wangp/INSTALLER-VERIFICATION.txt
           retention-days: 14
           if-no-files-found: error
 
