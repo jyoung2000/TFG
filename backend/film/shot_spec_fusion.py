@@ -48,6 +48,8 @@ from film.shot_vocabulary import (
     shot_size_from_subject_height,
 )
 from handlers.vision_handler import VisionAnalysis
+from services.similarity.metrics import box_iou
+from services.vision.protocol import VisionRegion
 
 _STOP_WORDS = frozenset({"the", "and", "with", "for", "from", "into", "style", "illustration", "art", "design", "image", "color", "colors", "a", "an", "of"})
 
@@ -119,13 +121,43 @@ def apply_measured(spec: ShotSpec, analysis: VisionAnalysis) -> None:
     spec.measured.exif = dict(measured.exif)
 
 
+#: Two same-label boxes this similar are the same object seen twice.
+_DUPLICATE_IOU = 0.5
+
+
+def _dedupe_regions(regions: list[VisionRegion], iou_threshold: float = _DUPLICATE_IOU) -> list[VisionRegion]:
+    """Drop same-label boxes that describe the same object.
+
+    Florence-2 over-detects on some classes: on the round-6 reference (one
+    woman) it returned two `human face` and two `jacket` boxes. Counting boxes
+    made the spec say `count: 2`, the compiler turned that into the order
+    "2 human face; 2 jacket", and the renderer drew two people. Genuinely
+    separate objects - the two `footwear` boxes of a figure standing wide - do
+    not overlap, so they survive.
+    """
+    kept: list[VisionRegion] = []
+    for region in regions:
+        bbox = region.bbox
+        duplicate = False
+        if len(bbox) == 4 and bbox[2] > 0 and bbox[3] > 0:
+            for other in kept:
+                if other.label != region.label or len(other.bbox) != 4:
+                    continue
+                if box_iou(bbox, other.bbox) >= iou_threshold:
+                    duplicate = True
+                    break
+        if not duplicate:
+            kept.append(region)
+    return kept
+
+
 def apply_florence(spec: ShotSpec, analysis: VisionAnalysis) -> None:
     """Boxes → subjects (grouped by label with counts); the caption seeds the
     narrative only when nothing better exists; the biggest subject's height
     gives the shot size."""
     if analysis.regions and _write(spec, "subjects", "florence", 0.8):
         grouped: dict[str, SpecSubject] = {}
-        for region in analysis.regions:
+        for region in _dedupe_regions(analysis.regions):
             label = region.label.strip().lower() or "object"
             existing = grouped.get(label)
             if existing is None:

@@ -246,3 +246,49 @@ def test_subject_helpers():
     assert spec.subject_labels() == ["2 person", "dog"]
     assert "subjects.count=3" in spec.attribute_keys()
     assert VisionRegion(label="x").bbox == []
+
+
+class TestDetectionDuplicateBoxes:
+    """Florence-2 over-detects: two near-identical boxes for one object.
+
+    On the round-6 reference (one woman, hands on hips) it returned two
+    `human face` and two `jacket` boxes. `apply_florence` counted boxes, so
+    the spec carried `count: 2`, `prompt_compiler` rendered that as the hard
+    order "2 human face; 2 jacket", and Z-Image duly rendered two people.
+    Visually confirmed on the best candidate (composite 0.7024): a second
+    figure stood behind the first. The scorer's `layout` term then correctly
+    reported the mismatch at 0.05, and the loop's own VLM diff answered "Remove
+    the second person from the image" - fighting an error it had caused.
+
+    Two boxes describing the same object are one object. Overlapping same-label
+    detections are collapsed before counting, which is the standard remedy and
+    loses nothing: genuinely separate objects (the two `footwear` boxes of a
+    person standing wide) do not overlap.
+    """
+
+    def test_overlapping_same_label_boxes_count_once(self, tmp_path: Path):
+        from film.shot_spec import ShotSpec
+        from film.shot_spec_fusion import apply_florence
+        from services.vision.protocol import VisionRegion
+
+        base = _analysis(tmp_path)
+
+        def counts_for(regions: list[VisionRegion]) -> dict[str, int]:
+            spec = spec_from_vision(base.model_copy(update={"regions": regions}))
+            return {s.label: s.count for s in spec.subjects}
+
+        # Two boxes for ONE face: normalised [x, y, w, h], heavily overlapping.
+        one_face = [
+            VisionRegion(label="human face", bbox=[0.44, 0.06, 0.15, 0.10]),
+            VisionRegion(label="human face", bbox=[0.45, 0.07, 0.14, 0.09]),
+        ]
+        got = counts_for(one_face)
+        assert got.get("human face") == 1, f"one face detected twice must count once, got {got}"
+
+        # Control: two genuinely separate objects must still count twice.
+        two_feet = [
+            VisionRegion(label="footwear", bbox=[0.15, 0.87, 0.15, 0.10]),
+            VisionRegion(label="footwear", bbox=[0.55, 0.87, 0.15, 0.10]),
+        ]
+        got2 = counts_for(two_feet)
+        assert got2.get("footwear") == 2, f"two separate objects must count twice, got {got2}"
