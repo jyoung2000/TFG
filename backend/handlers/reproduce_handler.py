@@ -53,6 +53,18 @@ from state.app_state_types import AppState
 
 logger = logging.getLogger(__name__)
 
+#: The blocks the vision model is asked for: the fields to request and the reply
+#: keys that show the block was answered (a missing block gets one follow-up).
+VLM_BLOCKS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "scene": ("location, environment, time_of_day, weather, foreground, midground, background", ("location", "environment", "foreground", "midground", "background")),
+    "lighting": ("lighting_quality, light_direction, color_temp, mood", ("lighting_quality", "light_direction", "color_temp", "mood")),
+    "camera": (
+        "shot_size (xwide|wide|full|medium|mcu|closeup|xcu), angle, camera_height, lens_estimate, depth_of_field (shallow|medium|deep), focus",
+        ("shot_size", "angle", "camera_height", "lens_estimate", "depth_of_field", "focus"),
+    ),
+    "narrative": ("what_happens, purpose, beat", ("what_happens", "purpose", "beat")),
+}
+
 #: The focused follow-up used when the main read names no subjects. Live on the
 #: round-5 reference, qwen2.5vl:7b answered this with "woman" and seven visible
 #: details where the full instruction produced no subjects at all.
@@ -268,15 +280,14 @@ class ReproduceHandler(StateHandlerBase):
             )
             if part
         )
+        # Fields first, subjects last: asked subjects-first, qwen2.5vl:7b sometimes
+        # answered only the subjects (live, round 5).
         instruction = (
-            "You describe ONE image for a cinematographer. Reply with JSON only. `subjects` is a list with one object per person, "
-            "animal or key object: {\"label\": a short specific noun such as \"woman\", \"man\", \"dog\" (never just \"person\" when the "
-            "image shows more), \"count\": integer, \"attributes\": list of visible details: clothing and materials, hair, pose, "
-            "expression, held objects}. Also string fields: location, environment, "
-            "time_of_day, weather, foreground, midground, background, lighting_quality, light_direction, color_temp, mood, "
-            "shot_size (xwide|wide|full|medium|mcu|closeup|xcu), angle, camera_height, lens_estimate, depth_of_field "
-            "(shallow|medium|deep), focus, what_happens, purpose, beat, style, medium (vector|photo|3d-render|painting|pixel-art|"
-            "line-art|anime), negatives (list) and confidence (0-1). Measured facts below are ground truth; do not contradict them."
+            "You describe ONE image for a cinematographer. Reply with JSON only with string fields: "
+            + ", ".join(spec for spec, _ in VLM_BLOCKS.values())
+            + ", style, medium (vector|photo|3d-render|painting|pixel-art|line-art|anime), negatives (list), confidence (0-1), and "
+            'subjects (list of {"label": a short specific noun, "count", "attributes": list of visible details}, one per person, '
+            "animal or key object). Measured facts below are ground truth; do not contradict them."
         )
         try:
             reply = provider.chat(
@@ -291,8 +302,24 @@ class ReproduceHandler(StateHandlerBase):
             job.why["vlm"] = f"{provider.name}:{provider.model} failed: {exc}"
             return
         confidence = fields.get("confidence", 0.5)
-        apply_vlm(job.spec, fields, float(confidence) if isinstance(confidence, (int, float)) else 0.5)
+        conf = float(confidence) if isinstance(confidence, (int, float)) else 0.5
+        apply_vlm(job.spec, fields, conf)
         job.vision_model = f"{provider.name}:{provider.model}"
+        missing = [block for block, (_, keys) in VLM_BLOCKS.items() if not job.spec.is_locked(block) and not any(fields.get(k) for k in keys)]
+        if missing:
+            # Ask once, only for what the main read left out.
+            try:
+                reply = provider.chat(
+                    [
+                        LLMMessage(role="system", content="You describe ONE image for a cinematographer. Reply with JSON only with string fields: " + ", ".join(VLM_BLOCKS[b][0] for b in missing) + "."),
+                        LLMMessage(role="user", content=f"Describe this image.\n\n{grounding}", images=[url]),
+                    ],
+                    json_mode=True,
+                    timeout=120,
+                )
+                apply_vlm(job.spec, read_json(reply.text) or {}, conf)
+            except Exception as exc:  # noqa: BLE001 - the main read stands
+                job.why["blocks_vlm"] = f"{provider.name}:{provider.model} follow-up for {', '.join(missing)} failed: {exc}"
         if not job.spec.is_locked("subjects") and (not job.spec.subjects or subjects_are_derived(job.spec)):
             # A long instruction dilutes the subjects request; ask once, briefly.
             try:
