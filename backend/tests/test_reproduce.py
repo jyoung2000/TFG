@@ -291,3 +291,50 @@ class TestBusyJobSurvivesPolling:
             release.set()
             worker.join(timeout=30)
             handler._vision = original  # pyright: ignore[reportPrivateUsage]
+
+
+class TestLayoutPatchDoesNotInventSubjects:
+    """Regression: the layout patch must not turn a detector count into an order.
+
+    Florence-2 over-counts: on the round-6 reference (one woman, hands on hips)
+    it returned two `human face` boxes and two `jacket` boxes, so the spec
+    carried `count: 2` for each. `_metric_patches` phrased that as "exactly 2
+    human faces centred, exactly 2 jackets centred" and the next round was
+    rendered from that prompt - i.e. the loop ordered the model to add a
+    second person to a single-subject photograph, which drives the very
+    `layout` component the patch exists to fix further down. Measured on the
+    4070: round 1 best 0.7024, layout 0.054, patch phrase carrying the wrong
+    count.
+
+    A detection count is advisory. Placement is what the patch should carry.
+    """
+
+    def test_layout_patch_never_asserts_a_detector_count(self, client, create_fake_model_files, tmp_path, test_state):
+        from film.shot_spec import SpecSubject
+        from services.similarity.composite import ScoreBreakdown
+
+        job = _setup(client, create_fake_model_files, tmp_path)
+        handler = test_state.reproduce
+        job_obj = handler.get(job["id"])  # pyright: ignore[reportPrivateUsage]
+
+        # What the vision stack actually produced for the round-6 reference.
+        job_obj.spec.subjects = [
+            SpecSubject(label="human face", bbox=[0.44, 0.06, 0.15, 0.10], count=2),
+            SpecSubject(label="jacket", bbox=[0.11, 0.16, 0.77, 0.29], count=2),
+        ]
+        # layout is the component that is failing.
+        scores = ScoreBreakdown(composite=0.66, components={"layout": 0.05}, weights_used={"layout": 1.0})
+
+        best = handler.get(job["id"]).rounds  # pyright: ignore[reportPrivateUsage]
+        assert best == [], "no rounds yet; this test only needs a saved job"
+        handler._save(job_obj)  # pyright: ignore[reportPrivateUsage]
+
+        patches = handler._metric_patches(  # pyright: ignore[reportPrivateUsage]
+            job_obj, scores, handler._dir(job["id"]) / "reference.png"  # pyright: ignore[reportPrivateUsage]
+        )
+        layout_patches = [p for p in patches if p.metric == "layout"]
+        assert layout_patches, f"a layout score of 0.05 must produce a layout patch, got {patches}"
+        for p in layout_patches:
+            assert "exactly" not in p.phrase.lower(), f"patch hard-codes a count: {p.phrase!r}"
+            assert "2 human face" not in p.phrase.lower(), f"patch repeats a bogus count: {p.phrase!r}"
+            assert "2 jacket" not in p.phrase.lower(), f"patch repeats a bogus count: {p.phrase!r}"

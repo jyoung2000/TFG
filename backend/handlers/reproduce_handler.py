@@ -727,8 +727,17 @@ class ReproduceHandler(StateHandlerBase):
             patches.append(ReproducePatch(reason="palette drifted from the reference", phrase=phrase, metric="palette", value=palette))
         layout = components.get("layout")
         if layout is not None and layout < 0.6 and job.spec.subjects:
-            parts = [f"exactly {s.count} {s.label}{'s' if s.count > 1 else ''} {_position_word(s.bbox)}".strip() for s in job.spec.subjects]
-            patches.append(ReproducePatch(reason="subject count or placement differs", phrase=", ".join(parts), metric="layout", value=layout))
+            # Placement, never population. A detector's count is advisory:
+            # Florence-2 returns two `human face` boxes for a single person, and
+            # phrased as an order ("exactly 2 human faces centred") that made the
+            # next round render a second face on a single-subject reference,
+            # driving the very component this patch exists to fix further down.
+            # Measured on the RTX 4070 (round-6 reference): the old phrase
+            # produced round-1 best 0.7024 with layout 0.054.
+            parts = [f"the {s.label} {_position_word(s.bbox)}".strip() for s in job.spec.subjects]
+            phrase = ", ".join(p for p in parts if p)
+            if phrase:
+                patches.append(ReproducePatch(reason="subject placement differs", phrase=phrase, metric="layout", value=layout))
         ssim_value = components.get("ssim")
         if ssim_value is not None and ssim_value < 0.45:
             try:
