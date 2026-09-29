@@ -274,3 +274,16 @@ class TestMissingBlocksFollowUp:
         client.post(f"/api/reproduce/{imported['id']}/analyze")
         main = systems[0]
         assert main.index("location") < main.index("subjects"), "a subjects-first instruction made the model answer only subjects"
+
+
+class TestPlaceholderAnswers:
+    def test_unknown_none_and_empty_are_treated_as_no_answer(self) -> None:
+        # Live: qwen2.5vl:7b answered location "Unknown", weather "Unknown",
+        # background "Empty", and they reached the prompt as "Unknown, Studio, Unknown".
+        spec = ShotSpec()
+        apply_vlm(spec, {"location": "Unknown", "environment": "Studio", "weather": "unknown", "background": "Empty", "midground": "N/A", "foreground": "woman", "mood": "none"}, 0.9)
+        assert spec.scene.location == ""
+        assert spec.scene.weather == ""
+        assert spec.scene.bg == "" and spec.scene.mg == ""
+        assert spec.scene.environment == "Studio" and spec.scene.fg == "woman"
+        assert spec.lighting.mood == ""

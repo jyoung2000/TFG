@@ -241,10 +241,10 @@ def apply_vlm(spec: ShotSpec, fields: dict[str, Any], confidence: float = 0.5) -
         for key in keys:
             value = fields.get(key, "")
             if isinstance(value, list):
-                joined = ", ".join(str(v) for v in cast(list[object], value) if str(v).strip())
+                joined = ", ".join(str(v) for v in cast(list[object], value) if str(v).strip() and not _is_placeholder(str(v)))
             else:
                 joined = str(value).strip() if value is not None else ""
-            if joined:
+            if joined and not _is_placeholder(joined):
                 return joined
         return ""
 
@@ -331,6 +331,14 @@ def apply_vlm(spec: ShotSpec, fields: dict[str, Any], confidence: float = 0.5) -
             # ("woman in black leather outfit"); a derived subject beats an
             # empty block, at a confidence that says it was derived.
             spec.subjects = [SpecSubject(label=scene.fg.lower()[:80], count=1)]
+
+
+#: Answers small vision models give instead of leaving a field out.
+_PLACEHOLDERS = frozenset({"unknown", "none", "n/a", "na", "empty", "nothing", "not visible", "not applicable", "unspecified", "-", "null"})
+
+
+def _is_placeholder(value: str) -> bool:
+    return value.strip().strip(".").lower() in _PLACEHOLDERS
 
 
 def subjects_are_derived(spec: ShotSpec) -> bool:
