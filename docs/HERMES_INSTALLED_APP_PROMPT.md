@@ -48,9 +48,10 @@ then rows **F-065, F-066, F-070 … F-078** in `docs/DEBUG_REPORT_hermes.md`.
 3. **A fresh install on another PC cannot finish first-run setup**: no
    runtime (`python-embed-win32.manifest.json` + `.tar.gz.part-*`) is attached
    to any release of this repo (F-066).
-4. **After an auto-update the app did not relaunch** (observed once, 1.0.1 →
-   1.0.2: installed, then 0 processes), although `electron/updater.ts` calls
-   `quitAndInstall(false, true)`.
+4. **Relaunch after an auto-update is slow or unconfirmed.** 1.0.1 → 1.0.2:
+   the exe was replaced and a check shortly after found 0 app processes; a
+   later check found the app running again (5 processes) without anyone
+   starting it. The delay was not measured.
 
 ## Hard rules
 
@@ -133,11 +134,12 @@ bundled one, without breaking the source checkout or the container path.
 
 ### 3. Relaunch after an auto-update
 
-Find why the app did not restart after `quitAndInstall(false, true)`
-(NSIS silent install + `isForceRunAfter`), fix it with a test, and prove it
-with a real update. Publish nothing yourself: ask the user for a test
-release, or serve `latest.yml` + the installer locally if the updater has a
-dev-only override (check the code before assuming one exists).
+Measure it: on the next real update, record when `installing update…` is
+logged and when the new process starts. Only if it fails to relaunch, or
+takes long enough that a user would think the app closed, fix it (NSIS silent
+install + `isForceRunAfter`) with a test. Publish nothing yourself: ask the
+user for a test release, or serve `latest.yml` + the installer locally if the
+updater has a dev-only override (check the code before assuming one exists).
 
 ### 4. Clean-ups to raise with the user (don't change without asking)
 
