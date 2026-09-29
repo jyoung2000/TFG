@@ -230,10 +230,25 @@ class ReproduceHandler(StateHandlerBase):
         return resolve_target(self._image_model)[0].id if self._image_model else "z_image"
 
     def analyze(self, job_id: str, provider: LLMProvider | None, *, vlm_note: str = "") -> ReproduceJob:
-        """Offline stack → spec; VLM (optional) fills scene/lighting/narrative."""
+        """Offline stack → spec; VLM (optional) fills scene/lighting/narrative.
+
+        Registers the job as running for the whole analysis. `get()` treats a
+        busy job that is not in `_running` as one whose process died and marks
+        it failed, so without this the first read after the analysis was asked
+        for — which is what the UI does continuously while it waits — failed
+        the run it was watching. `start()`/`_run()` never had this problem
+        because they do register.
+        """
         job = self.get(job_id)
         if job.is_busy:
             raise HTTPError(409, "The job is busy")
+        self._running.add(job.id)
+        try:
+            return self._analyze(job, provider, vlm_note=vlm_note)
+        finally:
+            self._running.discard(job_id)
+
+    def _analyze(self, job: ReproduceJob, provider: LLMProvider | None, *, vlm_note: str = "") -> ReproduceJob:
         job.status = "analyzing"
         job.message = "Reading the reference"
         self._save(job)

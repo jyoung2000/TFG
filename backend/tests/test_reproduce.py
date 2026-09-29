@@ -233,3 +233,61 @@ class TestLoop:
         assert done["message"] == "No candidate was produced"
         parent = client.get("/api/jobs", params={"kind": "image_reproduce"}).json()["jobs"][0]
         assert parent["status"] == "complete" and parent["metrics"]["candidates"] == 0
+
+
+class TestBusyJobSurvivesPolling:
+    """Regression: reading a job while it is busy must not fail it.
+
+    `get()` treats "busy but not in `_running`" as a crashed job and marks it
+    failed. `analyze()` put the job into the busy state `analyzing` without
+    ever registering it in `_running`, so the *first* read after the analysis
+    was requested - which is exactly what the UI does continuously - killed
+    the run. `start()`/`_run()` never had this problem because they do
+    register. Found live on the RTX 4070 while running the Seedream
+    reference: job `ia-fadb23b5dc01` came back
+    `failed: Interrupted: the app was restarted while this job was running`
+    a few seconds after the analysis was asked for, on a backend that had
+    never restarted.
+    """
+
+    def test_reading_a_job_while_it_analyses_does_not_fail_it(self, client, create_fake_model_files, tmp_path, test_state):
+        import threading
+
+        from _routes._errors import HTTPError
+
+        create_fake_model_files(include_zit=True)
+        client.post("/api/settings", json={"vision": {"vlmProvider": "off"}})
+        source = _png(tmp_path / "reference.png", (30, 30, 220))
+        job_id = client.post("/api/reproduce/import", json={"path": str(source)}).json()["id"]
+
+        entered = threading.Event()
+        release = threading.Event()
+
+        class BlockingVision:
+            """Stands in for the vision stack so the analysis stays in flight."""
+
+            def analyze(self, path, *, depth_dir=None):
+                entered.set()
+                release.wait(30)
+                raise HTTPError(500, "test finished the analysis")
+
+        handler = test_state.reproduce
+        original = handler._vision  # pyright: ignore[reportPrivateUsage]
+        handler._vision = BlockingVision()  # pyright: ignore[reportPrivateUsage]
+        try:
+            worker = threading.Thread(
+                target=lambda: handler.analyze(job_id, None),  # pyright: ignore[reportPrivateUsage]
+                daemon=True,
+            )
+            worker.start()
+            assert entered.wait(30), "the analysis never reached the vision stack"
+
+            mid = client.get(f"/api/reproduce/{job_id}").json()
+            assert mid["status"] == "analyzing", (
+                f"polling the job killed the analysis: status={mid['status']!r} error={mid['error']!r}"
+            )
+            assert not mid["error"]
+        finally:
+            release.set()
+            worker.join(timeout=30)
+            handler._vision = original  # pyright: ignore[reportPrivateUsage]
