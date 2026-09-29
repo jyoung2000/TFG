@@ -107,6 +107,10 @@ class ReproduceJob(BaseModel):
     #: The prompt last compiled/used (shown in the UI).
     prompt: str = ""
     negative_prompt: str = ""
+    #: The model the candidates are rendered with, "" = the backend default.
+    #: Kept separate from `image_model` (what the job was created against) so a
+    #: run can be re-launched on a different installed model without a restart.
+    render_model: str = ""
     image_model: str = ""
     vision_model: str = ""
     budget: ReproduceBudget = Field(default_factory=ReproduceBudget)

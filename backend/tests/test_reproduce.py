@@ -390,3 +390,39 @@ class TestNonsenseTargetDoesNotTruncateTheLoop:
             assert len(r.get("seeds") or []) == 1, r
         assert not any("Target 0.00 reached" in (r.get("note") or "") for r in rounds), \
             f"a zero target must never be reported as reached: {[r.get('note') for r in rounds]}"
+
+
+class TestRenderWithReachesTheRenderer:
+    """The chosen model must reach the render, and be recorded honestly.
+
+    Without this the loop silently rendered every candidate with the
+    backend default: `candidate.model` said `z_image` whatever was asked for,
+    which is how the four per-model numbers had to be recovered from the
+    backend's env var instead of from the job.
+    """
+
+    def test_start_carries_the_chosen_model_into_every_candidate(self, client, create_fake_model_files, tmp_path):
+        job = _setup(client, create_fake_model_files, tmp_path)
+        started = client.post(
+            f"/api/reproduce/{job['id']}/start",
+            json={"budget": {"candidates_per_round": 1, "max_rounds": 1}, "render_model": "flux2_klein_4b"},
+        )
+        assert started.status_code == 200, started.text
+        assert started.json()["render_model"] == "flux2_klein_4b"
+
+        done = client.get(f"/api/reproduce/{job['id']}").json()
+        candidates = done.get("candidates") or []
+        assert candidates, "nothing was rendered"
+        assert {c["model"] for c in candidates} == {"flux2_klein_4b"}, \
+            f"candidates must record the model that rendered them: {[c['model'] for c in candidates]}"
+
+    def test_no_chosen_model_keeps_the_job_default(self, client, create_fake_model_files, tmp_path):
+        job = _setup(client, create_fake_model_files, tmp_path)
+        client.post(
+            f"/api/reproduce/{job['id']}/start",
+            json={"budget": {"candidates_per_round": 1, "max_rounds": 1}},
+        )
+        done = client.get(f"/api/reproduce/{job['id']}").json()
+        assert done.get("render_model") == ""
+        candidates = done.get("candidates") or []
+        assert {c["model"] for c in candidates} == {done["image_model"]}

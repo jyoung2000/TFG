@@ -10,12 +10,13 @@ import { reproduceApi, reproduceMediaUrl } from '../../lib/reproduce-api'
 import { toFileUrl } from '../../lib/file-url'
 import { PROMPT_STYLES, SPEC_TARGETS, type PromptStyle, type SpecSection } from '../../types/shotspec'
 import { requestSettings } from '../../lib/error-messages'
-import { isBusy, type ReproduceCandidate, type ReproduceJob } from '../../types/reproduce'
+import { isBusy, type ReproduceBudget, type ReproduceCandidate, type ReproduceJob } from '../../types/reproduce'
 import { CandidateCompare, MetricBars } from './CandidateCompare'
 import { FixCanvas } from './FixCanvas'
 import { MediaImage } from './MediaImage'
 import { SpecBlocks } from './SpecBlocks'
 import { WhyPanel } from './WhyPanel'
+import { RenderWith } from './RenderWith'
 
 const TARGET_LABEL: Record<string, string> = {
   ltx2: 'LTX-2', wan22: 'Wan 2.2', z_image: 'Z-Image', qwen_image_edit: 'Qwen-Image-Edit', flux: 'FLUX', sdxl: 'SDXL', cloud_generic: 'Hosted',
@@ -31,10 +32,13 @@ export function ImageReproduce() {
   const [target, setTarget] = useState<string>('z_image')
   const [style, setStyle] = useState<PromptStyle>('tagged')
   const [promptDraft, setPromptDraft] = useState('')
+  // Which installed local image model renders the candidates. Seeded from
+  // the job so a re-opened run keeps the model it last used.
+  const [renderModel, setRenderModel] = useState('')
   // 0.95 is the brief's bar (composite >= 0.95 == 95 % identical) and matches
   // ReproduceBudget.target_score. The UI always sends its own budget, so this is
   // what the loop actually uses; the backend default only applies to API callers.
-  const [budget, setBudget] = useState({ candidates_per_round: 6, max_rounds: 3, target_score: 0.95 })
+  const [budget, setBudget] = useState<ReproduceBudget>({ candidates_per_round: 6, max_rounds: 3, target_score: 0.95 })
   const [seed, setSeed] = useState<string>('')
   const [useVlm, setUseVlm] = useState(false)
   const [loras, setLoras] = useState<LoraUse[]>([])
@@ -70,6 +74,7 @@ export function ImageReproduce() {
     setStyle(job.style ?? (job.target === 'z_image' || job.target === 'sdxl' ? 'tagged' : 'narrative'))
     setPromptDraft(job.prompt_override || job.prompt)
     setBudget(job.budget)
+    setRenderModel(job.render_model ?? '')
     if (!selectedId || !job.candidates.some(c => c.id === selectedId)) setSelectedId(job.best_candidate_id)
   }, [job, selectedId])
 
@@ -182,7 +187,7 @@ export function ImageReproduce() {
                   {busyJob ? (
                     <button onClick={() => void run('Cancelling', () => reproduceApi.cancel(job.id))} className="btn-chip text-red-300"><Square className="h-3.5 w-3.5" /> Cancel</button>
                   ) : (
-                    <button onClick={() => void run('Starting', () => reproduceApi.start(job.id, budget, seed.trim() ? Number(seed) : null, useVlm, loras, target, style))} disabled={!!busy || !shownPrompt} className="btn-chip bg-violet-700 hover:bg-violet-600 text-white"><Play className="h-3.5 w-3.5" /> Start loop</button>
+                    <button onClick={() => void run('Starting', () => reproduceApi.start(job.id, budget, seed.trim() ? Number(seed) : null, useVlm, loras, target, style, renderModel))} disabled={!!busy || !shownPrompt} className="btn-chip bg-violet-700 hover:bg-violet-600 text-white"><Play className="h-3.5 w-3.5" /> Start loop</button>
                   )}
                 </div>
               </section>
@@ -211,7 +216,8 @@ export function ImageReproduce() {
                 </section>
 
                 <section className="space-y-2">
-                  <p className="text-[11px] text-zinc-500" data-testid="target-caption">These tabs choose which model the prompt is written for; Start loop uses the tab and style shown. Candidates always render with {job.image_model}.</p>
+                  <p className="text-[11px] text-zinc-500" data-testid="target-caption">These tabs choose which model the <em>prompt</em> is written for. Which model <em>renders</em> is chosen below.</p>
+                  <RenderWith value={renderModel} onChange={setRenderModel} disabled={busyJob} />
                   <div className="flex items-center gap-1 flex-wrap" role="tablist" aria-label="Compile target">
                     {SPEC_TARGETS.map(t => (
                       <button key={t} role="tab" aria-selected={target === t} onClick={() => setTarget(t)} className={`px-2 py-1 rounded-md text-[11px] ${target === t ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:text-white'}`}>{TARGET_LABEL[t] ?? t}</button>
@@ -241,7 +247,7 @@ export function ImageReproduce() {
                   </div>
                   <div className="grid grid-cols-4 gap-2 text-[10px] text-zinc-500">
                     <label>Candidates / round<input type="number" min={1} max={12} value={budget.candidates_per_round} onChange={e => setBudget(b => ({ ...b, candidates_per_round: Number(e.target.value) }))} className="select-chip w-full" aria-label="Candidates per round" /></label>
-                    <label>Rounds<input type="number" min={1} max={8} value={budget.max_rounds} onChange={e => setBudget(b => ({ ...b, max_rounds: Number(e.target.value) }))} className="select-chip w-full" aria-label="Max rounds" /></label>
+                    <label>Rounds<input type="number" min={1} max={8} value={budget.max_rounds ?? ''} placeholder="no cap" onChange={e => setBudget(b => ({ ...b, max_rounds: e.target.value === '' ? null : Number(e.target.value) }))} className="select-chip w-full" aria-label="Max rounds" /></label>
                     <label>Target score<input type="number" min={0} max={1} step={0.01} value={budget.target_score} onChange={e => setBudget(b => ({ ...b, target_score: Number(e.target.value) }))} className="select-chip w-full" aria-label="Target score" /></label>
                     <label>Seed<input value={seed} onChange={e => setSeed(e.target.value)} placeholder="random" className="select-chip w-full" aria-label="Seed" /></label>
                   </div>

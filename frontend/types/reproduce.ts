@@ -14,7 +14,8 @@ export interface ScoreBreakdown {
 
 export interface ReproduceBudget {
   candidates_per_round: number
-  max_rounds: number
+  /** null = no round cap; the loop runs until the target or a real plateau. */
+  max_rounds: number | null
   target_score: number
 }
 
@@ -59,6 +60,8 @@ export interface ReproduceRound {
 }
 
 export interface ReproduceJob {
+  /** Installed local image model the candidates render with; "" = backend default. */
+  render_model: string
   version: number
   id: string
   title: string

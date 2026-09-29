@@ -90,7 +90,9 @@ export function tickReproduce(state: MockState): void {
     if (job.status !== 'rendering' && job.status !== 'scoring') continue
     const startedAt = origins.get(job.id) ?? job.updated_at
     const elapsedRounds = Math.floor((now - startedAt) / ROUND_MS)
-    const total = job.budget.max_rounds
+    // max_rounds null means "no cap"; the mock cannot run forever, so it
+    // stands in a generous cap and says so in the message.
+    const total: number = job.budget.max_rounds ?? 8
     while (job.rounds.length <= elapsedRounds && job.rounds.length < total) {
       const index = job.rounds.length + 1
       const round: ReproduceRound = {
@@ -178,6 +180,7 @@ export function registerReproduceRoutes(router: Router, store: Store): void {
     const title = path.split(/[\\/]/).pop() || 'Reference'
     const now = Date.now()
     const job: ReproduceJob = {
+      render_model: '',
       version: 2,
       id: `rp-mock-${++serial}`,
       title,

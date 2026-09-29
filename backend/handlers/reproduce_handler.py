@@ -433,6 +433,7 @@ class ReproduceHandler(StateHandlerBase):
         loras: Sequence[LoraUse] = (),
         target: str | None = None,
         style: PromptStyle | None = None,
+        render_model: str | None = None,
     ) -> ReproduceJob:
         job = self.get(job_id)
         if job.is_busy:
@@ -449,6 +450,8 @@ class ReproduceHandler(StateHandlerBase):
         if not job.prompt.strip() and not job.prompt_override.strip():
             raise HTTPError(400, "Analyse the reference first, or enter a prompt")
         job.loras = [l for l in loras if Path(l.name).is_file()]
+        if render_model is not None:
+            job.render_model = render_model.strip()
         if budget is not None:
             job.budget = budget
         job.status = "rendering"
@@ -464,7 +467,7 @@ class ReproduceHandler(StateHandlerBase):
             provider="wangp" if self._wangp_enabled else "local",
             prompt=job.prompt,
             negative_prompt=job.negative_prompt,
-            params={"candidates_per_round": job.budget.candidates_per_round, "max_rounds": job.budget.max_rounds, "target_score": job.budget.target_score, "target": job.target, "seed": seed},
+            params={"candidates_per_round": job.budget.candidates_per_round, "max_rounds": job.budget.max_rounds, "target_score": job.budget.target_score, "target": job.target, "seed": seed, "render_model": job.render_model or job.image_model},
             inputs={"analysis_id": job.id, "reference": str(self._dir(job.id) / job.source_path)},
             spec=job.spec.to_json(),
         )
@@ -656,7 +659,11 @@ class ReproduceHandler(StateHandlerBase):
         params = compiled.params
         width = params.width or job.width
         height = params.height or job.height
-        request = GenerateImageRequest(prompt=prompt, width=width, height=height, numSteps=params.steps, numImages=1, loras=list(job.loras))
+        request = GenerateImageRequest(
+            prompt=prompt, width=width, height=height,
+            numSteps=params.steps, numImages=1,
+            loras=list(job.loras), model=job.render_model,
+        )
         try:
             result = self._image_generation.generate(request, seed=seed)
         except HTTPError as exc:
@@ -683,7 +690,9 @@ class ReproduceHandler(StateHandlerBase):
             seed=seed,
             params={"steps": params.steps, "guidance": params.guidance, "width": width, "height": height},
             round=round_index,
-            model=job.image_model,
+            # The model that actually rendered this candidate, so History and
+            # the per-model comparison read the truth rather than the default.
+            model=job.render_model or job.image_model,
             target=job.target,
             job_id=child[0].id if child and child[0].parent_job_id == job.job_id else "",
         )
