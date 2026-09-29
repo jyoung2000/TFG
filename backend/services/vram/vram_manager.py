@@ -247,7 +247,7 @@ class VramManager:
             self._http.post(
                 f"{self._ollama_root}/api/generate",
                 headers={"Content-Type": "application/json"},
-                json_payload={"model": self._ollama_model, "keep_alive": 0},
+                json_payload={"model": self._ollama_model, "prompt": "", "keep_alive": 0},
                 timeout=10,
             )
             return self._ollama_model

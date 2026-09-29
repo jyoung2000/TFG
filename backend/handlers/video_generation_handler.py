@@ -41,6 +41,23 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+#: CUDA error substrings that indicate a stale context — the worker should be
+#: restarted once before reporting the failure.
+_CUDA_ERRORS = (
+    "cudaErrorAlreadyMapped",
+    "CUDA error: an illegal memory access",
+    "CUDA error: unknown error",
+    "driver shutting down",
+    "context is destroyed",
+)
+
+def _is_cuda_context_error(text: str) -> bool:
+    """True when `text` looks like a CUDA-context error the worker can't recover from."""
+    lowered = text.lower()
+    return any(marker.lower() in lowered for marker in _CUDA_ERRORS)
+
+
+
 FORCED_API_MODEL_MAP: dict[str, str] = {
     "fast": "ltx-2-3-fast",
     "pro": "ltx-2-3-pro",
@@ -803,15 +820,31 @@ class VideoGenerationHandler(StateHandlerBase):
             return GenerateVideoResponse(status="complete", video_path=output_path, seed=seed)
         except Exception as e:
             if self._generation.is_generation_cancelled() or "cancelled" in str(e).lower():
-                # A cancelled run must surface with a Cancelled state, not an error:
-                # align the state machine with the response so the frontend polling
-                # loop never sees a cancelled job as failed.
                 self._generation.cancel_generation()
                 logger.info("WanGP generation cancelled by user")
                 return GenerateVideoResponse(status="cancelled")
 
+            # CUDA-context errors from a stale worker: restart once and retry once.
+            error_text = str(e)
+            if _is_cuda_context_error(error_text):
+                logger.warning("CUDA context error detected, restarting WanGP worker: %s", error_text[:120])
+                stop_fn = getattr(self._wangp_bridge, "stop", None)
+                if stop_fn is not None:
+                    stop_fn()
+                # Retry exactly once
+                try:
+                    return self._generate_via_wangp(req, job_id=job_id, seed_override=seed_override)
+                except Exception as retry_e:
+                    if self._generation.is_generation_cancelled() or "cancelled" in str(retry_e).lower():
+                        self._generation.cancel_generation()
+                        return GenerateVideoResponse(status="cancelled")
+                    self._generation.fail_generation(str(retry_e))
+                    raise HTTPError(500, f"CUDA error after worker restart: {retry_e}") from retry_e
+
             self._generation.fail_generation(str(e))
             raise HTTPError(500, str(e)) from e
+
+
 
     @staticmethod
     def _parse_forced_numeric_field(raw_value: str, error_detail: str) -> int:

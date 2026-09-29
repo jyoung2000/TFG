@@ -28,6 +28,21 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# CUDA error detection — shared with video_generation_handler.py
+_CUDA_ERRORS = (
+    "cudaErrorAlreadyMapped",
+    "CUDA error: an illegal memory access",
+    "CUDA error: unknown error",
+    "driver shutting down",
+    "context is destroyed",
+)
+
+def _is_cuda_context_error(text: str) -> bool:
+    lowered = text.lower()
+    return any(marker.lower() in lowered for marker in _CUDA_ERRORS)
+
+
+
 #: F-034 bounds: 16-multiple sides between these are honest work; anything
 #: outside is a typo or an attack on the card, refused before CUDA sees it.
 _MIN_DIM = 64
@@ -249,15 +264,30 @@ class ImageGenerationHandler(StateHandlerBase):
             return GenerateImageResponse(status="complete", image_paths=output_paths)
         except Exception as e:
             if self._generation.is_generation_cancelled() or "cancelled" in str(e).lower():
-                # A cancelled run must surface with a Cancelled state, not an error:
-                # align the state machine with the response so the frontend polling
-                # loop never sees a cancelled job as failed.
                 self._generation.cancel_generation()
                 logger.info("WanGP image generation cancelled by user")
                 return GenerateImageResponse(status="cancelled")
 
+            # CUDA-context errors from a stale worker: restart once and retry once.
+            error_text = str(e)
+            if _is_cuda_context_error(error_text):
+                logger.warning("CUDA context error detected, restarting WanGP worker: %s", error_text[:120])
+                stop_fn = getattr(self._wangp_bridge, "stop", None)
+                if stop_fn is not None:
+                    stop_fn()
+                try:
+                    return self._generate_via_wangp(req, job_id=job_id, seed_override=seed_override)
+                except Exception as retry_e:
+                    if self._generation.is_generation_cancelled() or "cancelled" in str(retry_e).lower():
+                        self._generation.cancel_generation()
+                        return GenerateImageResponse(status="cancelled")
+                    self._generation.fail_generation(str(retry_e))
+                    raise HTTPError(500, f"CUDA error after worker restart: {retry_e}") from retry_e
+
             self._generation.fail_generation(str(e))
             raise HTTPError(500, str(e)) from e
+
+
 
     def generate_image(
         self,

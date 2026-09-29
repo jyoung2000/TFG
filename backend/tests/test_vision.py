@@ -116,7 +116,7 @@ class TestVramManager:
         assert plan.ollama_released == "qwen2.5vl:3b"
         call = http.calls[-1]
         assert call.url.endswith("/api/generate")
-        assert call.json_payload == {"model": "qwen2.5vl:3b", "keep_alive": 0}
+        assert call.json_payload == {"model": "qwen2.5vl:3b", "prompt": "", "keep_alive": 0}
 
     def test_no_gpu_means_no_arbitration(self):
         nvml = FakeNvml()
