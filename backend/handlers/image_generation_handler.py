@@ -226,7 +226,9 @@ class ImageGenerationHandler(StateHandlerBase):
         # Same rule as video: missing weights are an explicit Models-tab
         # download, never a silent side effect of a render (wgp.py would
         # otherwise auto-download the checkpoint on load).
-        model_type = self._config.wangp_image_model_type
+        # "Render with" - a request may name its own model; an empty name keeps
+        # the backend's configured default.
+        model_type = (req.model or "").strip() or self._config.wangp_image_model_type
         if self._wangp_bridge.weights_installed(model_type) is False:
             raise HTTPError(
                 409,
@@ -259,6 +261,7 @@ class ImageGenerationHandler(StateHandlerBase):
                 on_progress=self._generation.update_progress,
                 is_cancelled=self._generation.is_generation_cancelled,
                 loras=[(lora.name, lora.multiplier) for lora in req.loras if Path(lora.name).is_file()],
+                model_type=model_type,
             )
             self._generation.complete_generation(output_paths)
             return GenerateImageResponse(status="complete", image_paths=output_paths)

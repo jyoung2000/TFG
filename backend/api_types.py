@@ -296,6 +296,9 @@ class GenerateImageRequest(BaseModel):
     numSteps: int = 4
     numImages: int = 1
     loras: list[LoraUse] = Field(default_factory=list[LoraUse])
+    #: Which installed local image model renders this request. Empty means the
+    #: backend's configured default (`WANGP_IMAGE_MODEL_TYPE`).
+    model: str = ""
 
 
 class ModelDownloadRequest(BaseModel):

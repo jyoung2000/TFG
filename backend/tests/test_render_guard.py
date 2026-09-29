@@ -124,3 +124,63 @@ class TestCaptionFailuresAreLoud:
         # No fabricated captions: the items are untouched.
         items = client.get(f"/api/training/datasets/{dataset['id']}").json()["items"]
         assert all(item["caption"] == "" for item in items)
+
+
+class TestRenderWithModelOverride:
+    """A request must be able to name the image model it renders with.
+
+    Today `WanGPBridge.generate_images` hardcodes `self._image_model_type`
+    (services/wangp_bridge.py:304) and the handler's weights check and VRAM
+    scope both read `config.wangp_image_model_type`, so every candidate renders
+    with whatever the backend was started with. The UI admits it in its own
+    copy: "Candidates always render with {job.image_model}" next to tabs for
+    LTX-2, Wan 2.2, SDXL and FLUX (ImageReproduce.tsx:211).
+
+    Measured on the 4070 with the Seedream reference, four image models are
+    installed and all four render; switching between them currently means
+    restarting the backend on a different WANGP_IMAGE_MODEL_TYPE:
+
+        z_image                    best 0.7113   (12 candidates)
+        z_image_nunchaku_r128_fp4  best 0.7257   (12 candidates)
+        z_image_nunchaku_r256_int4 best 0.7325   (12 candidates)
+        flux2_klein_4b             best 0.6996   (9 candidates)
+    """
+
+    def _enable(self, test_state, fake_services, installed=("z_image", "flux2_klein_4b")):
+        test_state.config.wangp_enabled = True
+        fake_services.wangp_bridge.available = True
+        fake_services.wangp_bridge.definitions = [
+            {"id": m, "name": m, "installed": True} for m in installed
+        ]
+
+    def test_a_named_model_is_the_one_actually_rendered(self, client, test_state, fake_services):
+        self._enable(test_state, fake_services)
+        r = client.post("/api/generate-image", json={"prompt": "x", "model": "flux2_klein_4b"})
+        assert r.status_code == 200, r.text
+        manifests = fake_services.wangp_bridge.manifests
+        assert manifests, "nothing was rendered"
+        model_types = {m.get("params", {}).get("model_type") for m in manifests[0] if isinstance(m, dict)}
+        assert model_types == {"flux2_klein_4b"}, f"rendered with {model_types}, not the requested model"
+
+    def test_no_named_model_keeps_the_configured_default(self, client, test_state, fake_services):
+        self._enable(test_state, fake_services)
+        r = client.post("/api/generate-image", json={"prompt": "x"})
+        assert r.status_code == 200, r.text
+        model_types = {m.get("params", {}).get("model_type")
+                       for m in fake_services.wangp_bridge.manifests[0] if isinstance(m, dict)}
+        assert model_types == {"z_image"}, f"the default must still apply, got {model_types}"
+
+    def test_a_named_model_without_weights_is_refused_by_name(self, client, test_state, fake_services):
+        # The model is known to the checkout but its weights are not on disk -
+        # the real state of a model the user has not downloaded. Asking for it
+        # must be refused BY NAME, not silently fall back to the default.
+        test_state.config.wangp_enabled = True
+        fake_services.wangp_bridge.available = True
+        fake_services.wangp_bridge.definitions = [
+            {"id": "z_image", "name": "z_image", "installed": True},
+            {"id": "flux2_klein_4b", "name": "flux2_klein_4b", "installed": False},
+        ]
+        r = client.post("/api/generate-image", json={"prompt": "x", "model": "flux2_klein_4b"})
+        assert r.status_code == 409, r.text
+        assert "flux2_klein_4b" in r.json()["error"], r.json()["error"]
+        assert fake_services.wangp_bridge.manifests == [], "nothing may be rendered"

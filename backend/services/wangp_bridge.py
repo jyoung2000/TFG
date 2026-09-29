@@ -297,11 +297,12 @@ class WanGPBridge:
         on_progress: ProgressCallback,
         is_cancelled: CancelledCallback,
         loras: Sequence[tuple[str, float]] = (),
+        model_type: str | None = None,
     ) -> list[str]:
         mapped_width, mapped_height = self._map_image_resolution(width, height)
         normalized_steps = self._normalize_image_steps(num_steps)
         settings: dict[str, object] = {
-            "model_type": self._image_model_type,
+            "model_type": model_type or self._image_model_type,
             "prompt": prompt,
             "resolution": f"{mapped_width}x{mapped_height}",
             "num_inference_steps": normalized_steps,
