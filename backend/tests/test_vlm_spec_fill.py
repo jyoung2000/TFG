@@ -164,3 +164,14 @@ class TestStartLoopUsesTheSelectedTarget:
         assert done["target"] == "flux" and done["style"] == "narrative"
         assert done["rounds"][0]["target"] == "flux"
         assert done["rounds"][0]["prompt"] == expected
+
+
+class TestAttributeShapes:
+    def test_attributes_given_as_an_object_are_kept(self) -> None:
+        # qwen2.5vl:7b on the round-5 reference returned attributes as an
+        # object, which the reader silently dropped.
+        spec = ShotSpec()
+        fields = dict(QWEN_READ)
+        fields["subjects"] = [{"label": "person", "count": 1, "attributes": {"wardrobe": "black leather outfit with a corset and jacket", "pose": "standing with hands on hips"}}]
+        apply_vlm(spec, fields, 0.9)
+        assert spec.subjects[0].attributes == ["black leather outfit with a corset and jacket", "standing with hands on hips"]

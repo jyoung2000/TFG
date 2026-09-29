@@ -259,8 +259,10 @@ class ReproduceHandler(StateHandlerBase):
             if part
         )
         instruction = (
-            "You describe ONE image for a cinematographer. Reply with JSON only with: subjects (list of objects with label, "
-            "count and attributes such as wardrobe and pose; every person, animal and key object), and string fields: location, environment, "
+            "You describe ONE image for a cinematographer. Reply with JSON only. `subjects` is a list with one object per person, "
+            "animal or key object: {\"label\": a short specific noun such as \"woman\", \"man\", \"dog\" (never just \"person\" when the "
+            "image shows more), \"count\": integer, \"attributes\": list of visible details: clothing and materials, hair, pose, "
+            "expression, held objects}. Also string fields: location, environment, "
             "time_of_day, weather, foreground, midground, background, lighting_quality, light_direction, color_temp, mood, "
             "shot_size (xwide|wide|full|medium|mcu|closeup|xcu), angle, camera_height, lens_estimate, depth_of_field "
             "(shallow|medium|deep), focus, what_happens, purpose, beat, style, medium (vector|photo|3d-render|painting|pixel-art|"

@@ -349,6 +349,8 @@ def _vlm_subjects(fields: dict[str, Any]) -> list[SpecSubject]:
             attributes: list[str] = []
             for key in ("attributes", "wardrobe", "pose", "details"):
                 value = entry.get(key)
+                if isinstance(value, dict):  # {"wardrobe": "...", "pose": "..."}
+                    value = list(cast(dict[str, object], value).values())
                 if isinstance(value, list):
                     attributes += [str(v).strip() for v in cast(list[object], value) if str(v).strip()]
                 elif isinstance(value, str) and value.strip():
