@@ -10,7 +10,7 @@ from __future__ import annotations
 from typing import Any, Literal, cast
 
 from api_types import LoraUse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from film.film_models import now_ms
 from film.prompt_compiler import PromptStyle
@@ -22,11 +22,29 @@ ReproduceStatus = Literal["idle", "analyzing", "rendering", "scoring", "complete
 CandidateSource = Literal["render", "fix", "patch", "inpaint", "legacy"]
 
 
+#: The bar the brief asks for: composite >= 0.95, reported as 95 % identical.
+DEFAULT_TARGET_SCORE = 0.95
+
+
 class ReproduceBudget(BaseModel):
     candidates_per_round: int = Field(default=6, ge=1, le=12)
     max_rounds: int | None = Field(default=None)
     #: Stop once the best composite reaches this. 0.95 = 95 % identical.
-    target_score: float = Field(default=0.95, ge=0.0, le=1.0)
+    target_score: float = Field(default=DEFAULT_TARGET_SCORE, ge=0.0, le=1.0)
+
+    @field_validator("target_score")
+    @classmethod
+    def _a_target_of_zero_is_not_a_target(cls, value: float) -> float:
+        """A non-positive target means "no target", not "stop immediately".
+
+        The loop ends on `best >= target`, so 0.0 is satisfied by the first
+        candidate however bad it is: the run degenerates to a single round and
+        still reports success. The UI's Target score field is `min={0}` with no
+        validation and was observed reading 0.0, so this is reachable by
+        typing rather than by malice. Anything <= 0 falls back to the real bar;
+        a genuine target is left untouched.
+        """
+        return DEFAULT_TARGET_SCORE if value <= 0 else value
 
 
 class ReproduceCandidate(BaseModel):

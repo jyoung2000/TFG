@@ -159,10 +159,17 @@ class TestLoop:
         assert blue_score > red_score, (blue_score, red_score)
 
     def test_target_score_stops_early(self, client, create_fake_model_files, tmp_path):
+        # The fake pipeline renders a flat blue frame against a blue reference, so
+        # a low-but-real target is reached in round 1 and the loop must stop
+        # there rather than run its remaining rounds. (This used to pass 0.0,
+        # which is not a target at all - see
+        # TestNonsenseTargetDoesNotTruncateTheLoop.)
         job = _setup(client, create_fake_model_files, tmp_path)
-        client.post(f"/api/reproduce/{job['id']}/start", json={"budget": {"candidates_per_round": 1, "max_rounds": 3, "target_score": 0.0}})
+        client.post(f"/api/reproduce/{job['id']}/start", json={"budget": {"candidates_per_round": 1, "max_rounds": 3, "target_score": 0.3}})
         done = client.get(f"/api/reproduce/{job['id']}").json()
-        assert len(done["rounds"]) == 1 and "reached" in done["rounds"][0]["note"]
+        assert len(done["rounds"]) == 1, done["rounds"]
+        assert "reached" in done["rounds"][0]["note"]
+        assert done["budget"]["target_score"] == 0.3
 
     def test_pin_pick_and_fix(self, client, create_fake_model_files, tmp_path):
         job = _setup(client, create_fake_model_files, tmp_path)
@@ -338,3 +345,48 @@ class TestLayoutPatchDoesNotInventSubjects:
             assert "exactly" not in p.phrase.lower(), f"patch hard-codes a count: {p.phrase!r}"
             assert "2 human face" not in p.phrase.lower(), f"patch repeats a bogus count: {p.phrase!r}"
             assert "2 jacket" not in p.phrase.lower(), f"patch repeats a bogus count: {p.phrase!r}"
+
+
+class TestNonsenseTargetDoesNotTruncateTheLoop:
+    """A target score of 0 must not end the run after the first candidate.
+
+    Found in a screenshot of the real app: the Target score field read 0.0 and
+    the input is `min={0}` with no validation (ImageReproduce.tsx:242). The loop
+    stops on `best_now >= job.budget.target_score`, so 0.0 is satisfied by the
+    very first candidate however bad it is - the loop silently degenerates to
+    one round and reports success. The honest reading of "no target" is the real
+    default, not "stop immediately".
+    """
+
+    def test_zero_target_becomes_the_default(self):
+        import pytest
+
+        from film.reproduce_models import ReproduceBudget
+
+        assert ReproduceBudget(target_score=0.0).target_score == 0.95
+        assert ReproduceBudget(target_score=0).target_score == 0.95
+        # A negative target is rejected outright rather than silently repaired.
+        with pytest.raises(ValueError):
+            ReproduceBudget(target_score=-1.0)
+        # A real target is left alone.
+        assert ReproduceBudget(target_score=0.8).target_score == 0.8
+        assert ReproduceBudget().target_score == 0.95
+
+    def test_start_with_a_zero_target_keeps_running(self, client, create_fake_model_files, tmp_path):
+        job = _setup(client, create_fake_model_files, tmp_path)
+        started = client.post(
+            f"/api/reproduce/{job['id']}/start",
+            json={"budget": {"candidates_per_round": 1, "max_rounds": 2, "target_score": 0}},
+        )
+        assert started.status_code == 200, started.text
+        # The stored budget is the real default, not the 0 the UI sent.
+        assert started.json()["budget"]["target_score"] == 0.95
+        done = client.get(f"/api/reproduce/{job['id']}").json()
+        rounds = done.get("rounds") or []
+        assert len(rounds) >= 1
+        # Every round ran the full candidate count; it did not stop at round 1
+        # on the strength of a zero target.
+        for r in rounds:
+            assert len(r.get("seeds") or []) == 1, r
+        assert not any("Target 0.00 reached" in (r.get("note") or "") for r in rounds), \
+            f"a zero target must never be reported as reached: {[r.get('note') for r in rounds]}"

@@ -31,7 +31,10 @@ export function ImageReproduce() {
   const [target, setTarget] = useState<string>('z_image')
   const [style, setStyle] = useState<PromptStyle>('tagged')
   const [promptDraft, setPromptDraft] = useState('')
-  const [budget, setBudget] = useState({ candidates_per_round: 6, max_rounds: 3, target_score: 0.9 })
+  // 0.95 is the brief's bar (composite >= 0.95 == 95 % identical) and matches
+  // ReproduceBudget.target_score. The UI always sends its own budget, so this is
+  // what the loop actually uses; the backend default only applies to API callers.
+  const [budget, setBudget] = useState({ candidates_per_round: 6, max_rounds: 3, target_score: 0.95 })
   const [seed, setSeed] = useState<string>('')
   const [useVlm, setUseVlm] = useState(false)
   const [loras, setLoras] = useState<LoraUse[]>([])
