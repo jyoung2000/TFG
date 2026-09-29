@@ -333,6 +333,28 @@ def apply_vlm(spec: ShotSpec, fields: dict[str, Any], confidence: float = 0.5) -
             spec.subjects = [SpecSubject(label=scene.fg.lower()[:80], count=1)]
 
 
+def subjects_are_derived(spec: ShotSpec) -> bool:
+    """True when the Subjects block is only apply_vlm's guess from the foreground."""
+    return (
+        spec.provenance.get("subjects") == "vlm"
+        and len(spec.subjects) == 1
+        and bool(spec.scene.fg)
+        and spec.subjects[0].label == spec.scene.fg.lower()[:80]
+    )
+
+
+def apply_vlm_subjects(spec: ShotSpec, fields: dict[str, Any], confidence: float = 0.5) -> bool:
+    """Subjects from a focused VLM read. Replaces only an empty block or the
+    foreground-derived guess; detected, locked or named subjects stay."""
+    if spec.is_locked("subjects") or (spec.subjects and not subjects_are_derived(spec)):
+        return False
+    named = _vlm_subjects(fields)
+    if not named or not _write(spec, "subjects", "vlm", min(0.6, max(0.0, min(1.0, confidence)))):
+        return False
+    spec.subjects = named[:6]
+    return True
+
+
 def _vlm_subjects(fields: dict[str, Any]) -> list[SpecSubject]:
     """Subjects in the shapes vision models actually return: a list of names,
     a list of objects (label/name/subject, count, attributes/wardrobe/pose),

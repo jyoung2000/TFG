@@ -37,7 +37,7 @@ from film.reproduce_models import (
     migrate_document,
 )
 from film.shot_spec import ShotSpec
-from film.shot_spec_fusion import apply_user, apply_vlm, spec_from_vision
+from film.shot_spec_fusion import apply_user, apply_vlm, apply_vlm_subjects, spec_from_vision, subjects_are_derived
 from handlers.base import StateHandlerBase
 from handlers.image_generation_handler import ImageGenerationHandler
 from handlers.jobs_handler import JobsHandler
@@ -52,6 +52,16 @@ from services.vision.deterministic import measure_path
 from state.app_state_types import AppState
 
 logger = logging.getLogger(__name__)
+
+#: The focused follow-up used when the main read names no subjects. Live on the
+#: round-5 reference, qwen2.5vl:7b answered this with "woman" and seven visible
+#: details where the full instruction produced no subjects at all.
+SUBJECTS_INSTRUCTION = (
+    "You describe ONE image for a cinematographer. Reply with JSON only. `subjects` is a list with one object per person, "
+    'animal or key object: {"label": a short specific noun such as "woman", "man", "dog" (never just "person" when the image '
+    'shows more), "count": integer, "attributes": list of visible details: clothing and materials, hair, pose, expression, '
+    "held objects}."
+)
 
 _NAMED_COLOURS: tuple[tuple[str, tuple[int, int, int]], ...] = (
     ("black", (20, 20, 20)), ("white", (240, 240, 240)), ("grey", (128, 128, 128)), ("red", (200, 40, 40)),
@@ -283,6 +293,17 @@ class ReproduceHandler(StateHandlerBase):
         confidence = fields.get("confidence", 0.5)
         apply_vlm(job.spec, fields, float(confidence) if isinstance(confidence, (int, float)) else 0.5)
         job.vision_model = f"{provider.name}:{provider.model}"
+        if not job.spec.is_locked("subjects") and (not job.spec.subjects or subjects_are_derived(job.spec)):
+            # A long instruction dilutes the subjects request; ask once, briefly.
+            try:
+                reply = provider.chat(
+                    [LLMMessage(role="system", content=SUBJECTS_INSTRUCTION), LLMMessage(role="user", content="List the subjects in this image.", images=[url])],
+                    json_mode=True,
+                    timeout=120,
+                )
+                apply_vlm_subjects(job.spec, read_json(reply.text) or {}, 0.6)
+            except Exception as exc:  # noqa: BLE001 - the main read stands
+                job.why["subjects_vlm"] = f"{provider.name}:{provider.model} subjects follow-up failed: {exc}"
         filled = [block for block in ("subjects", "scene", "camera", "lighting", "style", "narrative") if job.spec.provenance.get(block) == "vlm"]
         job.why["vlm"] = f"{provider.name}:{provider.model} filled " + (", ".join(filled) if filled else "nothing the other readers had not")
         if not job.spec.subjects:

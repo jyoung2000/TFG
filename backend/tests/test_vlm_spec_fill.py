@@ -175,3 +175,53 @@ class TestAttributeShapes:
         fields["subjects"] = [{"label": "person", "count": 1, "attributes": {"wardrobe": "black leather outfit with a corset and jacket", "pose": "standing with hands on hips"}}]
         apply_vlm(spec, fields, 0.9)
         assert spec.subjects[0].attributes == ["black leather outfit with a corset and jacket", "standing with hands on hips"]
+
+
+class TestFocusedSubjectsFollowUp:
+    def test_a_read_without_subjects_gets_one_focused_follow_up(self, client, test_state, fake_services, create_fake_model_files, tmp_path, monkeypatch) -> None:
+        # Live on the RTX 4070: with the full ~25-field instruction qwen2.5vl:7b
+        # skipped `subjects` (only the foreground-derived guess remained); a
+        # short subjects-only instruction returned "woman" with seven details.
+        create_fake_model_files(include_zit=True)
+        fake_services.vision.disabled.add("florence")
+        systems: list[str] = []
+        focused = {"subjects": [{"label": "woman", "count": 1, "attributes": ["black leather corset", "hands on hips"]}]}
+
+        class _Qwen:
+            name = "openai_compatible"
+            model = "qwen2.5vl:7b"
+
+            def chat(self, messages, **kwargs):  # noqa: ANN001, ANN003
+                systems.append(messages[0].content)
+                body = QWEN_READ if len(systems) == 1 else focused
+                return LLMReply(text=json.dumps(body), tool_calls=[], model=self.model)
+
+        monkeypatch.setattr(test_state.film_director, "optional_provider", lambda role: _Qwen())
+        client.post("/api/settings", json={"vision": {"vlmProvider": "director"}})
+        imported = client.post("/api/reproduce/import", json={"path": str(_png(tmp_path / "reference.png"))}).json()
+        job = client.post(f"/api/reproduce/{imported['id']}/analyze").json()
+
+        assert len(systems) == 2, "no focused follow-up for subjects"
+        subject = job["spec"]["subjects"][0]
+        assert subject["label"] == "woman"
+        assert subject["attributes"] == ["black leather corset", "hands on hips"]
+        assert job["spec"]["confidence"]["subjects"] > 0.4
+
+    def test_no_follow_up_when_the_main_read_named_subjects(self, client, test_state, fake_services, create_fake_model_files, tmp_path, monkeypatch) -> None:
+        create_fake_model_files(include_zit=True)
+        fake_services.vision.disabled.add("florence")
+        calls: list[int] = []
+
+        class _Qwen:
+            name = "openai_compatible"
+            model = "qwen2.5vl:7b"
+
+            def chat(self, messages, **kwargs):  # noqa: ANN001, ANN003
+                calls.append(1)
+                return LLMReply(text=json.dumps(dict(QWEN_READ, subjects=["woman"])), tool_calls=[], model=self.model)
+
+        monkeypatch.setattr(test_state.film_director, "optional_provider", lambda role: _Qwen())
+        client.post("/api/settings", json={"vision": {"vlmProvider": "director"}})
+        imported = client.post("/api/reproduce/import", json={"path": str(_png(tmp_path / "reference.png"))}).json()
+        client.post(f"/api/reproduce/{imported['id']}/analyze")
+        assert len(calls) == 1
