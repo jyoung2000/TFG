@@ -25,7 +25,8 @@ export interface LibraryModel {
   estimated_min_vram_gb: number | null
   fits_gpu: boolean | null
   supports_image_input: boolean
-  context_length: number | null
+    capabilities: string[]
+    context_length: number | null
   family: string
   quantization: string
   /** True for example ids this app ships for providers without a catalog API. */

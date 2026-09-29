@@ -178,6 +178,9 @@ class ModelLibraryHandler(StateHandlerBase):
 
     def _wangp_models(self, vram_gb: float | None) -> list[LibraryModel]:
         definitions = self._wangp.list_model_definitions()
+        return self._models_from_definitions(definitions, vram_gb)
+
+    def _models_from_definitions(self, definitions: list[dict[str, object]], vram_gb: float | None) -> list[LibraryModel]:
         active = {self._config.wangp_video_model_type, self._config.wangp_image_model_type}
         models: list[LibraryModel] = []
         for definition in definitions:
@@ -214,7 +217,6 @@ class ModelLibraryHandler(StateHandlerBase):
                 )
             )
         return models
-
     def _vision_root(self) -> Path:
         with self.lock:
             custom = self.state.app_settings.vision.cache_dir.strip()
@@ -750,6 +752,109 @@ class ModelLibraryHandler(StateHandlerBase):
                 "The bundled LTX weights are downloaded together — use “Download missing models” in the Models tab.",
             )
         raise HTTPError(400, f"{provider} models run in the cloud — there is nothing to download. Add the API key instead.")
+
+    # ---- dedicated download/list methods (called by routes and tests) ------
+
+    def download_wangp_model(self, url: str) -> dict[str, object]:
+        """Download a WanGP model from a raw Hugging Face URL.
+
+        Validates the URL is from huggingface.co before touching the worker
+        (the downloader executes fetched configs, so the filter is a security
+        boundary, not cosmetics). Delegates to the checkout's own downloader.
+        """
+        url = url.strip()
+        if not url:
+            raise HTTPError(400, "Empty URL")
+        match = _HF_RESOLVE.match(url)
+        if not match:
+            raise HTTPError(400, f"Only Hugging Face URLs are accepted. Got: {url[:80]}")
+        if not url.startswith("https://huggingface.co/"):
+            raise HTTPError(400, f"Only HTTPS Hugging Face URLs are accepted. Got: {url[:80]}")
+        if not hasattr(self._wangp, "download_model"):
+            raise HTTPError(503, "WanGP worker is not available")
+        download_fn = getattr(self._wangp, "download_model")
+        try:
+            result = download_fn(url)
+            if isinstance(result, dict):
+                return cast(dict[str, object], result)
+            return {"ok": True, "url": url}
+        except HTTPError:
+            raise
+        except Exception as exc:
+            raise HTTPError(502, f"WanGP download failed: {exc}") from exc
+
+    def list_models(self, provider: str) -> list[LibraryModel]:
+        """List models from a single provider (ollama, wangp, etc.)."""
+        provider = provider.strip()
+        if provider == "ollama":
+            settings = self._settings()
+            root = self._ollama_root(settings.openai_compatible_base_url)
+            pulled = self._ollama_tags(root)
+            if pulled is not None:
+                # Enrich with capabilities from /api/show
+                for model in pulled:
+                    try:
+                        response = self._http.post(
+                            f"{root}/api/show",
+                            headers={"Content-Type": "application/json"},
+                            json_payload={"model": model.id},
+                            timeout=8,
+                        )
+                        if response.status_code == 200:
+                            data = cast(dict[str, object], response.json())
+                            caps_raw = data.get("capabilities", [])
+                            if isinstance(caps_raw, list):
+                                caps_list = cast(list[object], caps_raw)
+                                model.capabilities = [str(c) for c in caps_list if isinstance(c, str)]
+                                model.supports_image_input = "vision" in model.capabilities
+                                if "vision" in model.capabilities:
+                                    model.task = "vision"
+                    except Exception:
+                        pass  # probe failed - model still lists with empty capabilities
+                return pulled
+            return []
+        if provider == "wangp":
+            vram_gb = self._vram_gb()
+            # Prefer the full catalog when the bridge offers it
+            if hasattr(self._wangp, "list_all_model_definitions"):
+                try:
+                    definitions = getattr(self._wangp, "list_all_model_definitions")()
+                except HTTPError:
+                    definitions = self._wangp.list_model_definitions()
+                except Exception:
+                    definitions = self._wangp.list_model_definitions()
+            else:
+                definitions = self._wangp.list_model_definitions()
+            return self._models_from_definitions(definitions, vram_gb)
+        if provider == "native":
+            vram_gb = self._vram_gb()
+            return self._native_models(vram_gb)
+        if provider == "vision":
+            vram_gb = self._vram_gb()
+            return self._vision_models(vram_gb)
+        raise HTTPError(400, f"Unknown provider: {provider}")
+
+    def pull_ollama_model(self, model_name: str) -> dict[str, object]:
+        """Pull an Ollama model by name, with progress."""
+        model_name = model_name.strip()
+        if not model_name:
+            raise HTTPError(400, "Model name is required")
+        settings = self._settings()
+        root = self._ollama_root(settings.openai_compatible_base_url)
+        if not root:
+            raise HTTPError(400, "Set the local endpoint base URL first")
+        try:
+            response = self._http.post(
+                f"{root}/api/pull",
+                headers={"Content-Type": "application/json"},
+                json_payload={"model": model_name, "stream": False},
+                timeout=3600,
+            )
+        except Exception as exc:
+            raise HTTPError(502, f"Ollama unreachable: {exc}") from exc
+        if response.status_code != 200:
+            raise HTTPError(502, f"Ollama refused the pull ({response.status_code}): {response.text[:200]}")
+        return {"ok": True, "status": "success", "model": model_name}
 
     def _start_wangp_download(self, model_id: str) -> LibraryDownloadStatus:
         root = self._config.wangp_root

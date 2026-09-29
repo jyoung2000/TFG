@@ -327,6 +327,7 @@ class LibraryModel(BaseModel):
     estimated_min_vram_gb: float | None = None
     fits_gpu: bool | None = None
     supports_image_input: bool = False
+    capabilities: list[str] = []
     context_length: int | None = None
     family: str = ""
     quantization: str = ""
