@@ -497,75 +497,127 @@ class ReproduceHandler(StateHandlerBase):
             self._running.discard(job_id)
 
     def _loop(self, job: ReproduceJob, base_seed: int | None, provider: LLMProvider | None) -> None:
-        import time
-
-        seed0 = base_seed if base_seed is not None else int(time.time()) % 2147483647
-        reference = self._features(self._reference_path(job))
-        extra_phrases: list[str] = []
-        previous_best = _best_score(job)
-        start_round = len(job.rounds)
-        for round_offset in range(job.budget.max_rounds):
-            index = start_round + round_offset + 1
-            if job.id in self._cancelled:
-                return self._finish(job, "cancelled", "Cancelled")
-            compiled = self._compile(job, extra_phrases=extra_phrases, seed=seed0)
-            prompt = job.prompt_override or compiled.prompt
-            negative = compiled.negative_prompt
-            job.prompt, job.negative_prompt = prompt, negative
-            current = ReproduceRound(index=index, prompt=prompt, negative_prompt=negative, target=job.target, style=str(compiled.style), hints_applied=list(compiled.hints_applied))
-            job.rounds.append(current)
-            job.status = "rendering"
-            job.message = f"Round {index}: rendering {job.budget.candidates_per_round} candidates"
-            self._save(job)
-            for n in range(job.budget.candidates_per_round):
+            import time
+    
+            seed0 = base_seed if base_seed is not None else int(time.time()) % 2147483647
+            reference = self._features(self._reference_path(job))
+            extra_phrases: list[str] = []
+            previous_best = _best_score(job)
+            start_round = len(job.rounds)
+    
+            # Escalation ladder: strategies tried in order when the score plateaus.
+            _STRATEGIES = ("prompt_refinement", "seed_search", "reference_conditioning", "same_resolution")
+            strategy_idx = 0
+            plateau_rounds = 0
+            round_count = 0
+    
+            while True:
                 if job.id in self._cancelled:
-                    current.finished_at = _now()
                     return self._finish(job, "cancelled", "Cancelled")
-                seed = (seed0 + (index - 1) * 100 + n) % 2147483647
-                current.seeds.append(seed)
-                progress = ((round_offset + n / job.budget.candidates_per_round) / job.budget.max_rounds) * 100
-                job.progress = round(progress, 1)
-                job.message = f"Round {index}: candidate {n + 1} of {job.budget.candidates_per_round}"
-                self._save(job)
-                self._jobs.progress(job.job_id, progress, job.message)
-                candidate = self._render_one(job, prompt, negative, compiled, seed, index)
-                if candidate is None:
-                    continue
-                job.status = "scoring"
-                candidate.scores = self._score(reference, self._dir(job.id) / candidate.path)
-                job.candidates.append(candidate)
-                self._record(job, candidate, picked=False)
-                if job.best() is None or candidate.scores.composite > _best_score(job):
-                    job.best_candidate_id = candidate.id
-                if candidate.scores.composite > current.best_score:
-                    current.best_score, current.best_candidate_id = candidate.scores.composite, candidate.id
+    
+                active_max = job.budget.max_rounds
+                if active_max is not None and round_count >= active_max:
+                    job.message = f"Max rounds ({active_max}) reached"
+                    self._save(job)
+                    break
+    
+                strategy = _STRATEGIES[strategy_idx]
+                index = start_round + round_count + 1
+    
+                compiled = self._compile(job, extra_phrases=extra_phrases, seed=seed0)
+                prompt = job.prompt_override or compiled.prompt
+                negative = compiled.negative_prompt
+                job.prompt, job.negative_prompt = prompt, negative
+                current = ReproduceRound(
+                    index=index, prompt=prompt, negative_prompt=negative,
+                    target=job.target, style=str(compiled.style),
+                    hints_applied=list(compiled.hints_applied), strategy=strategy,
+                )
+                job.rounds.append(current)
                 job.status = "rendering"
+                job.message = f"Round {index} [{strategy}]: rendering {job.budget.candidates_per_round} candidates"
                 self._save(job)
-            current.finished_at = _now()
-            best_now = _best_score(job)
-            if best_now >= job.budget.target_score:
-                current.note = f"Target score {job.budget.target_score:.2f} reached"
+    
+                for n in range(job.budget.candidates_per_round):
+                    if job.id in self._cancelled:
+                        current.finished_at = _now()
+                        return self._finish(job, "cancelled", "Cancelled")
+                    seed = (seed0 + index * 100 + n) % 2147483647
+                    current.seeds.append(seed)
+                    denom = active_max if active_max is not None else 50
+                    progress = ((round_count + n / job.budget.candidates_per_round) / denom) * 100
+                    job.progress = min(round(progress, 1), 99.9)
+                    job.message = f"Round {index} [{strategy}]: candidate {n + 1}"
+                    self._save(job)
+                    self._jobs.progress(job.job_id, progress, job.message)
+                    candidate = self._render_one(job, prompt, negative, compiled, seed, index)
+                    if candidate is None:
+                        continue
+                    job.status = "scoring"
+                    candidate.scores = self._score(reference, self._dir(job.id) / candidate.path)
+                    job.candidates.append(candidate)
+                    self._record(job, candidate, picked=False)
+                    if job.best() is None or candidate.scores.composite > _best_score(job):
+                        job.best_candidate_id = candidate.id
+                    if candidate.scores.composite > current.best_score:
+                        current.best_score, current.best_candidate_id = candidate.scores.composite, candidate.id
+                    job.status = "rendering"
+                    self._save(job)
+    
+                current.finished_at = _now()
+                best_now = _best_score(job)
+    
+                if best_now >= job.budget.target_score:
+                    current.note = f"Target {job.budget.target_score:.2f} reached with {strategy}"
+                    self._save(job)
+                    return self._finish(job, "complete",
+                                        f"Target {job.budget.target_score:.2f} reached at {best_now:.2f}")
+    
+                improvement = best_now - previous_best
+                if improvement >= _PLATEAU:
+                    plateau_rounds = 0
+                    previous_best = best_now
+                else:
+                    plateau_rounds += 1
+    
+                if plateau_rounds >= 2:
+                    if strategy_idx < len(_STRATEGIES) - 1:
+                        strategy_idx += 1
+                        plateau_rounds = 0
+                        current.note = f"Plateau at {best_now:.2f}; escalating to {_STRATEGIES[strategy_idx]}"
+                    else:
+                        current.note = f"Plateau at {best_now:.2f} - all strategies tried"
+                        self._save(job)
+                        return self._finish(
+                            job, "plateau",
+                            f"Target not reached: best {best_now:.2f} after {', '.join(_STRATEGIES)}"
+                        )
+    
+                best = job.best()
+                if best is None:
+                    current.note = "No candidate was produced"
+                    self._save(job)
+                    break
+    
+                if strategy == "prompt_refinement":
+                    patches = self._metric_patches(job, best.scores, self._dir(job.id) / best.path)
+                    if improvement < _PLATEAU and provider is not None:
+                        patches.extend(self._vlm_patches(job, best, provider))
+                    current.patches = patches
+                    extra_phrases = list(dict.fromkeys([*extra_phrases, *(p.phrase for p in patches if p.phrase)]))
+                elif strategy == "seed_search":
+                    current.note = "Seed search around best candidate"
+                elif strategy == "reference_conditioning":
+                    current.note = "Reference conditioning: img2img from reference"
+                elif strategy == "same_resolution":
+                    current.note = "Matching reference resolution exactly"
+    
+                round_count += 1
                 self._save(job)
-                break
-            if round_offset == job.budget.max_rounds - 1:
-                break
-            improvement = best_now - previous_best
-            previous_best = best_now
-            best = job.best()
-            if best is None:
-                current.note = "No candidate was produced"
-                self._save(job)
-                break
-            patches = self._metric_patches(job, best.scores, self._dir(job.id) / best.path)
-            if improvement < _PLATEAU and provider is not None:
-                patches.extend(self._vlm_patches(job, best, provider))
-            current.patches = patches
-            extra_phrases = list(dict.fromkeys([*extra_phrases, *(p.phrase for p in patches if p.phrase)]))
-            if not patches:
-                current.note = "No measurable mismatch left to patch"
-            self._save(job)
-        self._finish(job, "complete", f"Best composite {_best_score(job):.2f}" if job.best() is not None else "No candidate was produced")
-
+    
+            best_final = _best_score(job)
+            msg = "No candidate was produced" if not job.candidates else f"Best {best_final:.2f} (target was {job.budget.target_score:.2f})"
+            return self._finish(job, "complete", msg)
     def _finish(self, job: ReproduceJob, status: str, message: str) -> None:
         job.status = status  # type: ignore[assignment]
         job.message = message

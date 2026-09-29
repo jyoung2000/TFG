@@ -18,15 +18,15 @@ from film.shot_spec import ShotSpec
 from services.similarity.composite import ScoreBreakdown
 
 REPRODUCE_VERSION = 2
-ReproduceStatus = Literal["idle", "analyzing", "rendering", "scoring", "complete", "failed", "cancelled"]
+ReproduceStatus = Literal["idle", "analyzing", "rendering", "scoring", "complete", "failed", "cancelled", "plateau"]
 CandidateSource = Literal["render", "fix", "patch", "inpaint", "legacy"]
 
 
 class ReproduceBudget(BaseModel):
     candidates_per_round: int = Field(default=6, ge=1, le=12)
-    max_rounds: int = Field(default=3, ge=1, le=8)
-    #: Stop early once the best composite reaches this.
-    target_score: float = Field(default=0.9, ge=0.0, le=1.0)
+    max_rounds: int | None = Field(default=None)
+    #: Stop once the best composite reaches this. 0.95 = 95 % identical.
+    target_score: float = Field(default=0.95, ge=0.0, le=1.0)
 
 
 class ReproduceCandidate(BaseModel):
@@ -67,6 +67,7 @@ class ReproduceRound(BaseModel):
     seeds: list[int] = Field(default_factory=list[int])
     best_candidate_id: str = ""
     best_score: float = 0.0
+    strategy: str = ""  # prompt_refinement | seed_search | reference_conditioning | same_resolution
     started_at: int = Field(default_factory=now_ms)
     finished_at: int | None = None
     note: str = ""
