@@ -149,53 +149,11 @@ IC_LORA_DIR = MODELS_DIR / "ic-loras"
 
 
 def _resolve_wangp_root() -> Path | None:
-    candidates: list[Path] = []
-    search_roots = [PROJECT_ROOT, *PROJECT_ROOT.parents]
-
-    for env_key in ("WANGP_ROOT", "WANGP_WGP_PATH"):
-        raw_value = os.environ.get(env_key, "").strip()
-        if not raw_value:
-            continue
-        candidate = Path(raw_value)
-        if candidate.is_file():
-            candidate = candidate.parent
-        candidates.append(candidate)
-
-    # Fall back to bundled/sibling checkouts only when no explicit WanGP root
-    # was provided in the environment.
-    for base in search_roots:
-        candidates.append(base)
-        for sibling_name in ("Wan2GP", "WanGP", "wan2gp", "wangp"):
-            candidates.append(base / sibling_name)
-
-    seen: set[Path] = set()
-    for candidate in candidates:
-        try:
-            resolved = candidate.resolve()
-        except Exception:
-            continue
-        if resolved in seen:
-            continue
-        seen.add(resolved)
-        if (resolved / "wgp.py").exists():
-            return resolved
-    return None
+    return resolve_wangp_root(project_root=PROJECT_ROOT, app_data_dir=APP_DATA_DIR)
 
 
 def _resolve_wangp_python(wangp_root: Path | None) -> str | None:
-    env_python = os.environ.get("WANGP_PYTHON", "").strip()
-    if env_python:
-        return env_python
-
-    if wangp_root is not None:
-        if os.name == "nt":
-            venv_candidate = wangp_root / ".venv" / "Scripts" / "python.exe"
-        else:
-            venv_candidate = wangp_root / ".venv" / "bin" / "python"
-        if venv_candidate.exists():
-            return str(venv_candidate)
-
-    return sys.executable
+    return resolve_wangp_python(wangp_root=wangp_root)
 
 
 def _resolve_wangp_extra_args() -> tuple[str, ...]:
@@ -232,6 +190,11 @@ from runtime_config.runtime_policy import decide_force_api_generations
 from state.app_state_types import ModelFileType
 from server_utils.model_layout_migration import migrate_legacy_models_layout
 from services.gpu_info.gpu_info_impl import GpuInfoImpl
+from services.wangp_paths import (
+    in_process_diagnostic,
+    resolve_wangp_python,
+    resolve_wangp_root,
+)
 
 migrate_legacy_models_layout(APP_DATA_DIR)
 IC_LORA_DIR.mkdir(parents=True, exist_ok=True)
@@ -361,6 +324,13 @@ def log_hardware_info() -> None:
 
         mode = select_wangp_mode(remote_url=WANGP_REMOTE_URL, enabled=WANGP_ENABLED, root=WANGP_ROOT, python=WANGP_PYTHON)
         logger.info("WanGP bridge: enabled  |  WanGP mode: %s  |  Root: %s  |  Python: %s", mode, WANGP_ROOT, WANGP_PYTHON)
+        # A venv-less checkout means the isolated worker is unused, which is how
+        # F-077 hid: mode came out `in_process` with nothing to say why.
+        if mode == "in_process" and WANGP_ROOT is not None:
+            logger.warning(
+                in_process_diagnostic(WANGP_ROOT, app_data_dir=APP_DATA_DIR)
+                or "WanGP is in-process with no dedicated interpreter; renders share this Python."
+            )
     else:
         logger.info("WanGP bridge: disabled")
     logger.info(f"Python: {sys.version.split()[0]}  |  Torch: {torch.__version__}")
