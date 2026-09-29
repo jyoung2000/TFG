@@ -135,17 +135,32 @@ def _dedupe_regions(regions: list[VisionRegion], iou_threshold: float = _DUPLICA
     separate objects - the two `footwear` boxes of a figure standing wide - do
     not overlap, so they survive.
     """
+    # How often each spelling appears, so a variant can lose to the common one.
+    spelling_counts: dict[str, int] = {}
+    for region in regions:
+        spelling_counts[region.label] = spelling_counts.get(region.label, 0) + 1
+
     kept: list[VisionRegion] = []
     for region in regions:
         bbox = region.bbox
         duplicate = False
         if len(bbox) == 4 and bbox[2] > 0 and bbox[3] > 0:
             for other in kept:
-                if other.label != region.label or len(other.bbox) != 4:
+                if len(other.bbox) != 4 or box_iou(bbox, other.bbox) < iou_threshold:
                     continue
-                if box_iou(bbox, other.bbox) >= iou_threshold:
-                    duplicate = True
-                    break
+                duplicate = True
+                # Same object, different name. Keep the spelling the detector
+                # used most, and on a tie the longer one: on the round-6
+                # reference Florence-2 returned `trousers` and `trouses` for
+                # one pair of legs (IoU 0.997), and the misspelling reached the
+                # prompt. Distinct objects are unaffected - a person and the
+                # jacket they wear overlap by ~0.30 and both survive.
+                if other.label != region.label:
+                    mine = (spelling_counts.get(region.label, 0), len(region.label))
+                    theirs = (spelling_counts.get(other.label, 0), len(other.label))
+                    if mine > theirs:
+                        other.label = region.label
+                break
         if not duplicate:
             kept.append(region)
     return kept

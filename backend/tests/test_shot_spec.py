@@ -292,3 +292,42 @@ class TestDetectionDuplicateBoxes:
         ]
         got2 = counts_for(two_feet)
         assert got2.get("footwear") == 2, f"two separate objects must count twice, got {got2}"
+
+    def test_near_duplicate_regions_collapse_across_label_spellings(self, tmp_path: Path):
+        """Florence-2 spells the same object two ways; both were being kept.
+
+        Measured on the round-6 reference, the raw detections contained
+        `trousers` bbox [0.2622, 0.4277, 0.5295, 0.4932] and `trouses`
+        bbox [0.2622, 0.4277, 0.5278, 0.4932] - IoU 0.9968, one object. The
+        de-duplication added for duplicate *labels* only compared labels, so
+        both survived: the spec listed five subjects for four objects, the
+        compiled prompt told the renderer to draw "trouses", and
+        `layout_similarity`, which matches labels by string, scored the
+        trousers as two separate classes and split the credit between them.
+
+        Overlapping regions now collapse whatever they are called, keeping the
+        more common spelling (ties: the longer one). A person and the jacket
+        they are wearing (IoU 0.30) must still both survive.
+        """
+        from services.vision.protocol import VisionRegion
+
+        base = _analysis(tmp_path)
+
+        def labels(regions: list[VisionRegion]) -> dict[str, int]:
+            spec = spec_from_vision(base.model_copy(update={"regions": regions}))
+            return {s.label: s.count for s in spec.subjects}
+
+        # The real pair from the reference: one object, two spellings.
+        got = labels([
+            VisionRegion(label="trousers", bbox=[0.2622, 0.4277, 0.5295, 0.4932]),
+            VisionRegion(label="trouses", bbox=[0.2622, 0.4277, 0.5278, 0.4932]),
+        ])
+        assert "trouses" not in got, f"the misspelling must not survive: {got}"
+        assert got.get("trousers") == 1, f"one object must count once, got {got}"
+
+        # Control: a person and the jacket they wear are different objects.
+        both = labels([
+            VisionRegion(label="woman", bbox=[0.1302, 0.0059, 0.7465, 0.9756]),
+            VisionRegion(label="jacket", bbox=[0.1163, 0.1621, 0.7656, 0.2939]),
+        ])
+        assert both.get("woman") == 1 and both.get("jacket") == 1, f"distinct objects must both survive: {both}"
