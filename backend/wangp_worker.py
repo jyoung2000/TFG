@@ -126,15 +126,31 @@ class _Job:
         }
 
 
+def _vram_reserved_mb() -> int:
+    """VRAM this process's torch holds (its loaded model). Read without
+    importing torch: before the first render it is simply 0."""
+    torch = sys.modules.get("torch")
+    try:
+        return int(torch.cuda.memory_reserved() // (1024 * 1024)) if torch is not None and torch.cuda.is_available() else 0
+    except Exception:  # noqa: BLE001 - status must always answer
+        return 0
+
+
 class Worker:
     """One manifest at a time — the GPU is the bottleneck, exactly as on the
     container server (handlers/wangp_server_handler.py)."""
 
-    def __init__(self, bridge: Any) -> None:
+    def __init__(self, bridge: Any, *, idle_release_s: float = 0) -> None:
         self._bridge = bridge
         self._jobs: dict[str, _Job] = {}
         self._active = ""
         self._lock = threading.Lock()
+        # Idle release: a finished render leaves its model loaded (LTX-2 22B
+        # held 24.6 GB of commit for hours); after this many idle seconds it is
+        # released. 0 disables.
+        self._idle_release_s = idle_release_s
+        self._holding_models = False
+        self._last_active = time.monotonic()
         self._status: dict[str, object] = {"available": False, "reason": "WanGP worker is loading its libraries", "loading": True}
 
     # The first import of WanGP (torch, gradio, …) takes ~1 minute and holds the
@@ -153,9 +169,30 @@ class Worker:
             self._status = snapshot
         logger.info("WanGP worker status: %s", snapshot)
 
+    def maybe_release(self) -> bool:
+        """Release the loaded models once the worker has been idle long enough.
+        Safe against a render arriving meanwhile: WanGP's generation lock makes
+        that render wait for the release, then reload."""
+        if self._idle_release_s <= 0:
+            return False
+        with self._lock:
+            if self._active or not self._holding_models or time.monotonic() - self._last_active < self._idle_release_s:
+                return False
+            self._holding_models = False
+        release = getattr(self._bridge, "release_models", None)
+        if not callable(release):
+            return False
+        try:
+            release()
+        except Exception as exc:  # noqa: BLE001 - a failed release keeps the models, nothing worse
+            logger.warning("Idle model release failed: %s", exc)
+            return False
+        logger.info("Released WanGP models after %.0f s idle", self._idle_release_s)
+        return True
+
     def status(self) -> dict[str, object]:
         with self._lock:
-            return {**self._status, "busy": bool(self._active), "active_job": self._active}
+            return {**self._status, "busy": bool(self._active), "active_job": self._active, "vram_reserved_mb": _vram_reserved_mb()}
 
     def definitions(self) -> list[dict[str, object]]:
         return cast(list[dict[str, object]], self._bridge.list_model_definitions())
@@ -219,11 +256,13 @@ class Worker:
                 job.status = "cancelled" if cancelled else "failed"
                 job.error = "Cancelled" if cancelled else str(exc)
                 self._active = ""
+                self._holding_models, self._last_active = True, time.monotonic()
             return
         with self._lock:
             job.status, job.phase, job.progress = "complete", "complete", 100.0
             job.outputs = list(outputs)
             self._active = ""
+            self._holding_models, self._last_active = True, time.monotonic()
 
 
 def _make_handler(worker: Worker, token: str) -> type[BaseHTTPRequestHandler]:
@@ -343,6 +382,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--extra-arg", action="append", default=[], help="Passed to WanGP's session (repeatable)")
     parser.add_argument("--port", type=int, default=0, help="0 = pick a free port")
     parser.add_argument("--ready-file", default="", help="Also announce the port by writing this file atomically")
+    parser.add_argument(
+        "--idle-release-s", type=float, default=float(os.environ.get("TFG_WANGP_IDLE_RELEASE_S", "600")),
+        help="Release loaded models after this many idle seconds (0 = never)",
+    )
     args = parser.parse_args(argv)
 
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s", stream=sys.stdout)
@@ -375,7 +418,7 @@ def main(argv: list[str] | None = None) -> int:
         camera_motion_prompts={},
         extra_args=tuple(args.extra_arg),
     )
-    worker = Worker(bridge)
+    worker = Worker(bridge, idle_release_s=args.idle_release_s)
 
     # F-038: the heavy import runs on a pristine main thread — no other
     # thread, no bound socket — matching the environment of every standalone
@@ -405,6 +448,13 @@ def main(argv: list[str] | None = None) -> int:
     # the import, and a backend that died during startup is still honoured —
     # the read returns EOF immediately and the worker leaves.
     threading.Thread(target=_exit_when_stdin_closes, name="wangp-parent-watch", daemon=True).start()
+
+    def release_when_idle() -> None:
+        while True:
+            time.sleep(30)
+            worker.maybe_release()
+
+    threading.Thread(target=release_when_idle, name="wangp-idle-release", daemon=True).start()
     _trace("orphan guard armed — serving")
     try:
         server.serve_forever(poll_interval=0.5)

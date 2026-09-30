@@ -46,6 +46,15 @@ IMG2IMG_MODEL_TYPES: tuple[str, ...] = ("flux2_klein_4b", "flux2_klein_9b", "flu
 #: with no resolution at all.
 IMG2IMG_MIN_STEPS = 24
 
+def _with_default_attention(args: tuple[str, ...]) -> tuple[str, ...]:
+    """`--attention auto` unless the caller chose one: WanGP's saved config can
+    pin `sdpa` (it did on the installed app), and `auto` picks the fastest
+    kernel actually installed (SageAttention ships with the app)."""
+    if any(a == "--attention" or a.startswith("--attention=") for a in args):
+        return args
+    return (*args, "--attention", "auto")
+
+
 _TQDM_PROGRESS_RE = re.compile(r"(?:(?P<label>.*?):\s+)?(?P<percent>\d{1,3})%\|[^|]*\|\s*(?P<current>\d+)/(?P<total>\d+)")
 
 
@@ -79,7 +88,7 @@ class WanGPBridge:
         self._video_model_type = video_model_type
         self._image_model_type = image_model_type
         self._camera_motion_prompts = camera_motion_prompts
-        self._extra_args = tuple(extra_args)
+        self._extra_args = _with_default_attention(tuple(extra_args))
         self._session = None
         self._submitted_manifest_once = False
         self._session_lock = threading.Lock()
@@ -453,6 +462,21 @@ class WanGPBridge:
             return ""
         except Exception as exc:  # noqa: BLE001 - reported by the caller, renders re-raise it
             return str(exc)
+
+    def held_vram_mb(self) -> int:
+        """VRAM held by this bridge's own WanGP process that a render may
+        reuse. In-process WanGP shares the app's process: nothing to add."""
+        return 0
+
+    def release_models(self) -> bool:
+        """Release whatever model WanGP holds (VRAM + pinned RAM). The next
+        render reloads it. False when no session was ever started."""
+        with self._session_lock:
+            session = self._session
+        if session is None:
+            return False
+        session.close()
+        return True
 
     def _get_session(self):
         status = self.get_status()

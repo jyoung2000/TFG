@@ -29,6 +29,11 @@ class FakeWanGPBridge(WanGPBridge):
         self.fail_with: str = ""
         self.definitions: list[dict[str, object]] = [{"id": "ltx2_22B_distilled", "name": "LTX-2 22B distilled", "downloaded": True}]
         self._serial = 0
+        #: VRAM the (fake) worker reports holding for its loaded model.
+        self.held_mb = 0
+
+    def held_vram_mb(self) -> int:
+        return self.held_mb
 
     def get_status(self) -> WanGPBridgeStatus:
         if not self.available:

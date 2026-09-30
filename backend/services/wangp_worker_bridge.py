@@ -479,6 +479,14 @@ class WorkerWanGPBridge(RemoteWanGPBridge):
         self._base_url = endpoint.base_url
         self._token = endpoint.token
 
+    def held_vram_mb(self) -> int:
+        # Never start the worker just to ask: no worker, nothing held.
+        endpoint = self._launcher.endpoint()
+        if endpoint is None:
+            return 0
+        self._use(endpoint)
+        return super().held_vram_mb()
+
     def _transport_alive(self) -> bool:
         # A worker that exited will never answer: fail now, not after the
         # status-poll patience window.

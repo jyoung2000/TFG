@@ -61,6 +61,13 @@ $code = $LASTEXITCODE
 Remove-Item -Force $Constraints -ErrorAction SilentlyContinue
 if ($code -ne 0) { throw "WanGP requirements install failed" }
 
+# SageAttention (Triton kernels) lets WanGP's `--attention auto` pick a faster
+# kernel than sdpa. Same versions the app's own backend pins (backend/uv.lock);
+# --no-deps so nothing here can move the pinned CUDA torch.
+Write-Host "Installing SageAttention + Triton (optional speed-up) ..." -ForegroundColor Yellow
+uv pip install --python $Py --no-deps "triton-windows==3.6.0.post25" "sageattention==1.0.6"
+if ($LASTEXITCODE -ne 0) { Write-Host "SageAttention install failed; WanGP falls back to sdpa." -ForegroundColor DarkYellow }
+
 Write-Host "Verifying that WanGP imports in its own environment ..." -ForegroundColor Yellow
 Push-Location $Wan2GPDir
 try {

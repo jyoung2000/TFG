@@ -97,8 +97,11 @@ class ImageGenerationHandler(StateHandlerBase):
         peak_mb: int | None = None
         try:
             if self._vision is not None:
-                model_type = self._config.wangp_image_model_type if self._config.wangp_enabled else "z_image"
-                with self._vision.render_scope(model_type) as scope:
+                # The model this render actually uses ("Render with"), not the
+                # configured default: FLUX.2 and Z-Image need different room.
+                model_type = ((req.model or "").strip() or self._config.wangp_image_model_type) if self._config.wangp_enabled else "z_image"
+                held = self._wangp_bridge.held_vram_mb() if self._config.wangp_enabled else 0
+                with self._vision.render_scope(model_type, reclaimable_mb=held) as scope:
                     response = self._dispatch(req, tracked, seed, init_image, denoise_strength)
                 peak_mb = scope.peak_mb
             else:

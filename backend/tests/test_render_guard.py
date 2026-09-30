@@ -184,3 +184,50 @@ class TestRenderWithModelOverride:
         assert r.status_code == 409, r.text
         assert "flux2_klein_4b" in r.json()["error"], r.json()["error"]
         assert fake_services.wangp_bridge.manifests == [], "nothing may be rendered"
+
+
+class TestTheWorkersOwnVramIsNotAnObstacle:
+    """Handover B2: `z_image_nunchaku_r128_fp4` rendered two candidates, then
+    the third was refused - "Free 2.5 GB of VRAM before rendering: 3.2 GB
+    free, 5.8 GB needed. Loaded: nothing this app owns." The missing VRAM was
+    the WanGP worker's own: the model it had just rendered with and was about
+    to reuse. That memory is the render's to use, so it counts as reclaimable;
+    genuinely foreign VRAM is still refused."""
+
+    def _enable(self, test_state, fake_services, *, held_mb: int):
+        test_state.config.wangp_enabled = True
+        fake_services.wangp_bridge.available = True
+        fake_services.wangp_bridge.definitions = [{"id": "z_image", "name": "z_image", "installed": True}]
+        fake_services.wangp_bridge.held_mb = held_mb
+        # 3.2 GB free against z_image's ~5.9 GB bar, as in the refused render.
+        fake_services.nvml.used_mb = 12288 - 3200
+
+    def test_vram_the_worker_holds_counts_as_available(self, client, test_state, fake_services):
+        self._enable(test_state, fake_services, held_mb=4000)
+        r = client.post("/api/generate-image", json={"prompt": "x"})
+        assert r.status_code == 200, r.text
+
+    def test_foreign_vram_is_still_refused(self, client, test_state, fake_services):
+        self._enable(test_state, fake_services, held_mb=0)
+        r = client.post("/api/generate-image", json={"prompt": "x"})
+        assert r.status_code == 507, r.text
+
+
+class TestVideoRendersGetTheWholeMachine:
+    """LTX-2 22B needs ~39 GB of weights on a 32 GB box (transformer 18.5 GB,
+    Gemma text encoder 12.6 GB, connector 3.8 GB, ...). MEASURED 2026-09-30:
+    free RAM hit 0 MB during every 2 s 540p render and a warm render (500.6 s)
+    was no faster than a cold one (491.1 s) - it pages. Anything the app
+    itself holds (CLIP ViT-L, DINOv2, Florence - RAM and VRAM) is released
+    before a WanGP video render even when the VRAM bar alone would be met;
+    they reload lazily on next use."""
+
+    def test_app_vision_models_are_released_before_a_wangp_video_render(self, client, test_state, fake_services):
+        test_state.config.wangp_enabled = True
+        fake_services.wangp_bridge.available = True
+        fake_services.nvml.used_mb = 1000  # plenty of VRAM: the old guard kept everything loaded
+        released: list[str] = []
+        test_state.vram.register("clip", "M", 1700, lambda: released.append("clip"), priority=40)
+        r = client.post("/api/generate", json={"prompt": "test", "resolution": "540p", "model": "fast", "duration": "2", "fps": "24"})
+        assert r.status_code == 200, r.text
+        assert released == ["clip"]

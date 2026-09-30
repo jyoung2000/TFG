@@ -387,9 +387,9 @@ class VisionHandler(StateHandlerBase):
             raise HTTPError(507, str(exc)) from exc
 
     @contextmanager
-    def render_scope(self, model_type: str) -> Iterator[RenderScope]:
+    def render_scope(self, model_type: str, *, reclaimable_mb: int = 0, release_all: bool = False) -> Iterator[RenderScope]:
         try:
-            with self.vram.render_scope(model_type) as scope:
+            with self.vram.render_scope(model_type, reclaimable_mb=reclaimable_mb, release_all=release_all) as scope:
                 yield scope
         except VramError as exc:
             raise HTTPError(507, str(exc)) from exc

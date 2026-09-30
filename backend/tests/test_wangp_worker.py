@@ -692,3 +692,84 @@ class TestStatusNeverWaitsForAWorkerStart:
             worker.start()
             assert answered.wait(2.0), "get_status() waited for the worker start to finish"
         assert launcher.endpoint() is None
+
+
+class _ReleasingBridge:
+    """Finishes every manifest at once and counts model releases."""
+
+    def __init__(self) -> None:
+        self.releases = 0
+
+    def run_manifest(self, *, manifest, media_suffixes, on_progress, is_cancelled):  # noqa: ARG002
+        return []
+
+    def release_models(self) -> bool:
+        self.releases += 1
+        return True
+
+
+class TestIdleWorkerReleasesItsModels:
+    """An idle app must not hold the machine's RAM hostage.
+
+    MEASURED on the RTX 4070 / 32 GB box (2026-09-30): hours after its last
+    render the installed app's WanGP worker still held 24.6 GB of private
+    commit (LTX-2 22B, 12.8 GB of it pinned) plus 5.2 GB in the backend, with
+    96.6 GB committed system-wide and 111 MB of RAM free. Closing the app freed
+    30 GB. The worker now releases its models after an idle period; the next
+    render reloads them (WanGP's generation lock orders the two).
+    """
+
+    def _finish_one_job(self, worker) -> None:
+        import time as _time
+
+        code, job = worker.submit([{"params": {"prompt": "p"}}], [".png"])
+        assert code == 200
+        deadline = _time.monotonic() + 5
+        while worker.get(str(job["id"]))[1]["status"] != "complete" and _time.monotonic() < deadline:
+            _time.sleep(0.01)
+
+    def test_models_are_released_once_after_the_idle_period(self):
+        import time as _time
+
+        import wangp_worker
+
+        bridge = _ReleasingBridge()
+        worker = wangp_worker.Worker(bridge, idle_release_s=0.05)
+        assert worker.maybe_release() is False, "nothing loaded yet, nothing to release"
+        self._finish_one_job(worker)
+        assert worker.maybe_release() is False, "not idle long enough yet"
+        _time.sleep(0.08)
+        assert worker.maybe_release() is True and bridge.releases == 1
+        assert worker.maybe_release() is False and bridge.releases == 1, "released once, not every tick"
+
+    def test_zero_disables_the_release(self):
+        import time as _time
+
+        import wangp_worker
+
+        bridge = _ReleasingBridge()
+        worker = wangp_worker.Worker(bridge, idle_release_s=0)
+        self._finish_one_job(worker)
+        _time.sleep(0.02)
+        assert worker.maybe_release() is False and bridge.releases == 0
+
+
+class TestFastAttentionByDefault:
+    """The worker rendered with `attention_mode = sdpa` (read from its saved
+    config) although SageAttention is the app's own dependency. WanGP's
+    `--attention auto` picks the fastest installed kernel; a user's explicit
+    choice still wins."""
+
+    def _bridge(self, extra: tuple[str, ...]):
+        from services.wangp_bridge import WanGPBridge
+
+        return WanGPBridge(enabled=True, root=None, python_executable=None, config_dir=Path("cfg"), output_dir=Path("out"),
+                           video_model_type="ltx2_22B_distilled", image_model_type="z_image", camera_motion_prompts={}, extra_args=extra)
+
+    def test_auto_is_added_when_none_is_given(self):
+        args = self._bridge(())._extra_args  # noqa: SLF001
+        assert list(args[-2:]) == ["--attention", "auto"]
+
+    def test_an_explicit_choice_is_kept(self):
+        assert self._bridge(("--attention", "sdpa"))._extra_args.count("--attention") == 1  # noqa: SLF001
+        assert "auto" not in self._bridge(("--attention=sage",))._extra_args  # noqa: SLF001

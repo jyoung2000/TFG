@@ -168,6 +168,14 @@ class RemoteWanGPBridge(WanGPBridge):
 
     # ---- transport --------------------------------------------------------------------
 
+    def held_vram_mb(self) -> int:
+        """VRAM the WanGP process on the other side holds for its loaded
+        model, as it reports it; 0 when it cannot say."""
+        try:
+            return int(self._get_json("/api/wangp/status", timeout=5).get("vram_reserved_mb", 0) or 0)
+        except (RemoteWanGPError, TypeError, ValueError):
+            return 0
+
     def _transport_alive(self) -> bool:
         """Whether the far side can still answer; a remote host is assumed to."""
         return True

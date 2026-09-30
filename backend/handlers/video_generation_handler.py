@@ -138,7 +138,11 @@ class VideoGenerationHandler(StateHandlerBase):
                 # Free the card first (VLM keep_alive 0, vision models unloaded);
                 # a render that still cannot fit fails here with an actionable
                 # message instead of a CUDA trace.
-                with self._vision.render_scope(self._render_model_type(req)) as scope:
+                held = self._wangp_bridge.held_vram_mb() if self._config.wangp_enabled else 0
+                # A WanGP video model does not fit this machine's RAM with the
+                # app's vision models beside it: release them all (they reload
+                # lazily), not just enough VRAM.
+                with self._vision.render_scope(self._render_model_type(req), reclaimable_mb=held, release_all=self._config.wangp_enabled) as scope:
                     response = self._dispatch(req, tracked, seed)
                 peak_mb = scope.peak_mb
             else:

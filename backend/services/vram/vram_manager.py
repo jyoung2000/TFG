@@ -255,11 +255,15 @@ class VramManager:
             logger.info("Could not release Ollama model %s: %s", self._ollama_model, exc)
             return ""
 
-    def prepare_for_render(self, model_type: str, *, needed_mb: int | None = None) -> VramPlan:
+    def prepare_for_render(self, model_type: str, *, needed_mb: int | None = None, reclaimable_mb: int = 0, release_all: bool = False) -> VramPlan:
         """Make room for a render. Unloads, in priority order, only what is
         needed; Florence (priority 80) survives when the headroom allows it.
-        Raises `VramError` when the card still cannot fit the render."""
+        Raises `VramError` when the card still cannot fit the render.
+
+        `reclaimable_mb` is VRAM the renderer itself already holds (the WanGP
+        worker's loaded model) - used, but the render's to reuse or swap."""
         needed = needed_mb if needed_mb is not None else self.needed_mb(model_type)
+        needed = max(0, needed - max(0, reclaimable_mb))
         free_before = self.free_mb()
         plan = VramPlan(model_type=model_type, needed_mb=needed, free_before_mb=free_before, free_after_mb=free_before)
         with self._lock:
@@ -282,7 +286,9 @@ class VramManager:
             # No pressure, but a warm VLM next to a render is the classic OOM: drop it anyway.
             plan.ollama_released = self.release_ollama()
         for model in candidates:
-            if enough():
+            # `release_all`: a render that is starved for RAM, not just VRAM
+            # (LTX-2 22B on a 32 GB box) gets everything this app holds.
+            if not release_all and enough():
                 break
             try:
                 model.unload()
@@ -311,10 +317,10 @@ class VramManager:
     # ---- peak sampling ------------------------------------------------------
 
     @contextmanager
-    def render_scope(self, model_type: str, *, needed_mb: int | None = None) -> Iterator[RenderScope]:
+    def render_scope(self, model_type: str, *, needed_mb: int | None = None, reclaimable_mb: int = 0, release_all: bool = False) -> Iterator[RenderScope]:
         """`prepare_for_render` then sample used VRAM until the block ends;
         `scope.peak_mb` holds the peak (None without a GPU)."""
-        plan = self.prepare_for_render(model_type, needed_mb=needed_mb)
+        plan = self.prepare_for_render(model_type, needed_mb=needed_mb, reclaimable_mb=reclaimable_mb, release_all=release_all)
         scope = RenderScope(model_type=model_type, plan=plan)
         stop = threading.Event()
         peak: list[int] = []
