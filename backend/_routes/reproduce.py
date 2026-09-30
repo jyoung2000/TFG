@@ -92,9 +92,21 @@ def route_delete(job_id: str, handler: AppHandler = Depends(get_state_service)) 
     return {"status": "ok"}
 
 
+class AnalyzeRequest(BaseModel):
+    #: "Analyse with" - the vision model for THIS job. Empty keeps the setting.
+    vlm_model: str = ""
+
+
 @router.post("/{job_id}/analyze", response_model=ReproduceJob)
-def route_analyze(job_id: str, handler: AppHandler = Depends(get_state_service)) -> ReproduceJob:
-    vlm, note = handler.vision.optional_vlm_with_reason(handler.film_director.optional_provider("storyboard"))
+def route_analyze(
+    job_id: str,
+    req: AnalyzeRequest | None = None,
+    handler: AppHandler = Depends(get_state_service),
+) -> ReproduceJob:
+    vlm, note = handler.vision.optional_vlm_with_reason(
+        handler.film_director.optional_provider("storyboard"),
+        model_override=(req.vlm_model if req else ""),
+    )
     return handler.reproduce.analyze(job_id, vlm, vlm_note=note)
 
 

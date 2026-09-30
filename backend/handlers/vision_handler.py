@@ -145,7 +145,9 @@ class VisionHandler(StateHandlerBase):
         AI Director unless the user explicitly picks `director`."""
         return self.optional_vlm_with_reason(director_fallback)[0]
 
-    def optional_vlm_with_reason(self, director_fallback: LLMProvider | None = None) -> tuple[LLMProvider | None, str]:
+    def optional_vlm_with_reason(
+        self, director_fallback: LLMProvider | None = None, *, model_override: str = ""
+    ) -> tuple[LLMProvider | None, str]:
         """The VLM plus, when there is none, WHY there is none — a
         user-facing sentence naming the setting to change. Round 2 (F-015's
         second half) configured a VLM that never reached the analysis path
@@ -167,6 +169,10 @@ class VisionHandler(StateHandlerBase):
             return director_fallback, ""
         if current.vlm_provider == "ollama":
             root, model = self._ollama_target(current)
+            # "Analyse with": a per-job choice wins over the stored setting, so
+            # two jobs can be read by different models without touching Settings.
+            if model_override.strip():
+                model = model_override.strip()
             if not root or not model:
                 return None, 'Settings → Vision → VLM is "ollama" but no server URL or model is configured (is Ollama running?)'
             return OpenAICompatibleProvider(self._http, "ollama", model, base_url=f"{root}/v1", name="ollama"), ""
@@ -331,8 +337,10 @@ class VisionHandler(StateHandlerBase):
             # `details`, and already carries `capabilities` - so the common case
             # needs no /api/show probe at all. Reading details.digest found
             # nothing and left llava:latest and llava:7b as two phantom options.
-            details = item.get("details") if isinstance(item.get("details"), dict) else {}
-            digest = str(item.get("digest", "") or cast(dict[str, Any], details).get("digest", "") or "")
+            raw_details = item.get("details")
+            details: dict[str, Any] = cast(dict[str, Any], raw_details) if isinstance(raw_details, dict) else {}
+            raw_digest = item.get("digest")
+            digest = str(raw_digest if isinstance(raw_digest, str) else details.get("digest", "") or "")
             key = digest or name
             if key in seen:
                 continue
@@ -340,7 +348,7 @@ class VisionHandler(StateHandlerBase):
             size = item.get("size")
             raw_caps = item.get("capabilities")
             if isinstance(raw_caps, list) and raw_caps:
-                capabilities = [str(c) for c in raw_caps]
+                capabilities = [str(c) for c in cast(list[object], raw_caps)]
             else:
                 capabilities = self._probe_capabilities(root, name)
             entries.append(VisionModelEntry(
@@ -366,7 +374,7 @@ class VisionHandler(StateHandlerBase):
                 return []
             payload = cast(dict[str, Any], response.json())
             caps = payload.get("capabilities", [])
-            return [str(c) for c in caps] if isinstance(caps, list) else []
+            return [str(c) for c in cast(list[object], caps)] if isinstance(caps, list) else []
         except Exception as exc:  # noqa: BLE001 - a failed probe leaves it text-only
             logger.info("Capability probe for %s failed: %s", model, exc)
             return []

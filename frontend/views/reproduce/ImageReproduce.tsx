@@ -9,13 +9,13 @@ import { logger } from '../../lib/logger'
 import { reproduceApi, reproduceMediaUrl } from '../../lib/reproduce-api'
 import { toFileUrl } from '../../lib/file-url'
 import { PROMPT_STYLES, SPEC_TARGETS, type PromptStyle, type SpecSection } from '../../types/shotspec'
-import { requestSettings } from '../../lib/error-messages'
 import { isBusy, type ReproduceBudget, type ReproduceCandidate, type ReproduceJob } from '../../types/reproduce'
 import { CandidateCompare, MetricBars } from './CandidateCompare'
 import { FixCanvas } from './FixCanvas'
 import { MediaImage } from './MediaImage'
 import { SpecBlocks } from './SpecBlocks'
 import { WhyPanel } from './WhyPanel'
+import { AnalyseWith } from './AnalyseWith'
 import { RenderWith } from './RenderWith'
 
 const TARGET_LABEL: Record<string, string> = {
@@ -35,6 +35,9 @@ export function ImageReproduce() {
   // Which installed local image model renders the candidates. Seeded from
   // the job so a re-opened run keeps the model it last used.
   const [renderModel, setRenderModel] = useState('')
+  // Which vision model reads the reference. Seeded from the job so a
+  // re-opened run keeps the reader it last used.
+  const [vlmModel, setVlmModel] = useState('')
   // 0.95 is the brief's bar (composite >= 0.95 == 95 % identical) and matches
   // ReproduceBudget.target_score. The UI always sends its own budget, so this is
   // what the loop actually uses; the backend default only applies to API callers.
@@ -75,6 +78,7 @@ export function ImageReproduce() {
     setPromptDraft(job.prompt_override || job.prompt)
     setBudget(job.budget)
     setRenderModel(job.render_model ?? '')
+    setVlmModel((job.vision_model ?? '').split(':').pop() ?? '')
     if (!selectedId || !job.candidates.some(c => c.id === selectedId)) setSelectedId(job.best_candidate_id)
   }, [job, selectedId])
 
@@ -180,10 +184,10 @@ export function ImageReproduce() {
               <section className="flex items-center gap-2 flex-wrap">
                 <h2 className="text-sm font-semibold text-white">{job.title}</h2>
                 <span className="text-xs text-zinc-500">{job.width}×{job.height} · renders with {job.image_model}{job.vision_model ? ` · read by ${job.vision_model}` : ''}</span>
-                <button onClick={() => requestSettings('vision')} className="text-xs text-violet-300 hover:text-violet-200 underline-offset-2 hover:underline" title="Choose the vision AI that reads the reference (Settings → Vision), then Analyse again">change vision AI</button>
+                <AnalyseWith value={vlmModel} onChange={setVlmModel} disabled={busyJob} />
                 <span className={`text-xs ${job.status === 'failed' ? 'text-red-300' : busyJob ? 'text-violet-300' : 'text-zinc-400'}`} data-testid="reproduce-status">{job.status}{busyJob ? ` ${Math.round(job.progress)}% · ${job.message}` : job.message ? ` · ${job.message}` : ''}</span>
                 <div className="ml-auto flex gap-1.5">
-                  <button onClick={() => void run('Analysing', () => reproduceApi.analyze(job.id))} disabled={!!busy || busyJob} className="btn-chip">{busy === 'Analysing' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />} Analyse</button>
+                  <button onClick={() => void run('Analysing', () => reproduceApi.analyze(job.id, vlmModel))} disabled={!!busy || busyJob} className="btn-chip">{busy === 'Analysing' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />} Analyse</button>
                   {busyJob ? (
                     <button onClick={() => void run('Cancelling', () => reproduceApi.cancel(job.id))} className="btn-chip text-red-300"><Square className="h-3.5 w-3.5" /> Cancel</button>
                   ) : (

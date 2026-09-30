@@ -39,7 +39,11 @@ export const reproduceApi = {
   get: (id: string) => request<ReproduceJob>(`/api/reproduce/${enc(id)}`),
   import: (path: string) => request<ReproduceJob>('/api/reproduce/import', { method: 'POST', body: JSON.stringify({ path }) }),
   remove: (id: string) => request<{ status: string }>(`/api/reproduce/${enc(id)}`, { method: 'DELETE' }),
-  analyze: (id: string) => request<ReproduceJob>(`/api/reproduce/${enc(id)}/analyze`, { method: 'POST' }),
+  analyze: (id: string, vlmModel = "") =>
+    request<ReproduceJob>(`/api/reproduce/${enc(id)}/analyze`, {
+      method: 'POST',
+      body: JSON.stringify({ vlm_model: vlmModel }),
+    }),
   updateSpec: (id: string, sections: Partial<ShotSpec>, locks?: Record<string, boolean>) =>
     request<ReproduceJob>(`/api/reproduce/${enc(id)}/spec`, { method: 'PUT', body: JSON.stringify({ sections, locks }) }),
   setPrompt: (id: string, prompt: string, target?: string, style?: PromptStyle | null) =>
