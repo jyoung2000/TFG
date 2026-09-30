@@ -10,7 +10,13 @@ param(
     [string]$Publish = "",
     # Optional electron-builder config override, e.g. electron-builder-wangp.yml
     # for the WanGP-identity build (own name/icons, installs side by side).
-    [string]$Config = ""
+    [string]$Config = "",
+    # Anything after `--` is passed straight to electron-builder, e.g.
+    # `-- -c.directories.output=release-wangp-2`. Rebuilding into a folder that
+    # still holds app.asar fails with EBUSY (F-065), so the output folder has to
+    # be movable from outside the builder config.
+    [Parameter(ValueFromRemainingArguments = $true)]
+    [string[]]$BuilderArgs = @()
 )
 
 $ErrorActionPreference = "Stop"
@@ -123,6 +129,7 @@ $pkgParams = @{}
 if ($Unpack)         { $pkgParams["Unpack"] = $true }
 if ($Publish -ne "") { $pkgParams["Publish"] = $Publish }
 if ($Config -ne "")  { $pkgParams["Config"] = $Config }
+if ($BuilderArgs.Count -gt 0) { $pkgParams["BuilderArgs"] = $BuilderArgs }
 
 & "$ScriptDir\create-installer.ps1" @pkgParams
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

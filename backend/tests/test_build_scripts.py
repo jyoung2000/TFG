@@ -110,3 +110,42 @@ def test_installer_never_bundles_downloaded_wangp_weights() -> None:
     assert "!ckpts/**" in patterns
     assert "!loras/**" in patterns, "downloaded LoRA weights would ship inside the installer"
 
+
+def _script(name: str) -> str:
+    return (Path(__file__).resolve().parents[2] / "scripts" / name).read_text(encoding="utf-8")
+
+
+def test_output_folder_is_movable_so_a_locked_build_does_not_block_shipping() -> None:
+    """F-065: rebuilding into `release-wangp` fails with EBUSY on app.asar.
+
+    The handle survives killing the app by exact name and every python process,
+    so the folder cannot always be cleared first. The build therefore has to be
+    movable: `wangp-release.ps1 -OutputDir` -> `local-build.ps1` -> `create-installer.ps1`
+    -> electron-builder, or the workaround is only a comment.
+
+    Each hop is asserted, because a break anywhere in the chain silently sends
+    the build back to the locked folder.
+    """
+    release = _script("wangp-release.ps1")
+    assert "[string]$OutputDir" in release, "wangp-release.ps1 takes no -OutputDir"
+    assert "-c.directories.output=$ReleaseDir" in release, "the override never reaches electron-builder"
+    # A bare `--` is handed to the script as a parameter name and fails with
+    # "the parameter name '' is ambiguous", so the arg must be passed directly.
+    assert "'--'," not in release and '"--"' not in release, "do not pass a -- separator to a PowerShell script"
+
+    local = _script("local-build.ps1")
+    assert "ValueFromRemainingArguments" in local, "local-build.ps1 cannot receive `--` args"
+    assert '$pkgParams["BuilderArgs"]' in local, "local-build.ps1 drops the builder args"
+
+    installer = _script("create-installer.ps1")
+    assert "[string[]]$BuilderArgs" in installer, "create-installer.ps1 takes no BuilderArgs"
+    # both the --dir and the installer invocation must carry them
+    assert installer.count("@BuilderArgs") >= 2, "BuilderArgs must reach every electron-builder call"
+
+
+def test_the_default_output_folder_is_unchanged_when_no_override_is_given() -> None:
+    """The override must be opt-in: a plain `pnpm wangp:ship` still builds into
+    release-wangp, so the documented workflow does not change."""
+    release = _script("wangp-release.ps1")
+    assert "Join-Path $ProjectDir 'release-wangp'" in release
+    assert "if ($OutputDir)" in release, "the override must be conditional"

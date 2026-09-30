@@ -26,7 +26,13 @@
 param(
     [ValidateSet('build', 'install', 'verify', 'ship')]
     [string]$Stage = 'ship',
-    [switch]$SkipPython
+    [switch]$SkipPython,
+    # electron-builder fails with EBUSY on `release-wangp\win-unpacked\resources
+    # \app.asar` when a handle from an earlier build is still open - F-065, and it
+    # survives killing the app and every python process, so the folder cannot
+    # always be cleared. Point the build at a fresh folder instead. `-Stage ship`
+    # and `-Stage verify` use the same folder, so pass it to all of them.
+    [string]$OutputDir = ''
 )
 
 $ErrorActionPreference = 'Stop'
@@ -41,7 +47,11 @@ $NormalDir  = Join-Path $env:LOCALAPPDATA 'Programs\LTX Desktop'
 $NormalExe  = Join-Path $NormalDir 'LTX Desktop.exe'
 $WanGPDir   = Join-Path $env:LOCALAPPDATA 'Programs\LTX Desktop WanGP'
 $WanGPExe   = Join-Path $WanGPDir 'LTX Desktop WanGP.exe'
-$ReleaseDir = Join-Path $ProjectDir 'release-wangp'
+$ReleaseDir = if ($OutputDir) {
+    if ([System.IO.Path]::IsPathRooted($OutputDir)) { $OutputDir } else { Join-Path $ProjectDir $OutputDir }
+} else {
+    Join-Path $ProjectDir 'release-wangp'
+}
 $LogDir     = Join-Path $env:LOCALAPPDATA 'LTXDesktop\logs'
 
 function Fail($msg, $code) { Write-Host "ABORT: $msg" -ForegroundColor Red; exit $code }
@@ -72,6 +82,11 @@ function Invoke-WangGPBuild {
     # anything left on the pipeline would become this function's return value.
     $buildArgs = @('-ExecutionPolicy', 'Bypass', '-File', 'scripts/local-build.ps1', '-Config', $ConfigFile)
     if ($SkipPython) { $buildArgs += '-SkipPython' }
+    # local-build.ps1 collects unbound arguments into -BuilderArgs, so the output
+    # folder can be moved without editing the builder config. No `--` separator:
+    # PowerShell hands a bare `--` to the script as a parameter name and fails
+    # with "the parameter name '' is ambiguous".
+    if ($OutputDir) { $buildArgs += "-c.directories.output=$ReleaseDir" }
     & powershell @buildArgs | Out-Host
     if ($LASTEXITCODE -ne 0) { Fail "local-build.ps1 exited $LASTEXITCODE" 5 }
 
