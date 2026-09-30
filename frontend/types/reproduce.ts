@@ -90,6 +90,9 @@ export interface ReproduceJob {
   picked_candidate_id: string
   why: Record<string, unknown>
   depth_path: string
+  /** The storyboard shot this job was sent to ('' until sent). */
+  storyboard_project_id?: string
+  storyboard_shot_id?: string
   job_id: string
   created_at: number
   updated_at: number

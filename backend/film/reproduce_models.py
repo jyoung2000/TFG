@@ -130,6 +130,9 @@ class ReproduceJob(BaseModel):
     #: Evidence per spec section: what was measured/detected and by which stage.
     why: dict[str, Any] = Field(default_factory=dict[str, Any])
     depth_path: str = ""
+    #: The storyboard shot this job was sent to ("" until sent).
+    storyboard_project_id: str = ""
+    storyboard_shot_id: str = ""
     job_id: str = ""
     created_at: int = Field(default_factory=now_ms)
     updated_at: int = Field(default_factory=now_ms)

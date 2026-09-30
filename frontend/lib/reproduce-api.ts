@@ -54,6 +54,9 @@ export const reproduceApi = {
   cancel: (id: string) => request<ReproduceJob>(`/api/reproduce/${enc(id)}/cancel`, { method: 'POST' }),
   pin: (id: string, candidateId: string) => request<ReproduceJob>(`/api/reproduce/${enc(id)}/pin/${enc(candidateId || 'source')}`, { method: 'POST' }),
   pick: (id: string, candidateId: string) => request<ReproduceJob>(`/api/reproduce/${enc(id)}/pick/${enc(candidateId)}`, { method: 'POST' }),
+  /** The job as a storyboard shot (capture, locked prompt, 3D composition, cast assets). */
+  storyboard: (id: string, projectId = '') =>
+    request<{ project_id: string; scene_id: string; shot_id: string }>(`/api/reproduce/${enc(id)}/storyboard`, { method: 'POST', body: JSON.stringify({ project_id: projectId }) }),
   fix: (id: string, candidateId: string, payload: FixPayload) =>
     request<ReproduceJob>(`/api/reproduce/${enc(id)}/candidates/${enc(candidateId)}/fix`, { method: 'POST', body: JSON.stringify(payload) }),
   compileAll: (spec: ShotSpec, targets: string[], styles: PromptStyle[]) =>

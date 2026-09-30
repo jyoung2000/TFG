@@ -140,6 +140,18 @@ def route_pick(job_id: str, candidate_id: str, handler: AppHandler = Depends(get
     return handler.reproduce.pick(job_id, candidate_id)
 
 
+class StoryboardRequest(BaseModel):
+    #: Film project to add the shot to; "" = the job's own project (created once).
+    project_id: str = ""
+
+
+@router.post("/{job_id}/storyboard")
+def route_storyboard(job_id: str, req: StoryboardRequest, handler: AppHandler = Depends(get_state_service)) -> dict[str, str]:
+    """The job as a storyboard shot: chosen image as capture, locked prompt,
+    3D composition from the job's layout, character assets with references."""
+    return handler.reproduce.send_to_storyboard(job_id, project_id=req.project_id)
+
+
 @router.post("/{job_id}/candidates/{candidate_id}/fix", response_model=ReproduceJob)
 def route_fix(job_id: str, candidate_id: str, req: FixRequest, handler: AppHandler = Depends(get_state_service)) -> ReproduceJob:
     adjustments = Adjustments(

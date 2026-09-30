@@ -61,6 +61,7 @@ from state.app_state_types import AppState
 from server_utils.atomic_file import replace_with_retry
 
 if TYPE_CHECKING:
+    from handlers.scene_handler import SceneHandler
     from handlers.video_analysis_handler import VideoAnalysisHandler
     from runtime_config.runtime_config import RuntimeConfig
 
@@ -114,6 +115,7 @@ class VideoReproduceHandler(StateHandlerBase):
         self._active: set[str] = set()
         self._cancelled: set[str] = set()
         self._current_shot: dict[str, str] = {}
+        self._scene: SceneHandler | None = None
 
     # ---- storage -----------------------------------------------------------------
 
@@ -259,15 +261,27 @@ class VideoReproduceHandler(StateHandlerBase):
 
     # ---- setup --------------------------------------------------------------------
 
+    def attach_scene(self, scene: SceneHandler) -> None:
+        """The 3D storyboard seeding (built after this handler in AppHandler)."""
+        self._scene = scene
+
     def _ensure_project(self, analysis: VideoAnalysis) -> FilmProject:
+        project: FilmProject | None = None
         if analysis.reconstructed_project_id:
             try:
                 project = self._film.store.load(analysis.reconstructed_project_id)
             except Exception:  # noqa: BLE001 - deleted since; rebuild
                 project = None
-            if project is not None and self._has_all_shots(project, analysis):
-                return project
-        return self._analysis.reconstruct(analysis.id)
+            if project is not None and not self._has_all_shots(project, analysis):
+                project = None
+        if project is None:
+            project = self._analysis.reconstruct(analysis.id)
+        # Every reproduced shot opens in the composer with a 3D layout +
+        # blockout seeded from its spec; a shot already composed is kept.
+        if self._scene is not None:
+            if self._scene.seed_missing(project.id, analysis):
+                project = self._film.store.load(project.id)
+        return project
 
     @staticmethod
     def _has_all_shots(project: FilmProject, analysis: VideoAnalysis) -> bool:
@@ -800,6 +814,11 @@ class VideoReproduceHandler(StateHandlerBase):
             raise HTTPError(404, "That candidate was not rendered")
         shot.picked_candidate_id = candidate_id
         self._save(job)
+        # The pick is the storyboard's take too.
+        try:
+            self._film.promote_version(job.project_id, shot.film_scene_id, shot.film_shot_id, candidate.version_number)
+        except HTTPError as exc:
+            logger.info("Could not promote the picked take on the storyboard: %s", exc.detail)
         if self._knowledge is not None:
             self._knowledge.record_candidate(
                 picked=True, model=candidate.model, provider="wangp" if self._config.wangp_enabled else "local",

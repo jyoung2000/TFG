@@ -4,6 +4,8 @@ import { Lightbox, type LightboxItem } from '../../components/Lightbox'
 import { LoraPicker } from '../../components/LoraPicker'
 import type { LoraUse } from '../../types/training'
 import { useProjects } from '../../contexts/ProjectContext'
+import { useFilm } from '../../contexts/FilmContext'
+import { trainingApi } from '../../lib/training-api'
 import { previewPrompt } from '../../lib/shotspec/formatters'
 import { logger } from '../../lib/logger'
 import { reproduceApi, reproduceMediaUrl } from '../../lib/reproduce-api'
@@ -23,7 +25,8 @@ const TARGET_LABEL: Record<string, string> = {
 }
 
 export function ImageReproduce() {
-  const { goHome, pendingAnalysis, clearPendingAnalysis, openQuickMode, setQuickPreset, setGenSpaceEditImageUrl, openProject, projects } = useProjects()
+  const { goHome, pendingAnalysis, clearPendingAnalysis, openQuickMode, setQuickPreset, setGenSpaceEditImageUrl, openProject, projects, setCurrentProjectId, openTrain } = useProjects()
+  const { refresh: refreshFilm } = useFilm()
   const [items, setItems] = useState<ReproduceJob[]>([])
   const [job, setJob] = useState<ReproduceJob | null>(null)
   const [busy, setBusy] = useState('')
@@ -141,6 +144,41 @@ export function ImageReproduce() {
     openQuickMode()
   }
 
+  // The job as a storyboard shot: the picked/best image as its capture, the
+  // prompt locked, the people as character assets, a 3D composition seeded
+  // from the analysed layout - then open it in the storyboard.
+  const sendToComposer = async () => {
+    if (!job) return
+    setBusy('Sending to the storyboard')
+    setError('')
+    try {
+      const link = await reproduceApi.storyboard(job.id)
+      setCurrentProjectId(link.project_id)
+      await refreshFilm()
+      openProject(link.project_id, 'storyboard')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy('')
+    }
+  }
+
+  // A training dataset from this job (reference + candidates), opened in Train.
+  const sendToTrain = async () => {
+    if (!job) return
+    setBusy('Creating a training dataset')
+    setError('')
+    try {
+      const dataset = await trainingApi.createDataset({ name: `${job.title || 'Reproduce'} (reproduce)`, preset: 'character', trigger: '' })
+      await trainingApi.importItems(dataset.id, { reproduce_id: job.id })
+      openTrain()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    } finally {
+      setBusy('')
+    }
+  }
+
   const sendToCreate = async (candidate?: ReproduceCandidate) => {
     if (!job) return
     const path = candidate ? `${job.id}/${candidate.path}` : ''
@@ -246,8 +284,8 @@ export function ImageReproduce() {
                     <button onClick={() => void copyPrompt()} className="btn-chip"><Copy className="h-3.5 w-3.5" /> Copy</button>
                     <button onClick={() => sendToQuick(best ?? undefined)} className="btn-chip"><Send className="h-3.5 w-3.5" /> Send to Quick video</button>
                     <button onClick={() => void sendToCreate(best ?? undefined)} className="btn-chip"><Send className="h-3.5 w-3.5" /> Send to Create</button>
-                    <button disabled className="btn-chip" title="Lands with the 3D storyboard"><Send className="h-3.5 w-3.5" /> Send to Composer</button>
-                    <button disabled className="btn-chip" title="Lands with the Train tab"><Send className="h-3.5 w-3.5" /> Send to Train</button>
+                    <button onClick={() => void sendToComposer()} disabled={!!busy || busyJob} className="btn-chip" title="A storyboard shot with this image, its prompt, cast assets and a 3D composition"><Send className="h-3.5 w-3.5" /> Send to Composer</button>
+                    <button onClick={() => void sendToTrain()} disabled={!!busy || busyJob} className="btn-chip" title="A training dataset from this job's reference and candidates"><Send className="h-3.5 w-3.5" /> Send to Train</button>
                   </div>
                   <div className="grid grid-cols-4 gap-2 text-[10px] text-zinc-500">
                     <label>Candidates / round<input type="number" min={1} max={12} value={budget.candidates_per_round} onChange={e => setBudget(b => ({ ...b, candidates_per_round: Number(e.target.value) }))} className="select-chip w-full" aria-label="Candidates per round" /></label>

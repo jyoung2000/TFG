@@ -921,6 +921,7 @@ class VideoAnalysisHandler(StateHandlerBase):
                 scene.shots.append(self._film_shot_from(analysis, analysed, shot_index + 1, asset_by_name))
             project.scenes.append(scene)
 
+        self._give_assets_reference_frames(analysis, project)
         self._film_store.save(project)
         analysis.reconstructed_project_id = project.id
         self._save(analysis)
@@ -935,6 +936,27 @@ class VideoAnalysisHandler(StateHandlerBase):
         if self._reproduce is None:
             raise HTTPError(503, "Video reproduce is not wired in this build")
         return self._reproduce.start(analysis_id, req)
+
+    def _give_assets_reference_frames(self, analysis: VideoAnalysis, project: FilmProject) -> None:
+        """Every character and location asset gets the first frame of the
+        first shot it appears in as its reference image, so the queue's
+        reference conditioning and continuity have something to go on."""
+        by_analysed = {s.id: s for s in analysis.shots}
+        directory = self._store.directory(analysis.id)
+        for scene in project.scenes:
+            for film_shot in scene.shots:
+                ref = film_shot.source_ref
+                analysed = by_analysed.get(ref.analysis_shot_id) if ref is not None else None
+                if analysed is None or not analysed.frames:
+                    continue
+                frame = directory / analysed.frames[0].path
+                if not frame.is_file():
+                    continue
+                wanted = [c.asset_id for c in film_shot.characters] + ([film_shot.location_id] if film_shot.location_id else []) + ([scene.location_id] if scene.location_id else [])
+                for asset_id in wanted:
+                    asset = project.asset(asset_id)
+                    if asset is not None and not asset.reference_images:
+                        asset.reference_images.append(self._film_store.save_reference_image(project.id, f"{asset.name}-{analysed.id}", frame.read_bytes()))
 
     def _film_shot_from(
         self, analysis: VideoAnalysis, analysed: AnalyzedShot, order: int, asset_by_name: dict[str, str]

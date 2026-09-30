@@ -543,6 +543,10 @@ class AppHandler:
             film=self.film,
             jobs=self.jobs,
         )
+        # Reproduce feeds the storyboard: video shots are seeded with a 3D
+        # composition, image jobs can be sent to the storyboard/composer.
+        self.video_reproduce.attach_scene(self.scene)
+        self.reproduce.attach_storyboard(self.film, self.scene)
 
         # History controls: cancel and re-run per job kind. Film-queued shots
         # cancel through the queue; everything else through the single-slot

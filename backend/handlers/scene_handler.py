@@ -123,10 +123,38 @@ class SceneHandler(StateHandlerBase):
                 return project
         return self._analysis.reconstruct(analysis.id, project_id=project_id, name=name)
 
+    def seed_missing(self, project_id: str, analysis: VideoAnalysis) -> int:
+        """Seed a composer scene + blockout into every shot of `project_id`
+        that came from `analysis` and has none yet; a shot the user already
+        composed is left alone. Returns how many shots were seeded."""
+        by_id = {s.id: s for s in analysis.shots}
+        seeded = 0
+        with self.lock:
+            project = self._film.store.load(project_id)
+            for _, film_shot in _walk(project):
+                ref = film_shot.source_ref
+                if film_shot.composition is not None or ref is None or ref.analysis_shot_id not in by_id:
+                    continue
+                analysed = by_id[ref.analysis_shot_id]
+                self._seed_shot(project, film_shot, analysed.spec, analysed.duration)
+                seeded += 1
+            if seeded:
+                self._film.store.save(project)
+        return seeded
+
+    def seed_shot(self, project: FilmProject, film_shot: FilmShot, spec: ShotSpec, duration: float) -> None:
+        """Seed one shot's composer scene + blockout from a spec (image reproduce)."""
+        self._seed_shot(project, film_shot, spec, duration)
+
     def _seed_shot(self, project: FilmProject, film_shot: FilmShot, spec: ShotSpec, duration: float) -> None:
         layout = spec.layout3d if spec.layout3d.objects else layout_from_spec(spec)
         move = camera_move_for(spec)
         composition = composer_scene_from_layout(layout, duration=max(0.5, duration), move=move, motion=spec.motion, framing=film_shot.framing)
+        # Figures stand for the shot's cast: link them in order, so the
+        # composer shows (and continuity checks) the right character.
+        cast = [c.asset_id for c in film_shot.characters]
+        for figure, asset_id in zip((o for o in composition.objects if o.type == "figure"), cast):
+            figure.asset_id = asset_id
         film_shot.composition = composition
         film_shot.framing = composition.framing
         film_shot.camera_move = move

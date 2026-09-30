@@ -148,6 +148,9 @@ class ReproduceHandler(StateHandlerBase):
         self._cancelled: set[str] = set()
         self._running: set[str] = set()
         self._doc_lock = threading.RLock()
+        # The storyboard + 3D composer (built after this handler in AppHandler).
+        self._film: Any = None
+        self._scene: Any = None
 
     # ---- storage --------------------------------------------------------------
 
@@ -960,6 +963,95 @@ class ReproduceHandler(StateHandlerBase):
         with Image.open(result.image_paths[0]) as painted:
             merged = image_ops.composite_with_mask(base, painted.convert("RGB").resize(base.size), mask)
         return merged, f"inpainted with {job.image_model}"
+
+    # ---- storyboard / composer / assets ------------------------------------------------
+
+    #: Whole-person labels; detector parts ("human face", "jacket") are not cast.
+    _PERSON_LABELS = frozenset({"person", "woman", "man", "girl", "boy", "child", "lady", "gentleman", "people"})
+
+    def attach_storyboard(self, film: Any, scene: Any) -> None:
+        self._film = film
+        self._scene = scene
+
+    def send_to_storyboard(self, job_id: str, *, project_id: str = "") -> dict[str, str]:
+        """The job as a storyboard shot: the picked (else best, else source)
+        image as its capture, the job's prompt locked on it, character assets
+        (with a reference crop) for the people in it, and a composer scene +
+        blockout seeded from the job's 3D layout. Sending again updates the
+        same shot."""
+        from film.film_models import FilmProject, FilmScene, FilmShot, ShotCharacter, new_id
+
+        if self._film is None or self._scene is None:
+            raise HTTPError(503, "The storyboard is not wired in this build")
+        job = self.get(job_id)
+        if job.is_busy:
+            raise HTTPError(409, "The job is busy")
+        store = self._film.store
+        chosen = job.candidate(job.picked_candidate_id) or job.best()
+        image_path = self._dir(job.id) / (chosen.path if chosen else job.source_path)
+        with self.lock:
+            wanted = project_id.strip() or job.storyboard_project_id
+            project = store.load(wanted) if wanted and store.exists(wanted) else FilmProject(id=wanted or new_id("film"), name=f"Reproduce: {job.title}")
+            found = project.find_shot(job.storyboard_shot_id) if job.storyboard_shot_id else None
+            if found is None:
+                scene = next((s for s in project.scenes if s.title == "Reproduced images"), None)
+                if scene is None:
+                    scene = FilmScene(id=new_id("scene"), order=len(project.scenes) + 1, title="Reproduced images")
+                    project.scenes.append(scene)
+                shot = FilmShot(id=new_id("shot"), order=len(scene.shots) + 1, title=job.title[:60] or "Reproduced image", duration_seconds=4.0)
+                scene.shots.append(shot)
+            else:
+                scene, shot = found
+            shot.description = job.spec.narrative.what_happens
+            shot.visual_prompt, shot.negative_prompt, shot.prompt_locked = job.prompt, job.negative_prompt, True
+            captures = store.captures_dir(project.id)
+            captures.mkdir(parents=True, exist_ok=True)
+            name = f"{shot.id}-reproduce{image_path.suffix.lower() or '.png'}"
+            shutil.copyfile(image_path, captures / name)
+            shot.capture_path = f"captures/{name}"
+            shot.generation.use_capture_as_reference = True
+            if not shot.characters:
+                for asset in self._cast_from_subjects(job, project.id):
+                    project.assets.append(asset)
+                    shot.characters.append(ShotCharacter(asset_id=asset.id))
+            self._scene.seed_shot(project, shot, job.spec, shot.duration_seconds)
+            store.save(project)
+        job.storyboard_project_id, job.storyboard_shot_id = project.id, shot.id
+        self._save(job)
+        return {"project_id": project.id, "scene_id": scene.id, "shot_id": shot.id}
+
+    def _cast_from_subjects(self, job: ReproduceJob, project_id: str) -> list[Any]:
+        """A character asset per person in the image, its reference image the
+        person's crop (the whole frame when there is no box)."""
+        import io
+
+        from film.film_models import FilmAsset, new_id
+
+        with Image.open(self._dir(job.id) / job.source_path) as source:
+            reference = source.convert("RGB")
+        assets: list[Any] = []
+        seen: set[str] = set()
+        for subject in job.spec.subjects:
+            label = subject.label.strip().lower()
+            if label not in self._PERSON_LABELS or label in seen:
+                continue
+            seen.add(label)
+            crop = reference
+            if len(subject.bbox) == 4:
+                x, y, w, h = subject.bbox
+                width, height = reference.size
+                box = (int(x * width), int(y * height), int((x + w) * width), int((y + h) * height))
+                if box[2] - box[0] > 8 and box[3] - box[1] > 8:
+                    crop = reference.crop(box)
+            buffer = io.BytesIO()
+            crop.save(buffer, format="PNG")
+            details = ", ".join(subject.attributes)[:300]
+            asset = FilmAsset(id=new_id("asset"), kind="character", name=subject.label.title(), description=details, appearance=details)
+            asset.reference_images.append(self._film.store.save_reference_image(project_id, f"{asset.name}-{job.id}", buffer.getvalue()))
+            assets.append(asset)
+            if len(assets) >= 4:
+                break
+        return assets
 
     # ---- legacy compatibility ---------------------------------------------------------
 
