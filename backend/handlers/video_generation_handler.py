@@ -251,6 +251,9 @@ class VideoGenerationHandler(StateHandlerBase):
             return light
         return default
 
+    def guided_model_available(self) -> bool:
+        return self._config.wangp_enabled and self._wangp_bridge.weights_installed(GUIDED_VIDEO_MODEL) is True
+
     def _render_model_type(self, req: GenerateVideoRequest) -> str:
         if self._config.wangp_enabled:
             return self._wangp_video_model(req)

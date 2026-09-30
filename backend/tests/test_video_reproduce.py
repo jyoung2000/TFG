@@ -424,3 +424,23 @@ class TestAStalledQueueDoesNotHangTheLoop:
         job = client.get(f"/api/video-reproduce/{analysed['id']}").json()
         candidate = job["shots"][0]["candidates"][0]
         assert candidate["status"] == "failed" and "queue" in candidate["error"].lower(), candidate
+
+
+class TestWithVaceTheLoopStartsAtTheGuidedRung:
+    """MEASURED (r16, the reference clip's 10 s shot): start-frame rounds
+    plateaued at 0.813 and a VACE start+end round scored 0.791 (motion 0.339 -
+    nothing guides the middle), while VACE with the reference clip as a guide
+    plus first/last frames scored 0.971. With VACE installed the loop starts on
+    that rung, at full strength."""
+
+    def test_the_first_round_is_the_guided_one(self, client, video, fake_services, test_state, create_fake_model_files):
+        analysed = _analysed(client, video, test_state, create_fake_model_files)
+        test_state.config.wangp_enabled = True
+        fake_services.wangp_bridge.available = True
+        fake_services.wangp_bridge.definitions.append({"id": "vace_1.3B", "name": "Vace 1.3B", "installed": True})
+        shot_id = analysed["shots"][0]["id"]
+        client.post(f"/api/video-reproduce/{analysed['id']}/start", json={"candidates": 1, "rounds": 1, "shot_ids": [shot_id]})
+        job = client.get(f"/api/video-reproduce/{analysed['id']}").json()
+        first = job["shots"][0]["candidates"][0]
+        assert first["strategy"] == "reference_video", first
+        assert first["control_strength"] == 1.0

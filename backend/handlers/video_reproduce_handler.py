@@ -377,6 +377,11 @@ class VideoReproduceHandler(StateHandlerBase):
         """Rungs available on this backend. First + last frames and the
         reference clip as a control video go through WanGP only."""
         if self._config.wangp_enabled:
+            if self._film_generation.guided_video_available():
+                # VACE: the reference clip as a guide + first/last frames scored
+                # 0.971 in ~1.5 min per 3 s (MEASURED); the weaker rungs only
+                # cost time (start frame plateaued at 0.813, start+end 0.791).
+                return ("reference_video",)
             return ("start_frame", "start_end_frames", "reference_video")
         return ("start_frame",)
 
@@ -409,7 +414,8 @@ class VideoReproduceHandler(StateHandlerBase):
         ladder = self._ladder()
         rung = 0
         flat = 0
-        strength = _CONTROL_START
+        # Straight to the guided rung (VACE) starts at full pull toward the clip.
+        strength = 1.0 if ladder == ("reference_video",) else _CONTROL_START
         best = 0.0
         round_index = 0
         while True:

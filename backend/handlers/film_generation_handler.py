@@ -620,6 +620,11 @@ class FilmGenerationHandler(StateHandlerBase):
             return model, resolution
         return profile[0], profile[1]
 
+    def guided_video_available(self) -> bool:
+        """Whether a fast guided video model (VACE) can render reproduce's
+        frames + reference-clip rung."""
+        return self._video_generation.guided_model_available()
+
     def is_pending(self, shot_id: str) -> bool:
         """Whether this shot is queued or rendering right now."""
         with self.lock:

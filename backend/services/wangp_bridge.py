@@ -257,6 +257,9 @@ class WanGPBridge:
         chosen = (model_type or "").strip() or self._video_model_type
         resolution = self._map_video_resolution(resolution_label, aspect_ratio)
         merged_prompt = prompt + self._camera_motion_prompts.get(camera_motion, "")
+        if chosen.startswith("vace"):
+            # A 16 fps model: at 24 fps a 10 s shot is 241 frames, at 16 it is 161.
+            fps = 16
         video_length = self.compute_num_frames(duration_seconds, fps)
 
         settings: dict[str, object] = {

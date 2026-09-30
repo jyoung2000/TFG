@@ -138,3 +138,19 @@ class TestVaceTakesTheFramesAndTheGuide:
         guide.write_bytes(b"\x00\x00\x00\x18ftypmp42")
         client.post("/api/generate", json={**_T2V, "model": "pro", "controlVideoPath": str(guide), "controlStrength": 0.8})
         assert _last_params(fake_services)["model_type"] == "ltx2_22B_distilled"
+
+
+class TestVaceRendersAtItsNativeFps:
+    """VACE 1.3B is a 16 fps model: at the app's 24 fps a 10 s shot was 241
+    frames (MEASURED: one round took 16 min on the reference clip); at 16 fps
+    it is 161."""
+
+    def test_vace_renders_at_16_fps(self, client, test_state, fake_services, tmp_path):
+        _enable(test_state, fake_services)
+        fake_services.wangp_bridge.definitions.append({"id": "vace_1.3B", "name": "Vace 1.3B", "installed": True})
+        guide = tmp_path / "guide.mp4"
+        guide.write_bytes(b"\x00\x00\x00\x18ftypmp42")
+        client.post("/api/generate", json={**_T2V, "duration": "10", "controlVideoPath": str(guide)})
+        params = _last_params(fake_services)
+        assert params["model_type"] == "vace_1.3B"
+        assert params["force_fps"] == 16 and params["video_length"] == 161
