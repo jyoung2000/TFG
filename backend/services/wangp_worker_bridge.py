@@ -479,6 +479,11 @@ class WorkerWanGPBridge(RemoteWanGPBridge):
         self._base_url = endpoint.base_url
         self._token = endpoint.token
 
+    def _transport_alive(self) -> bool:
+        # A worker that exited will never answer: fail now, not after the
+        # status-poll patience window.
+        return self._launcher.endpoint() is not None
+
     def _run_manifest(
         self,
         *,

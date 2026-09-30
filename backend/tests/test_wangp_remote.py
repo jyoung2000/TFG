@@ -199,3 +199,52 @@ class TestRemoteBridge:
         manifest = [{"params": {"image_start": "/a.png", "image_refs": ["/b.png", "/c.png"], "activated_loras": ["/l.safetensors"], "prompt": "x"}}]
         assert referenced_files(manifest) == ["/a.png", "/b.png", "/c.png", "/l.safetensors"]
         assert base64.b64decode(base64.b64encode(b"x")) == b"x"
+
+
+class TestSlowStatusPollsDoNotFailARender:
+    """A status poll that times out is not a failed render.
+
+    MEASURED in the installed app (session log 23:44:35): under memory
+    pressure the worker's GET /api/wangp/jobs/<id> took longer than the 15 s
+    poll timeout once, `_run_manifest` raised "timed out on /api/wangp/jobs/…",
+    the film queue marked the version failed - and WanGP went on to finish
+    that very video at 23:49:26. The poll must ride out transient transport
+    failures and only give up after a patience window.
+    """
+
+    def test_a_few_timed_out_polls_still_complete(self, client, fake_services, tmp_path: Path):
+        from services.http_client import HttpTimeoutError
+
+        fake_services.wangp_bridge.available = True
+        bridge, http = _bridge(client, tmp_path)
+        real_get = http.get
+        failures = {"left": 3}
+
+        def flaky_get(url, headers=None, timeout=30):
+            if "/api/wangp/jobs/" in url and failures["left"] > 0:
+                failures["left"] -= 1
+                raise HttpTimeoutError("read timed out")
+            return real_get(url, headers=headers, timeout=timeout)
+
+        http.get = flaky_get  # type: ignore[method-assign]
+        outputs = bridge.generate_images(prompt="p", width=512, height=512, num_steps=8, num_images=1, seed=3, on_progress=lambda *a: None, is_cancelled=lambda: False)
+        assert failures["left"] == 0 and len(outputs) == 1
+
+    def test_polls_that_never_recover_still_fail(self, client, fake_services, tmp_path: Path):
+        import pytest
+
+        from services.http_client import HttpTimeoutError
+
+        fake_services.wangp_bridge.available = True
+        bridge, http = _bridge(client, tmp_path)
+        bridge._status_patience_s = 0.05  # noqa: SLF001 - keep the test fast
+        real_get = http.get
+
+        def dead_get(url, headers=None, timeout=30):
+            if "/api/wangp/jobs/" in url:
+                raise HttpTimeoutError("read timed out")
+            return real_get(url, headers=headers, timeout=timeout)
+
+        http.get = dead_get  # type: ignore[method-assign]
+        with pytest.raises(Exception, match="timed out"):
+            bridge.generate_images(prompt="p", width=512, height=512, num_steps=8, num_images=1, seed=3, on_progress=lambda *a: None, is_cancelled=lambda: False)

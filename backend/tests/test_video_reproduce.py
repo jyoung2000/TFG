@@ -368,3 +368,34 @@ class TestTheVideoLoopKeepsGoingUntilTheTarget:
         assert request.rounds is None and request.target_score == 0.95
         assert VideoRecreationRequest(rounds=40).rounds == 40
         assert VideoRecreationRequest(target_score=0).target_score == 0.95
+
+
+class TestAStalledQueueDoesNotHangTheLoop:
+    """MEASURED in the installed app: the film queue's thread died inside
+    `_finish_version` (a PermissionError saving project.json), the version
+    stayed "generating" forever and `_wait` - which had no way out - kept the
+    video reproduce job "running" with nothing rendering. A take the queue no
+    longer holds must be recorded as failed so the loop can carry on."""
+
+    def test_a_take_the_queue_dropped_is_failed_not_waited_on_forever(self, client, video, fake_services, test_state, create_fake_model_files):
+        import threading
+
+        analysed = _analysed(client, video, test_state, create_fake_model_files)
+        queue = test_state.film_generation
+
+        def dies(*args, **kwargs):  # noqa: ANN002, ANN003 - stands in for the crash
+            raise RuntimeError("queue thread died while finishing the version")
+
+        queue._finish_version = dies  # type: ignore[method-assign]  # noqa: SLF001
+        done = threading.Event()
+        result: dict = {}
+
+        def run():
+            result["response"] = client.post(f"/api/video-reproduce/{analysed['id']}/start", json={"candidates": 1, "rounds": 1, "shot_ids": [analysed["shots"][0]["id"]]})
+            done.set()
+
+        threading.Thread(target=run, daemon=True).start()
+        assert done.wait(60), "the reproduce loop hung on a take the queue had dropped"
+        job = client.get(f"/api/video-reproduce/{analysed['id']}").json()
+        candidate = job["shots"][0]["candidates"][0]
+        assert candidate["status"] == "failed" and "queue" in candidate["error"].lower(), candidate

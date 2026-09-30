@@ -70,6 +70,7 @@ from runtime_config.runtime_config import RuntimeConfig
 from services.interfaces import GpuInfo, TaskRunner, VideoProcessor
 from services.wangp_bridge import WanGPBridge
 from state.app_state_types import AppState
+from logging_policy import log_background_exception
 
 logger = logging.getLogger(__name__)
 
@@ -619,6 +620,13 @@ class FilmGenerationHandler(StateHandlerBase):
             return model, resolution
         return profile[0], profile[1]
 
+    def is_pending(self, shot_id: str) -> bool:
+        """Whether this shot is queued or rendering right now."""
+        with self.lock:
+            return any(job.shot_id == shot_id for job in self._queue) or (
+                self._active is not None and self._active.shot_id == shot_id
+            )
+
     # ---- Worker ----------------------------------------------------------
 
     def _ensure_worker(self) -> None:
@@ -646,7 +654,14 @@ class FilmGenerationHandler(StateHandlerBase):
                         return
                     job = self._queue.popleft()
                     self._active = job
-                self._run_job(job)
+                try:
+                    self._run_job(job)
+                except Exception as exc:  # noqa: BLE001 - one bad take must not stop the queue
+                    log_background_exception(f"film-generation-queue:{job.shot_id}", exc)
+                    try:
+                        self._finish_version(job, status="failed", error=f"Render queue error: {exc}")
+                    except Exception as record_exc:  # noqa: BLE001 - recording the failure is best effort
+                        log_background_exception(f"film-generation-queue:{job.shot_id}:record", record_exc)
         finally:
             with self.lock:
                 if not self._queue or self._paused:

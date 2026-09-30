@@ -20,6 +20,7 @@ import uuid
 from pathlib import Path
 
 from film.shot_library_models import LibraryIndex
+from server_utils.atomic_file import replace_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +86,7 @@ class ShotLibraryStore:
         temporary = self._index_file.with_suffix(".json.tmp")
         try:
             temporary.write_text(index.model_dump_json(indent=2), encoding="utf-8")
-            temporary.replace(self._index_file)
+            replace_with_retry(temporary, self._index_file)
         except OSError as exc:
             raise ShotLibraryError(f"Could not write the shot library: {exc}") from exc
 

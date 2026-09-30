@@ -50,6 +50,7 @@ class RemoteWanGPBridge(WanGPBridge):
         image_model_type: str,
         camera_motion_prompts: dict[str, str],
         poll_seconds: float = _POLL_SECONDS,
+        status_patience_s: float = 900.0,
     ) -> None:
         super().__init__(
             enabled=True,
@@ -66,6 +67,7 @@ class RemoteWanGPBridge(WanGPBridge):
         self._base_url = base_url.rstrip("/")
         self._token = token
         self._poll_seconds = poll_seconds
+        self._status_patience_s = status_patience_s
 
     # ---- contract ---------------------------------------------------------------------
 
@@ -111,6 +113,7 @@ class RemoteWanGPBridge(WanGPBridge):
             raise RemoteWanGPError("The remote WanGP did not return a job id")
         cancel_requested = False
         last_phase = ""
+        failing_since: float | None = None
         while True:
             if is_cancelled() and not cancel_requested:
                 cancel_requested = True
@@ -118,7 +121,21 @@ class RemoteWanGPBridge(WanGPBridge):
                     self._post_json(f"/api/wangp/jobs/{job_id}/cancel", {}, timeout=10)
                 except RemoteWanGPError as exc:
                     logger.info("Remote cancel failed: %s", exc)
-            status = self._get_json(f"/api/wangp/jobs/{job_id}", timeout=15)
+            try:
+                status = self._get_json(f"/api/wangp/jobs/{job_id}", timeout=15)
+            except RemoteWanGPError as exc:
+                # A slow or dropped poll is not a failed render: the job keeps
+                # running on the other side (MEASURED: a poll timed out at
+                # 23:44:35 and WanGP finished that video at 23:49:26). Only a
+                # silence longer than the patience window gives up.
+                now = time.monotonic()
+                failing_since = failing_since if failing_since is not None else now
+                if now - failing_since >= self._status_patience_s or not self._transport_alive():
+                    raise
+                logger.warning("WanGP status poll failed (%s); retrying", exc)
+                time.sleep(max(self._poll_seconds, 1.0 if self._poll_seconds else 0.0))
+                continue
+            failing_since = None
             phase = str(status.get("phase", "") or "")
             progress = status.get("progress")
             current_step, total_steps = status.get("current_step"), status.get("total_steps")
@@ -150,6 +167,10 @@ class RemoteWanGPBridge(WanGPBridge):
         return local
 
     # ---- transport --------------------------------------------------------------------
+
+    def _transport_alive(self) -> bool:
+        """Whether the far side can still answer; a remote host is assumed to."""
+        return True
 
     def _headers(self) -> dict[str, str]:
         headers = {"Content-Type": "application/json"}

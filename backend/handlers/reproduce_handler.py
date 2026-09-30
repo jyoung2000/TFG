@@ -51,6 +51,7 @@ from services.similarity.metrics import luma_array
 from services.wangp_bridge import IMG2IMG_MIN_STEPS
 from services.vision.deterministic import measure_path
 from state.app_state_types import AppState
+from server_utils.atomic_file import replace_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -164,7 +165,7 @@ class ReproduceHandler(StateHandlerBase):
         with self._doc_lock:
             temporary = folder / "analysis.json.tmp"
             temporary.write_text(job.model_dump_json(indent=1), encoding="utf-8")
-            temporary.replace(folder / "analysis.json")
+            replace_with_retry(temporary, folder / "analysis.json")
         return job
 
     def get(self, job_id: str) -> ReproduceJob:

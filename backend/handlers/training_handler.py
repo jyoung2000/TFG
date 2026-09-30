@@ -48,6 +48,7 @@ from services.trainer.catalog import MACHINE_VRAM_MB, TRAINERS
 from services.trainer.trainer import LoraTrainer, TrainerUnavailable, TrainingProgress, TrainingRequest
 from services.vram.vram_manager import VramError, VramManager
 from state.app_state_types import AppState
+from server_utils.atomic_file import replace_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -136,7 +137,7 @@ class TrainingHandler(StateHandlerBase):
             folder.mkdir(parents=True, exist_ok=True)
             tmp = folder / "run.json.tmp"
             tmp.write_text(run.model_dump_json(indent=2), encoding="utf-8")
-            tmp.replace(folder / "run.json")
+            replace_with_retry(tmp, folder / "run.json")
         return run
 
     def _registry_path(self) -> Path:

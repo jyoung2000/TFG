@@ -23,6 +23,7 @@ from server_utils.path_policy import PathPolicyError, require_absolute_file
 from services.similarity.composite import CompositeScorer, ImageFeatures
 from services.similarity.metrics import luma_array
 from services.vision.deterministic import measure_image
+from server_utils.atomic_file import replace_with_retry
 
 SUPPORTED = {".png": "PNG", ".jpg": "JPEG", ".jpeg": "JPEG", ".webp": "WEBP"}
 MAX_BYTES = 20 * 1024 * 1024
@@ -199,7 +200,7 @@ class ImageRecreation:
         folder.mkdir(parents=True, exist_ok=True)
         temporary = folder / "analysis.json.tmp"
         temporary.write_text(job.model_dump_json(indent=2), encoding="utf-8")
-        temporary.replace(folder / "analysis.json")
+        replace_with_retry(temporary, folder / "analysis.json")
         return job
 
     def get(self, id: str) -> ImageAnalysis:

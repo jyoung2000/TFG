@@ -58,6 +58,7 @@ from services.similarity.metrics import luma_array
 from services.stitcher.video_stitcher import StitchError, VideoStitcher
 from services.vision.deterministic import measure_path
 from state.app_state_types import AppState
+from server_utils.atomic_file import replace_with_retry
 
 if TYPE_CHECKING:
     from handlers.video_analysis_handler import VideoAnalysisHandler
@@ -140,7 +141,7 @@ class VideoReproduceHandler(StateHandlerBase):
         target.parent.mkdir(parents=True, exist_ok=True)
         tmp = target.with_suffix(".json.tmp")
         tmp.write_text(job.model_dump_json(indent=2), encoding="utf-8")
-        tmp.replace(target)
+        replace_with_retry(tmp, target)
         return job
 
     def get(self, analysis_id: str) -> VideoReproduceJob:
@@ -614,6 +615,7 @@ class VideoReproduceHandler(StateHandlerBase):
         return candidate
 
     def _wait(self, job: VideoReproduceJob, shot: ReproduceShot, number: int) -> ShotVersion:
+        orphaned_polls = 0
         while True:
             project = self._film.store.load(job.project_id)
             found = project.find_shot(shot.film_shot_id)
@@ -622,6 +624,12 @@ class VideoReproduceHandler(StateHandlerBase):
                 return ShotVersion(number=number, kind=job.kind, status="failed", error="Version disappeared")
             if version.status in ("complete", "failed", "cancelled"):
                 return version
+            # The queue no longer holds this take but never finished it (its
+            # thread died): waiting would be forever. A few polls of grace
+            # cover the hand-off between queueing and the worker picking it up.
+            orphaned_polls = 0 if self._film_generation.is_pending(shot.film_shot_id) else orphaned_polls + 1
+            if orphaned_polls >= 8:
+                return ShotVersion(number=number, kind=job.kind, status="failed", error="The render queue stopped without finishing this take")
             if self._is_cancelled(job.analysis_id):
                 try:
                     self._film_generation.cancel_job(shot.film_shot_id)

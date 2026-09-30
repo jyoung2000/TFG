@@ -24,6 +24,7 @@ from typing import cast
 
 from film.film_models import FILM_SCHEMA_VERSION, FilmProject
 from server_utils.path_policy import PathPolicyError, resolve_within
+from server_utils.atomic_file import replace_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -133,7 +134,7 @@ class FilmStore:
         path = self._project_file(project.id)
         tmp = path.with_suffix(".json.tmp")
         tmp.write_text(project.model_dump_json(indent=2), encoding="utf-8")
-        tmp.replace(path)
+        replace_with_retry(tmp, path)
 
     def resolve_media_path(self, project_id: str, relative: str) -> Path:
         """Resolve a project-relative media path, refusing traversal outside it

@@ -38,6 +38,7 @@ from film import timeline_ops as ops
 from handlers.base import StateHandlerBase
 from handlers.film_handler import FilmHandler
 from state.app_state_types import AppState
+from server_utils.atomic_file import replace_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +86,7 @@ class TimelineHandler(StateHandlerBase):
         temporary = path.with_suffix(".json.tmp")
         try:
             temporary.write_text(history.model_dump_json(indent=2), encoding="utf-8")
-            temporary.replace(path)
+            replace_with_retry(temporary, path)
         except OSError as exc:
             # Losing the record is bad; losing the edit would be worse. The
             # edit is already saved by the time this runs.
