@@ -64,7 +64,8 @@ export function AnalyzeVideo() {
     const [recreating, setRecreating] = useState(false)
     const [reproduce, setReproduce] = useState<VideoReproduceJob | null>(null)
     const [recreationCandidates, setRecreationCandidates] = useState(2)
-    const [recreationRounds] = useState(1)
+    // No round cap: each shot keeps rendering until it reaches the target.
+    const [recreationRounds] = useState<number | null>(null)
     useEffect(() => {
       setReproduce(null)
       if (!current) return
@@ -196,7 +197,7 @@ export function AnalyzeVideo() {
       setRecreating(true)
       setError('')
       try {
-        await videoReproduceApi.start(current.id, { candidates: recreationCandidates, rounds: recreationRounds, shot_ids: [] })
+        await videoReproduceApi.start(current.id, { candidates: recreationCandidates, rounds: recreationRounds, target_score: 0.95, shot_ids: [] })
         setReproduce(await videoReproduceApi.get(current.id))
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e))

@@ -297,6 +297,12 @@ class GenerateShotRequest(BaseModel):
     capture_path: str = ""
     #: Pin the seed for this version; None = the shot's generation setting.
     seed: int | None = None
+    #: Project-relative last frame: renders start+end conditioned ("" = none).
+    end_capture_path: str = ""
+    #: Project-relative clip used as a raw control video ("" = none).
+    control_video_path: str = ""
+    #: Control video strength (LTX-2: higher = closer to the control video).
+    control_strength: float | None = None
 
 
 class BatchGenerateRequest(BaseModel):

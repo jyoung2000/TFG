@@ -667,3 +667,28 @@ class TestWorkerStepProgress:
             assert (payload["current_step"], payload["total_steps"]) == (3, 8)
         finally:
             bridge.release.set()
+
+
+class TestStatusNeverWaitsForAWorkerStart:
+    """B1: the installed app "starts, then stops answering".
+
+    `SubprocessWorkerLauncher.ensure_started` holds the launcher lock for the
+    whole worker start - WanGP's import alone is 26-56 s on the RTX 4070 - and
+    `endpoint()` took the same lock, so `get_status()` (and with it `/health`)
+    blocked until the import finished. MEASURED in the installed app's session
+    log: "Server running" at 21:05:57.768, first health answer at 21:06:23.631,
+    the instant the worker announced "WanGP import finished". The same stall
+    recurs whenever a crashed worker is restarted.
+    """
+
+    def test_status_answers_while_a_start_holds_the_lock(self, tmp_path: Path):
+        import threading
+
+        root = _checkout(tmp_path)
+        bridge, launcher = _bridge(tmp_path, root)
+        answered = threading.Event()
+        with launcher._lock:  # noqa: SLF001 - stands in for a slow ensure_started()
+            worker = threading.Thread(target=lambda: (bridge.get_status(), answered.set()), daemon=True)
+            worker.start()
+            assert answered.wait(2.0), "get_status() waited for the worker start to finish"
+        assert launcher.endpoint() is None

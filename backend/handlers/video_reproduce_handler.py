@@ -1,10 +1,13 @@
 """Video Reproduce v2: one film-queue job per shot, scored against the source.
 
 The analysed video is reconstructed into an ordinary film project (once),
-then every selected shot is rendered `candidates × rounds` times through
-`FilmGenerationHandler.queue_shot` — never a parallel engine — as
-image-to-video from the shot's first extracted frame, with the duration
-snapped to what the model allows. Each candidate is scored on sampled frames
+then every selected shot is rendered round after round through
+`FilmGenerationHandler.queue_shot` — never a parallel engine — until its best
+candidate reaches the target score, climbing a ladder when it plateaus:
+image-to-video from the shot's first frame, then first + last frames, then
+the shot's own clip as an LTX-2 raw control video whose strength rises toward
+1.0 (the rung that converges on the reference). The duration is snapped to
+what the model allows. Each candidate is scored on sampled frames
 (phase-4 composite) plus a flow-magnitude match, the best per shot is chosen
 (a person can pick another), and the picks are stitched in shot order.
 
@@ -66,6 +69,15 @@ _DOC = "reproduce.json"
 _FOLDER = "reproduce"
 _FRAME_ROLES = ("start", "middle", "end")
 _POLL_SECONDS = 0.25
+#: A round must beat the shot's best by this much to count as progress.
+_PLATEAU = 0.01
+#: Flat rounds on one rung before climbing to the next.
+_PLATEAU_ROUNDS = 2
+_CONTROL_START = 0.5
+_CONTROL_MIN_STEP = 0.05
+_CONTROL_MAX_STEP = 0.15
+#: Flat rounds at full control strength before the shot admits it.
+_CONTROL_PATIENCE = 3
 
 
 class VideoReproduceHandler(StateHandlerBase):
@@ -275,6 +287,7 @@ class VideoReproduceHandler(StateHandlerBase):
             fps=fps,
             candidates_per_shot=req.candidates,
             rounds=req.rounds,
+            target_score=req.target_score,
             seed=req.seed,
             status="running",
             message="Preparing shots",
@@ -296,6 +309,7 @@ class VideoReproduceHandler(StateHandlerBase):
                     end=analysed.end,
                     duration_seconds=self._snap(analysed.duration, model, resolution, fps),
                     start_frame=self._start_frame(analysed),
+                    end_frame=self._end_frame(analysed),
                     prompt=prompt,
                     negative_prompt=negative,
                     prompt_source=source,
@@ -325,6 +339,13 @@ class VideoReproduceHandler(StateHandlerBase):
         return shot.frames[0].path if shot.frames else ""
 
     @staticmethod
+    def _end_frame(shot: AnalyzedShot) -> str:
+        for frame in shot.frames:
+            if frame.role == "end" and frame.path:
+                return frame.path
+        return ""
+
+    @staticmethod
     def _prompt_for(shot: AnalyzedShot, target: str) -> tuple[str, str, Any]:
         if shot.prompts.edited and shot.prompts.video.strip():
             return shot.prompts.video.strip(), shot.prompts.negative, "user"
@@ -337,36 +358,99 @@ class VideoReproduceHandler(StateHandlerBase):
 
     # ---- the loop ------------------------------------------------------------------
 
+    def _ladder(self) -> tuple[str, ...]:
+        """Rungs available on this backend. First + last frames and the
+        reference clip as a control video go through WanGP only."""
+        if self._config.wangp_enabled:
+            return ("start_frame", "start_end_frames", "reference_video")
+        return ("start_frame",)
+
     def _run(self, analysis_id: str) -> None:
         try:
             job = self._load(analysis_id)
             if job is None:
                 return
-            total = len(job.shots) * job.candidates_per_shot * job.rounds
-            done = 0
-            for round_index in range(1, job.rounds + 1):
-                for shot in job.shots:
-                    for n in range(job.candidates_per_shot):
-                        if self._is_cancelled(analysis_id):
-                            self._finish(job, "cancelled", "Cancelled")
-                            return
-                        job.message = f"Shot {shot.index + 1}: candidate {n + 1} of {job.candidates_per_shot}, round {round_index}"
-                        job.progress = round(done / max(1, total), 3)
-                        self._save(job)
-                        self._report(job)
-                        seed = None if job.seed is None else job.seed + (round_index - 1) * 100 + n
-                        self._render_one(job, shot, round_index, seed)
-                        done += 1
-                        self._save(job)
+            for position, shot in enumerate(job.shots):
+                if not self._reproduce_shot(job, shot, position):
+                    self._finish(job, "cancelled", "Cancelled")
+                    return
             self._pick_bests(job)
             self._stitch(job)
-            self._finish(job, "complete", self._summary_message(job))
+            short = [s for s in job.shots if not s.reached and any(c.status == "complete" for c in s.candidates)]
+            if short and all(s.note.startswith("Plateau") for s in short):
+                message = self._summary_message(job) + " · " + "; ".join(f"shot {s.index + 1}: {s.note}" for s in short)
+                self._finish(job, "plateau", message)
+            else:
+                self._finish(job, "complete", self._summary_message(job))
         except HTTPError as exc:
             self._fail(analysis_id, str(exc.detail))
         finally:
             with self.lock:
                 self._active.discard(analysis_id)
                 self._current_shot.pop(analysis_id, None)
+
+    def _reproduce_shot(self, job: VideoReproduceJob, shot: ReproduceShot, position: int) -> bool:
+        """Render `shot` until it reaches the target. False when cancelled."""
+        ladder = self._ladder()
+        rung = 0
+        flat = 0
+        strength = _CONTROL_START
+        best = 0.0
+        round_index = 0
+        while True:
+            if job.rounds is not None and round_index >= job.rounds:
+                shot.note = f"Round cap ({job.rounds}) reached at {best:.2f}"
+                return True
+            round_index += 1
+            strategy = ladder[rung]
+            control = strength if strategy == "reference_video" else None
+            produced = False
+            for n in range(job.candidates_per_shot):
+                if self._is_cancelled(job.analysis_id):
+                    return False
+                label = f"{strategy} @ {control:.2f}" if control is not None else strategy
+                job.message = f"Shot {shot.index + 1}: round {round_index} [{label}], candidate {n + 1} of {job.candidates_per_shot}"
+                job.progress = round(min(0.99, (position + min(0.95, round_index / 20)) / max(1, len(job.shots))), 3)
+                self._save(job)
+                self._report(job)
+                seed = None if job.seed is None else job.seed + (round_index - 1) * 100 + n
+                candidate = self._render_one(job, shot, round_index, seed, strategy=strategy, control_strength=control)
+                produced = produced or candidate.status == "complete"
+                self._save(job)
+            if not produced:
+                shot.note = "No candidate rendered this round"
+                return True
+            round_best = max((c.scores.composite for c in shot.candidates if c.status == "complete"), default=0.0)
+            if round_best >= job.target_score:
+                shot.reached = True
+                shot.note = f"Target {job.target_score:.2f} reached at {round_best:.2f} with {strategy}"
+                return True
+            improved = round_best - best >= _PLATEAU
+            best = max(best, round_best)
+            flat = 0 if improved else flat + 1
+            if strategy == "reference_video":
+                # Converging rung: raise the pull toward the reference clip by
+                # the gap left, and only give up at full strength.
+                this_round = max((c.scores.composite for c in shot.candidates if c.round == round_index and c.status == "complete"), default=0.0)
+                if strength >= 1.0:
+                    if flat >= _CONTROL_PATIENCE:
+                        shot.note = f"Plateau at {best:.2f} even at full reference-video strength"
+                        return True
+                else:
+                    step = min(_CONTROL_MAX_STEP, max(_CONTROL_MIN_STEP, job.target_score - this_round))
+                    strength = round(min(1.0, strength + step), 4)
+                shot.note = f"reference_video at {control:.2f} gave {this_round:.2f}; next {strength:.2f}"
+            elif flat >= _PLATEAU_ROUNDS:
+                if rung + 1 >= len(ladder):
+                    shot.note = (
+                        f"Plateau at {best:.2f}: first + last frames and reference-video conditioning need WanGP (LTX-2)"
+                        if not self._config.wangp_enabled else f"Plateau at {best:.2f}"
+                    )
+                    return True
+                rung += 1
+                flat = 0
+                shot.note = f"Plateau at {best:.2f}; escalating to {ladder[rung]}"
+            self._save(job)
 
     def _is_cancelled(self, analysis_id: str) -> bool:
         with self.lock:
@@ -376,17 +460,89 @@ class VideoReproduceHandler(StateHandlerBase):
         if job.job_id and self._jobs is not None:
             self._jobs.progress(job.job_id, job.progress * 100, job.message)
 
-    def _render_one(self, job: VideoReproduceJob, shot: ReproduceShot, round_index: int, seed: int | None) -> VideoCandidate:
+    def _capture(self, job: VideoReproduceJob, source: Path, name: str) -> str:
+        """Copy `source` into the film project's captures; project-relative path."""
+        if not source.is_file():
+            return ""
+        captures = self._film.store.captures_dir(job.project_id)
+        captures.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, captures / name)
+        return f"captures/{name}"
+
+    def _extract_end_frame(self, job: VideoReproduceJob, shot: ReproduceShot) -> str:
+        """The shot's last frame, when the analysis depth only sampled start +
+        middle. Analysis-relative, like the frames the analysis wrote."""
+        analysis = self._analysis.load(job.analysis_id)
+        if not analysis.source.path:
+            return ""
+        at = max(shot.start, shot.end - min(0.25, max(0.0, shot.end - shot.start) * 0.15))
+        try:
+            data = self._probe.extract_jpeg(analysis.source.path, at)
+        except OSError as exc:
+            logger.info("No end frame for %s: %s", shot.shot_id, exc)
+            return ""
+        name = f"end-{shot.shot_id}.jpg"
+        (self._folder(job.analysis_id) / name).write_bytes(data)
+        return f"{_FOLDER}/{name}"
+
+    def _reference_clip(self, job: VideoReproduceJob, shot: ReproduceShot) -> Path | None:
+        """This shot's own span of the source, at the render's fps and length,
+        cut once per shot with the probe + stitcher the app already has."""
+        folder = self._folder(job.analysis_id)
+        if shot.reference_clip and (folder / shot.reference_clip).is_file():
+            return folder / shot.reference_clip
+        analysis = self._analysis.load(job.analysis_id)
+        source = analysis.source.path
+        if not source:
+            return None
+        frames_dir = folder / f"refclip-{shot.shot_id}"
+        frames_dir.mkdir(parents=True, exist_ok=True)
+        count = max(2, int(round(shot.duration_seconds * job.fps)))
+        span = max(0.05, min(shot.duration_seconds, (shot.end - shot.start) or shot.duration_seconds))
+        frames: list[Path] = []
+        for i in range(count):
+            at = shot.start + span * i / count
+            try:
+                data = self._probe.extract_jpeg(source, at, max_width=1280, quality=92)
+            except OSError as exc:
+                logger.info("Reference clip frame %.2fs unavailable: %s", at, exc)
+                continue
+            frame = frames_dir / f"f{i:05d}.jpg"
+            frame.write_bytes(data)
+            frames.append(frame)
+        if not frames:
+            return None
+        name = f"reference-{shot.shot_id}.mp4"
+        try:
+            self._stitcher.encode_frames(frames, job.fps, folder / name)
+        except StitchError as exc:
+            logger.warning("Could not encode the reference clip for %s: %s", shot.shot_id, exc)
+            return None
+        finally:
+            shutil.rmtree(frames_dir, ignore_errors=True)
+        shot.reference_clip = name
+        return folder / name
+
+    def _render_one(
+        self, job: VideoReproduceJob, shot: ReproduceShot, round_index: int, seed: int | None,
+        *, strategy: str = "start_frame", control_strength: float | None = None,
+    ) -> VideoCandidate:
         analysis_dir = self._dir(job.analysis_id)
         capture_rel = ""
         if shot.start_frame:
             source = analysis_dir / shot.start_frame
-            if source.is_file():
-                captures = self._film.store.captures_dir(job.project_id)
-                captures.mkdir(parents=True, exist_ok=True)
-                name = f"{shot.film_shot_id}-reproduce-start{source.suffix.lower() or '.jpg'}"
-                shutil.copyfile(source, captures / name)
-                capture_rel = f"captures/{name}"
+            capture_rel = self._capture(job, source, f"{shot.film_shot_id}-reproduce-start{source.suffix.lower() or '.jpg'}")
+        end_rel = ""
+        if strategy in ("start_end_frames", "reference_video") and not shot.end_frame:
+            shot.end_frame = self._extract_end_frame(job, shot)
+        if strategy in ("start_end_frames", "reference_video") and shot.end_frame:
+            source = analysis_dir / shot.end_frame
+            end_rel = self._capture(job, source, f"{shot.film_shot_id}-reproduce-end{source.suffix.lower() or '.jpg'}")
+        control_rel = ""
+        if strategy == "reference_video":
+            clip = self._reference_clip(job, shot)
+            if clip is not None:
+                control_rel = self._capture(job, clip, f"{shot.film_shot_id}-reproduce-reference.mp4")
 
         candidate = VideoCandidate(
             id=f"vc-{uuid.uuid4().hex[:10]}",
@@ -398,6 +554,8 @@ class VideoReproduceHandler(StateHandlerBase):
             model=job.model,
             target=job.target,
             duration_seconds=shot.duration_seconds,
+            strategy=strategy,
+            control_strength=control_strength if control_rel else None,
         )
         shot.candidates.append(candidate)
         with self.lock:
@@ -419,7 +577,11 @@ class VideoReproduceHandler(StateHandlerBase):
             film_shot.generation.use_capture_as_reference = True
             self._film.store.save(project)
 
-        request = GenerateShotRequest(kind=job.kind, duration_seconds=shot.duration_seconds, capture_path=capture_rel, seed=seed)
+        request = GenerateShotRequest(
+            kind=job.kind, duration_seconds=shot.duration_seconds, capture_path=capture_rel, seed=seed,
+            end_capture_path=end_rel, control_video_path=control_rel,
+            control_strength=control_strength if control_rel else None,
+        )
         try:
             if self._jobs is not None and job.job_id:
                 with self._jobs.parent(job.job_id):
@@ -724,6 +886,8 @@ class VideoReproduceHandler(StateHandlerBase):
         note = f"{rendered} candidate{'' if rendered == 1 else 's'} across {len(job.shots)} shot{'' if len(job.shots) == 1 else 's'}"
         if failed:
             note += f", {failed} failed"
+        reached = sum(1 for shot in job.shots if shot.reached)
+        note += f" · {reached}/{len(job.shots)} at target {job.target_score:.2f}"
         if job.stitched_path:
             note += " · stitched"
         return note

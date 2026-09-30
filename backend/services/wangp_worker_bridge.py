@@ -224,10 +224,14 @@ class SubprocessWorkerLauncher:
         return self._proc
 
     def endpoint(self) -> WorkerEndpoint | None:
-        with self._lock:
-            if self._proc is not None and self._proc.poll() is None:
-                return self._endpoint
-            return None
+        # Deliberately lock-free: `ensure_started` holds the lock for the whole
+        # start (WanGP's import is 26-56 s), and waiting on it here stalled
+        # get_status() and with it /health for that long. Two reference reads
+        # are atomic; mid-start this answers None ("starting").
+        proc, endpoint = self._proc, self._endpoint
+        if proc is not None and proc.poll() is None:
+            return endpoint
+        return None
 
     def ensure_started(self) -> WorkerEndpoint:
         with self._lock:
@@ -291,8 +295,9 @@ class SubprocessWorkerLauncher:
         announced = self._await_announcement(proc, ready, port, ready_file)
         endpoint = WorkerEndpoint(base_url=f"http://127.0.0.1:{announced}", token=token)
         self._probe_until_serving(proc, endpoint)
-        self._proc = proc
+        # Endpoint first: `endpoint()` reads these without the lock.
         self._endpoint = endpoint
+        self._proc = proc
         logger.info("WanGP worker started (pid %s) at %s", proc.pid, endpoint.base_url)
         return endpoint
 

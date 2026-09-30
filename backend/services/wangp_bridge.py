@@ -231,6 +231,7 @@ class WanGPBridge:
         loras: Sequence[tuple[str, float]] = (),
         reference_images: Sequence[str] = (),
         end_frame_path: str | None = None,
+        control_strength: float | None = None,
     ) -> str:
         resolution = self._map_video_resolution(resolution_label, aspect_ratio)
         merged_prompt = prompt + self._camera_motion_prompts.get(camera_motion, "")
@@ -274,6 +275,11 @@ class WanGPBridge:
         if guide:
             settings["video_prompt_type"] = str(settings.get("video_prompt_type", "")).replace("V", "") + "V"
             settings["video_guide"] = str(Path(guide).resolve())
+            if control_strength is not None:
+                # "G" makes the guide's strength count (wgp.py:1411-1415); for
+                # LTX-2 "VG" is the raw control video and higher = closer to it.
+                settings["video_prompt_type"] = str(settings["video_prompt_type"]).replace("G", "") + "G"
+                settings["denoising_strength"] = round(min(1.0, max(0.0, control_strength)), 4)
 
         outputs = self._run_manifest(
             manifest=[{"id": 1, "params": settings, "plugin_data": {}}],

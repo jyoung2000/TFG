@@ -287,6 +287,9 @@ class GenerateVideoRequest(BaseModel):
     #: Reference images (WanGP `image_refs`) and an end frame (`image_end`).
     referenceImagePaths: list[str] = Field(default_factory=list[str])
     endFramePath: str | None = None
+    #: Strength of `controlVideoPath` (WanGP "G" guide denoising); None = the
+    #: model's default use of the control video.
+    controlStrength: float | None = None
 
 
 class GenerateImageRequest(BaseModel):

@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 
 from services.similarity.composite import ScoreBreakdown
 
-VideoReproduceStatus = Literal["idle", "running", "complete", "failed", "cancelled"]
+VideoReproduceStatus = Literal["idle", "running", "complete", "failed", "cancelled", "plateau"]
 CandidateStatus = Literal["queued", "generating", "complete", "failed", "cancelled"]
 
 #: How the composite is mixed with the flow-magnitude match, documented in docs/VIDEO_REPRODUCE.md.
@@ -45,6 +45,10 @@ class VideoCandidate(BaseModel):
     scores: ScoreBreakdown = Field(default_factory=ScoreBreakdown)
     #: 0..1 flow-magnitude/direction agreement with the reference shot ("" component when unmeasured).
     motion_match: float | None = None
+    #: Ladder rung that rendered it: start_frame | start_end_frames | reference_video.
+    strategy: str = ""
+    #: reference_video only: LTX-2 control strength (higher = closer to the reference clip).
+    control_strength: float | None = None
     job_id: str = ""
     created_at: int = Field(default_factory=now_ms)
 
@@ -60,6 +64,14 @@ class ReproduceShot(BaseModel):
     duration_seconds: float = 0.0
     #: Analysis-relative start frame used as the I2V conditioning image.
     start_frame: str = ""
+    #: Analysis-relative last frame (start_end_frames rung).
+    end_frame: str = ""
+    #: Reproduce-relative clip of this shot cut from the source (reference_video rung).
+    reference_clip: str = ""
+    #: True once the best candidate reached the job's target.
+    reached: bool = False
+    #: Why the shot stopped (or where it is on the ladder).
+    note: str = ""
     prompt: str = ""
     negative_prompt: str = ""
     prompt_source: Literal["spec", "analysis", "user"] = "analysis"
@@ -88,7 +100,9 @@ class VideoReproduceJob(BaseModel):
     resolution: str = ""
     fps: int = 24
     candidates_per_shot: int = 2
-    rounds: int = 1
+    #: Cap on rounds per shot; None = until the target is reached.
+    rounds: int | None = None
+    target_score: float = 0.95
     seed: int | None = None
     status: VideoReproduceStatus = "idle"
     progress: float = 0.0

@@ -2,7 +2,7 @@
 
 import type { ScoreBreakdown } from './reproduce'
 
-export type VideoReproduceStatus = 'idle' | 'running' | 'complete' | 'failed' | 'cancelled'
+export type VideoReproduceStatus = 'idle' | 'running' | 'complete' | 'failed' | 'cancelled' | 'plateau'
 export type CandidateStatus = 'queued' | 'generating' | 'complete' | 'failed' | 'cancelled'
 
 export interface VideoCandidate {
@@ -23,6 +23,10 @@ export interface VideoCandidate {
   error: string
   scores: ScoreBreakdown
   motion_match: number | null
+  /** Ladder rung: start_frame | start_end_frames | reference_video. */
+  strategy?: string
+  /** reference_video only: control strength (higher = closer to the reference clip). */
+  control_strength?: number | null
   job_id: string
   created_at: number
 }
@@ -36,6 +40,11 @@ export interface ReproduceShot {
   end: number
   duration_seconds: number
   start_frame: string
+  end_frame?: string
+  reference_clip?: string
+  /** True once the best candidate reached the job's target. */
+  reached?: boolean
+  note?: string
   prompt: string
   negative_prompt: string
   prompt_source: 'spec' | 'analysis' | 'user'
@@ -55,7 +64,9 @@ export interface VideoReproduceJob {
   resolution: string
   fps: number
   candidates_per_shot: number
-  rounds: number
+  /** Cap on rounds per shot; null = until the target is reached. */
+  rounds: number | null
+  target_score?: number
   seed: number | null
   status: VideoReproduceStatus
   progress: number
@@ -72,7 +83,9 @@ export interface VideoReproduceJob {
 
 export interface VideoReproduceRequest {
   candidates: number
-  rounds: number
+  /** null = no cap: each shot renders until it reaches `target_score`. */
+  rounds: number | null
+  target_score?: number
   shot_ids: string[]
   kind?: 'preview' | 'final'
   seed?: number | null

@@ -59,7 +59,11 @@ class FakeWanGPBridge(WanGPBridge):
         self._output_dir.mkdir(parents=True, exist_ok=True)
         if ".mp4" in media_suffixes:
             out = self._output_dir / f"wangp-fake-{self._serial}.mp4"
-            out.write_bytes(b"\x00\x00\x00\x18ftypmp42fake-wangp-render")
+            params = manifest[0]["params"]
+            assert isinstance(params, dict)
+            # Record what conditioned the render so a test can "see" it.
+            control = f" control={params['denoising_strength']}" if params.get("video_guide") and "denoising_strength" in params else ""
+            out.write_bytes(b"\x00\x00\x00\x18ftypmp42fake-wangp-render" + control.encode())
         else:
             out = self._output_dir / f"wangp-fake-{self._serial}.png"
             params = manifest[0]["params"]

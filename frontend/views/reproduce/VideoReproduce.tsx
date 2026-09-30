@@ -99,6 +99,7 @@ function ShotRow({ analysis, job, shot, busy, onPick, onRedo }: { analysis: Vide
       <div className="flex-1 min-w-0 space-y-1">
         <div className="flex items-center gap-1 text-[10px] text-zinc-500">
           <span>{shot.candidates.length} candidate{shot.candidates.length === 1 ? '' : 's'}</span>
+          {shot.note && <span className={shot.reached ? 'text-emerald-300' : 'text-zinc-400'} title={shot.note}>· {shot.note}</span>}
           <button onClick={onRedo} disabled={busy || job.status === 'running'} className="btn-chip ml-auto" aria-label={`Redo shot ${shot.index + 1}`}><RefreshCw className="h-3 w-3" /> Redo</button>
         </div>
         <ul className="flex flex-wrap gap-1.5">
@@ -107,7 +108,7 @@ function ShotRow({ analysis, job, shot, busy, onPick, onRedo }: { analysis: Vide
               <Thumb analysisId={analysis.id} candidate={candidate} />
               <div className="flex items-center gap-1 text-[10px] text-zinc-400 mt-0.5">
                 <span className="font-semibold text-zinc-200">{candidate.status === 'complete' ? `${(candidate.scores.composite * 100).toFixed(0)}%` : candidate.status}</span>
-                <span>r{candidate.round}{candidate.seed !== null ? ` · ${candidate.seed}` : ''}</span>
+                <span title={candidate.strategy ? `${candidate.strategy}${candidate.control_strength != null ? ` @ ${candidate.control_strength.toFixed(2)}` : ''}` : undefined}>r{candidate.round}{candidate.seed !== null ? ` · ${candidate.seed}` : ''}</span>
                 {candidate.status === 'complete' && (
                   <button onClick={() => onPick(candidate)} disabled={busy} aria-label={`Pick ${candidate.id}`} aria-pressed={candidate.id === shot.picked_candidate_id} className={`ml-auto p-0.5 rounded ${candidate.id === shot.picked_candidate_id ? 'text-amber-300' : 'hover:text-white'}`}><Star className="h-3 w-3" /></button>
                 )}

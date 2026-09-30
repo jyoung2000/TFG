@@ -184,7 +184,7 @@ class TestReproduceLoop:
         analysed = _analysed(client, video, test_state, create_fake_model_files)
         analysis_id = analysed["id"]
         first, second = analysed["shots"][0]["id"], analysed["shots"][1]["id"]
-        response = client.post(f"/api/video-reproduce/{analysis_id}/start", json={"candidates": 1, "shot_ids": [first, second]})
+        response = client.post(f"/api/video-reproduce/{analysis_id}/start", json={"candidates": 1, "rounds": 1, "shot_ids": [first, second]})
         assert response.status_code == 200, response.text
         job = client.get(f"/api/video-reproduce/{analysis_id}").json()
         assert [s["shot_id"] for s in job["shots"]] == [first, second]
@@ -207,7 +207,7 @@ class TestReproduceLoop:
         analysed = _analysed(client, video, test_state, create_fake_model_files)
         analysis_id = analysed["id"]
         fake_services.fast_video_pipeline.raise_on_generate = RuntimeError("CUDA out of memory")
-        response = client.post(f"/api/video-analysis/{analysis_id}/recreate", json={"candidates": 1, "shot_ids": [analysed["shots"][0]["id"]]})
+        response = client.post(f"/api/video-analysis/{analysis_id}/recreate", json={"candidates": 1, "rounds": 1, "shot_ids": [analysed["shots"][0]["id"]]})
         assert response.status_code == 200, response.text
         fake_services.fast_video_pipeline.raise_on_generate = None
         job = client.get(f"/api/video-reproduce/{analysis_id}").json()
@@ -267,3 +267,104 @@ class TestRealStitcher:
     def test_missing_input_is_an_error(self, tmp_path: Path):
         with pytest.raises(StitchError):
             FfmpegStitcher(ffmpeg="ffmpeg").concat([tmp_path / "missing.mp4"], tmp_path / "x.mp4")
+
+
+class TestTheVideoLoopKeepsGoingUntilTheTarget:
+    """The video loop must not stop at a fixed number of passes.
+
+    Before: `rounds` was capped at 1-3 (the UI always sent 1), there was no
+    target, and every round rendered the same image-to-video request - so a
+    run was one pass, however far from the reference it landed.
+
+    After: each shot renders round after round until its best candidate
+    reaches `target_score`, climbing a ladder when it plateaus: start frame ->
+    start + end frames -> the reference clip itself as an LTX-2 raw control
+    video (`VG`) whose strength rises toward 1.0. That last rung converges on
+    the reference, so the loop ends at the target, a cancel, or `rounds`.
+    """
+
+    @staticmethod
+    def _content_aware_frames(fake_services, source):
+        """Frames that reflect what was rendered: a clip rendered against the
+        reference clip at control strength s is s of the way to the reference
+        colour (the stock fake returns one fixed 1x1 frame for everything)."""
+        import io
+        import re
+
+        import numpy as np
+        from PIL import Image
+
+        probe = fake_services.media_probe
+        stock = probe.extract_jpeg
+        with Image.open(io.BytesIO(stock("reference", 0.0))) as image:
+            reference = np.asarray(image.convert("RGB").resize((16, 16)), dtype=np.float64)
+        far = np.zeros_like(reference)
+        far[..., 1] = 230.0
+
+        def extract_jpeg(path, timestamp, *, max_width=640, quality=82):
+            if Path(path) == Path(source):
+                return stock(path, timestamp, max_width=max_width, quality=quality)
+            data = Path(path).read_bytes() if Path(path).is_file() else b""
+            found = re.search(rb"control=([0-9.]+)", data)
+            strength = float(found.group(1)) if found else 0.0
+            pixels = (far + (reference - far) * strength).clip(0, 255).astype("uint8")
+            buffer = io.BytesIO()
+            Image.fromarray(pixels, "RGB").save(buffer, format="PNG")
+            return buffer.getvalue()
+
+        probe.extract_jpeg = extract_jpeg
+
+    @staticmethod
+    def _enable_wangp(test_state, fake_services):
+        test_state.config.wangp_enabled = True
+        fake_services.wangp_bridge.available = True
+
+    def test_a_shot_keeps_rendering_until_it_reaches_the_target(self, client, video, fake_services, test_state, create_fake_model_files):
+        analysed = _analysed(client, video, test_state, create_fake_model_files)
+        self._enable_wangp(test_state, fake_services)
+        self._content_aware_frames(fake_services, video)
+        shot_id = analysed["shots"][0]["id"]
+
+        response = client.post(
+            f"/api/video-reproduce/{analysed['id']}/start",
+            json={"candidates": 1, "shot_ids": [shot_id], "seed": 3, "target_score": 0.95},
+        )
+        assert response.status_code == 200, response.text
+        job = client.get(f"/api/video-reproduce/{analysed['id']}").json()
+
+        assert job["status"] == "complete", job["message"]
+        shot = job["shots"][0]
+        best = next(c for c in shot["candidates"] if c["id"] == shot["best_candidate_id"])
+        assert best["scores"]["composite"] >= 0.95, best["scores"]
+        strategies = [c["strategy"] for c in shot["candidates"]]
+        assert strategies[0] == "start_frame" and "start_end_frames" in strategies and strategies[-1] == "reference_video", strategies
+
+        controlled = [c for c in shot["candidates"] if c["strategy"] == "reference_video"]
+        strengths = [c["control_strength"] for c in controlled]
+        assert strengths == sorted(strengths) and strengths[0] < strengths[-1], strengths
+
+        # The reference clip reached WanGP as a raw control video with its strength.
+        guided = [m[0]["params"] for m in fake_services.wangp_bridge.manifests if "video_guide" in m[0]["params"]]
+        assert guided, "no render was conditioned on the reference clip"
+        assert all(p["video_prompt_type"].endswith("VG") for p in guided)
+        assert [p["denoising_strength"] for p in guided] == strengths
+        ends = [m[0]["params"] for m in fake_services.wangp_bridge.manifests if "image_end" in m[0]["params"]]
+        assert ends, "the start+end rung never sent an end frame"
+
+    def test_without_wangp_the_loop_ends_and_says_why(self, client, video, fake_services, test_state, create_fake_model_files):
+        analysed = _analysed(client, video, test_state, create_fake_model_files)
+        self._content_aware_frames(fake_services, video)
+        shot_id = analysed["shots"][0]["id"]
+        client.post(f"/api/video-reproduce/{analysed['id']}/start", json={"candidates": 1, "shot_ids": [shot_id], "target_score": 0.95})
+        job = client.get(f"/api/video-reproduce/{analysed['id']}").json()
+        assert job["status"] == "plateau", job["message"]
+        assert "WanGP" in job["message"], job["message"]
+        assert job["stitched_path"], "the best takes are still stitched"
+
+    def test_no_round_cap_by_default(self):
+        from film.video_analysis_api_types import VideoRecreationRequest
+
+        request = VideoRecreationRequest()
+        assert request.rounds is None and request.target_score == 0.95
+        assert VideoRecreationRequest(rounds=40).rounds == 40
+        assert VideoRecreationRequest(target_score=0).target_score == 0.95

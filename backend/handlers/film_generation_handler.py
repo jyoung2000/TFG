@@ -582,6 +582,9 @@ class FilmGenerationHandler(StateHandlerBase):
             duration_seconds=float(duration_int),
             seed=seed,
             capture_path=capture_path,
+            end_capture_path=req.end_capture_path if req is not None else "",
+            control_video_path=req.control_video_path if req is not None else "",
+            control_strength=req.control_strength if req is not None else None,
             wardrobe_snapshot=wardrobe_snapshot,
             shot_snapshot=snapshot,
             execution_mode=self._execution_mode(project.settings.media_provider),
@@ -1035,6 +1038,15 @@ class FilmGenerationHandler(StateHandlerBase):
             aspect_ratio = shot.generation.aspect_ratio
             control_video = self._deliver_pass(job.project_id, shot.generation.control_video)
             depth_video = self._deliver_pass(job.project_id, shot.generation.depth_video)
+            end_frame: str | None = None
+            if version.end_capture_path:
+                end_capture = self._film.store.resolve_media_path(job.project_id, version.end_capture_path)
+                end_frame = str(end_capture) if end_capture.is_file() else None
+            if version.control_video_path:
+                # A per-version control clip (Video Reproduce's reference_video
+                # rung) replaces the shot's Deliver pass for this render only.
+                clip = self._film.store.resolve_media_path(job.project_id, version.control_video_path)
+                control_video = str(clip) if clip.is_file() else control_video
             loras = self.asset_loras(project, shot)
             seed_lock = self.asset_seed_lock(project, shot)
             if version.seed is None and seed_lock is not None:
@@ -1062,6 +1074,8 @@ class FilmGenerationHandler(StateHandlerBase):
             depthVideoPath=depth_video,
             loras=loras,
             referenceImagePaths=[p for p in reference_images if Path(p).is_file()],
+            endFramePath=end_frame,
+            controlStrength=version.control_strength if version.control_video_path else None,
         )
         return request, version.seed
 

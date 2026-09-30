@@ -333,6 +333,9 @@ class ShotVersion(BaseModel):
     duration_seconds: float = 0.0
     seed: int | None = None
     capture_path: str = ""  # relative capture used as reference ('' = none)
+    end_capture_path: str = ""  # relative last frame ('' = none)
+    control_video_path: str = ""  # relative raw control video ('' = none)
+    control_strength: float | None = None
     output_path: str = ""  # absolute path of the generated media
     error: str = ""
     # Wardrobe text per character asset at generation time, for continuity
