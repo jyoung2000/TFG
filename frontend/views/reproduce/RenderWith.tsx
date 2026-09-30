@@ -21,6 +21,8 @@ as available.
 
 import { useEffect, useState } from 'react'
 
+import { modelLibraryApi } from '../../lib/model-library-api'
+
 export interface RenderWithModel {
   id: string
   name: string
@@ -64,22 +66,24 @@ interface Props {
   disabled?: boolean
 }
 
-const DEFAULT_URL = 'http://localhost:8000'
-
 export function RenderWith({ value, onChange, disabled }: Props) {
   const [models, setModels] = useState<RenderWithModel[] | null>(null)
   const [error, setError] = useState('')
 
+  // The app's own client, not a hardcoded URL: backendFetch resolves to the
+  // mock server in UI-only mode and to localhost:8000 in the app. A literal
+  // fetch to :8000 fails with ERR_CONNECTION_REFUSED under `pnpm e2e`, and
+  // every spec asserts a clean console.
   useEffect(() => {
     let cancelled = false
-    fetch(`${DEFAULT_URL}/api/models/library?task=image&source=local&limit=200`)
-      .then(r => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-      .then((d: { models?: RenderWithModel[] }) => {
+    modelLibraryApi
+      .search({ task: 'image', source: 'local', limit: 200 })
+      .then((r: { models?: RenderWithModel[] }) => {
         if (cancelled) return
-        setModels(d.models ?? [])
+        setModels(r.models ?? [])
       })
       .catch((e: unknown) => {
-        if (!cancelled) setError(`Could not read the model library: ${String(e)}`)
+        if (!cancelled) setError(`Could not read the model library: ${e instanceof Error ? e.message : String(e)}`)
       })
     return () => {
       cancelled = true
