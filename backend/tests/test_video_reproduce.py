@@ -75,11 +75,13 @@ class _ScriptedProvider:
     def __init__(self, replies: list[str]) -> None:
         self.replies = list(replies)
         self.calls: list[list[str]] = []
+        self.systems: list[str] = []
 
     def chat(self, messages, tools=None, *, json_mode=False, timeout=90):  # noqa: ANN001, ARG002
         from film.llm_providers import LLMReply
 
         self.calls.append([m.role for m in messages])
+        self.systems.append(messages[0].content if messages else "")
         text = self.replies.pop(0) if self.replies else "{}"
         return LLMReply(text=text, tool_calls=[], model=self.model)
 
@@ -111,8 +113,10 @@ class TestPerSectionVlm:
         assert shot.narrative.pacing  # timed, kept
         assert shot.provenance == "inferred"
         assert "prompt_lens" in shot.evidence_note  # the one section that never parsed is named
-        # 4 sections + 2 repairs = 6 calls; the repair carries the broken reply back.
-        assert len(provider.calls) == 6
+        # 4 sections + 2 repairs + 1 follow-up for the spec fields still empty
+        # = 7 calls; the repair carries the broken reply back.
+        assert len(provider.calls) == 7
+        assert "scene.time_of_day" in provider.systems[-1] and "camera.focal_mm" in provider.systems[-1]
         assert provider.calls[2] == ["system", "user", "assistant", "user"]
         # The VLM's read landed in the spec where the local stack left gaps.
         assert shot.spec.scene.location == "control room"

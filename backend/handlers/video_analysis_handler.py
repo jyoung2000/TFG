@@ -49,7 +49,8 @@ from film.shot_detection import (
     split_shot,
 )
 from film.video_analysis_api_types import PromptEditRequest, VideoRecreationRequest, VideoRecreationResponse
-from film.shot_spec_fusion import apply_flow, apply_vlm, spec_from_vision
+from film.image_recreation import read_json
+from film.shot_spec_fusion import FILLABLE_FIELDS, apply_flow, apply_vlm, empty_fields, fill_empty_fields, spec_from_vision
 from film.video_analysis_models import (
     MotionAnalysis,
     AnalysisDepth,
@@ -590,7 +591,8 @@ class VideoAnalysisHandler(StateHandlerBase):
             shot.analysis_model = provider.model
             shot.provenance = "inferred"
             self._apply_vlm_to_spec(shot)
-        note = "\n".join(raw_notes)[:2000]
+            self._fill_empty_spec_fields(shot, provider, context, images)
+        note ="\n".join(raw_notes)[:2000]
         if failed:
             note = f"Sections without a usable answer: {', '.join(failed)}.\n{note}"
         shot.evidence_note = note or "The model did not return usable JSON for this shot."
@@ -659,6 +661,29 @@ class VideoAnalysisHandler(StateHandlerBase):
             shot.narrative = NarrativeAnalysis.model_validate(merged)
         elif section == "prompt_lens":
             shot.prompt_lens = PromptLensAnalysis.model_validate(_clean(payload, PromptLensAnalysis))
+
+    @staticmethod
+    def _fill_empty_spec_fields(shot: AnalyzedShot, provider: LLMProvider, context: str, images: list[str]) -> None:
+        """One follow-up for every spec field the section reads left empty
+        (time of day, focal length, aperture, key light, ...), merged field by
+        field without overwriting (the image analysis does the same)."""
+        missing = empty_fields(shot.spec)
+        if not missing:
+            return
+        hints = {**FILLABLE_FIELDS, "camera.move": "static|pan|tilt|dolly|truck|handheld|zoom"}
+        instruction = (
+            "You are a cinematographer describing ONE shot from a film. Reply with JSON only, one key per field below, "
+            "each a short best estimate from the frames (never 'unknown'):\n" + "\n".join(f'"{name}": {hints[name]}' for name in missing)
+        )
+        try:
+            reply = provider.chat(
+                [LLMMessage(role="system", content=instruction), LLMMessage(role="user", content=context, images=images)],
+                json_mode=True,
+                timeout=120,
+            )
+            fill_empty_fields(shot.spec, read_json(reply.text) or {}, max(shot.visual.confidence, 0.3))
+        except Exception as exc:  # noqa: BLE001 - the section reads stand
+            logger.info("Field follow-up failed for %s: %s", shot.id, exc)
 
     @staticmethod
     def _apply_vlm_to_spec(shot: AnalyzedShot) -> None:
