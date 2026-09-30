@@ -62,6 +62,17 @@ class FakeWanGPBridge(WanGPBridge):
             out.write_bytes(b"\x00\x00\x00\x18ftypmp42fake-wangp-render")
         else:
             out = self._output_dir / f"wangp-fake-{self._serial}.png"
-            Image.new("RGB", (64, 64), (20, 200, 120)).save(out)
+            params = manifest[0]["params"]
+            assert isinstance(params, dict)
+            guide = params.get("image_guide")
+            if guide:
+                # img2img the way a diffusion model behaves at the limits: at
+                # strength 0 it returns the guide, at 1 its own render.
+                strength = float(params.get("denoising_strength", 1.0))
+                with Image.open(str(guide)) as source:
+                    base = source.convert("RGB")
+                Image.blend(base, Image.new("RGB", base.size, (20, 200, 120)), strength).save(out)
+            else:
+                Image.new("RGB", (64, 64), (20, 200, 120)).save(out)
         on_progress("complete", 100, 8, 8)
         return [str(out)]

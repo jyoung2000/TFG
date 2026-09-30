@@ -426,3 +426,82 @@ class TestRenderWithReachesTheRenderer:
         assert done.get("render_model") == ""
         candidates = done.get("candidates") or []
         assert {c["model"] for c in candidates} == {done["image_model"]}
+
+
+class TestTheLoopKeepsGoingUntilTheTarget:
+    """The loop must not give up below the target while a converging rung exists.
+
+    Before: after two flat rounds on each of four rungs it ended `plateau`,
+    and three of the rungs only relabelled the round - `seed_search`,
+    `reference_conditioning` and `same_resolution` re-rendered the same
+    prompt (MEASURED round 6: seed_search 0.5907 twice, identically). Text-to-
+    image cannot converge on one photograph, so every run stopped at
+    0.70-0.83 against a 0.95 target.
+
+    After: `same_resolution` renders at the reference's own size and
+    `reference_conditioning` is real img2img from the reference with a
+    denoise strength cut each round in proportion to the remaining gap. That
+    rung converges (strength -> 0 returns the reference), so the loop keeps
+    going until the target, a cancel, or the user's max_rounds.
+    """
+
+    @staticmethod
+    def _enable_img2img(test_state, fake_services, installed=("z_image", "flux2_klein_4b")):
+        from services.vision.protocol import EmbeddingResult
+
+        test_state.config.wangp_enabled = True
+        fake_services.wangp_bridge.available = True
+        fake_services.wangp_bridge.definitions = [{"id": m, "name": m, "installed": True} for m in installed]
+
+        def smooth_embed(image_path, kind="clip"):
+            # Content-derived with no hashed component, so near-identical
+            # images embed near-identically (the stock fake hashes the pixels).
+            with Image.open(image_path) as image:
+                small = np.asarray(image.convert("RGB").resize((4, 4)), dtype=np.float64).reshape(-1) / 255.0 + 0.05
+            small /= float(np.sqrt((small**2).sum()))
+            return EmbeddingResult(kind=kind, model=f"fake-{kind}", vector=[float(v) for v in small])
+
+        fake_services.vision.embed = smooth_embed
+
+    def test_the_loop_converges_to_the_target_instead_of_plateauing(self, client, create_fake_model_files, tmp_path, test_state, fake_services):
+        self._enable_img2img(test_state, fake_services)
+        job = _setup(client, create_fake_model_files, tmp_path)
+        started = client.post(
+            f"/api/reproduce/{job['id']}/start",
+            json={"budget": {"candidates_per_round": 1, "target_score": 0.95}, "seed": 7},
+        )
+        assert started.status_code == 200, started.text
+        done = client.get(f"/api/reproduce/{job['id']}").json()
+
+        assert done["status"] == "complete", done["message"]
+        best = next(c for c in done["candidates"] if c["id"] == done["best_candidate_id"])
+        assert best["scores"]["composite"] >= 0.95, best["scores"]
+
+        strategies = [r["strategy"] for r in done["rounds"]]
+        assert "same_resolution" in strategies and strategies[-1] == "reference_conditioning", strategies
+
+        img2img = [c for c in done["candidates"] if "denoise_strength" in c["params"]]
+        assert img2img, "the converging rung never rendered"
+        strengths = [c["params"]["denoise_strength"] for c in img2img]
+        assert strengths == sorted(strengths, reverse=True) and strengths[0] > strengths[-1], strengths
+        # z_image cannot img2img, so the rung renders with the installed FLUX.2
+        # and every candidate records that truthfully.
+        assert {c["model"] for c in img2img} == {"flux2_klein_4b"}
+
+    def test_same_resolution_renders_at_the_reference_size(self, client, create_fake_model_files, tmp_path, test_state, fake_services):
+        self._enable_img2img(test_state, fake_services)
+        job = _setup(client, create_fake_model_files, tmp_path)
+        client.post(f"/api/reproduce/{job['id']}/start", json={"budget": {"candidates_per_round": 1, "target_score": 0.95}, "seed": 7})
+        done = client.get(f"/api/reproduce/{job['id']}").json()
+        same = [c for c in done["candidates"] if c["round"] in {r["index"] for r in done["rounds"] if r["strategy"] == "same_resolution"}]
+        assert same, "no same_resolution round rendered"
+        # 128x72 reference, snapped to WanGP's multiple of 16.
+        assert {(c["params"]["width"], c["params"]["height"]) for c in same} == {(128, 64)}
+
+    def test_without_an_img2img_model_the_loop_still_ends_and_says_why(self, client, create_fake_model_files, tmp_path, test_state, fake_services):
+        self._enable_img2img(test_state, fake_services, installed=("z_image",))
+        job = _setup(client, create_fake_model_files, tmp_path)
+        client.post(f"/api/reproduce/{job['id']}/start", json={"budget": {"candidates_per_round": 1, "target_score": 0.95}, "seed": 7})
+        done = client.get(f"/api/reproduce/{job['id']}").json()
+        assert done["status"] == "plateau", done["message"]
+        assert "FLUX.2" in done["message"], done["message"]

@@ -41,7 +41,7 @@ export function ImageReproduce() {
   // 0.95 is the brief's bar (composite >= 0.95 == 95 % identical) and matches
   // ReproduceBudget.target_score. The UI always sends its own budget, so this is
   // what the loop actually uses; the backend default only applies to API callers.
-  const [budget, setBudget] = useState<ReproduceBudget>({ candidates_per_round: 6, max_rounds: 3, target_score: 0.95 })
+  const [budget, setBudget] = useState<ReproduceBudget>({ candidates_per_round: 6, max_rounds: null, target_score: 0.95 })
   const [seed, setSeed] = useState<string>('')
   const [useVlm, setUseVlm] = useState(false)
   const [loras, setLoras] = useState<LoraUse[]>([])
@@ -251,7 +251,7 @@ export function ImageReproduce() {
                   </div>
                   <div className="grid grid-cols-4 gap-2 text-[10px] text-zinc-500">
                     <label>Candidates / round<input type="number" min={1} max={12} value={budget.candidates_per_round} onChange={e => setBudget(b => ({ ...b, candidates_per_round: Number(e.target.value) }))} className="select-chip w-full" aria-label="Candidates per round" /></label>
-                    <label>Rounds<input type="number" min={1} max={8} value={budget.max_rounds ?? ''} placeholder="no cap" onChange={e => setBudget(b => ({ ...b, max_rounds: e.target.value === '' ? null : Number(e.target.value) }))} className="select-chip w-full" aria-label="Max rounds" /></label>
+                    <label>Rounds<input type="number" min={1} value={budget.max_rounds ?? ''} placeholder="no cap" onChange={e => setBudget(b => ({ ...b, max_rounds: e.target.value === '' ? null : Number(e.target.value) }))} className="select-chip w-full" aria-label="Max rounds" /></label>
                     <label>Target score<input type="number" min={0} max={1} step={0.01} value={budget.target_score} onChange={e => setBudget(b => ({ ...b, target_score: Number(e.target.value) }))} className="select-chip w-full" aria-label="Target score" /></label>
                     <label>Seed<input value={seed} onChange={e => setSeed(e.target.value)} placeholder="random" className="select-chip w-full" aria-label="Seed" /></label>
                   </div>

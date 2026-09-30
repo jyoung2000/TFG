@@ -48,6 +48,7 @@ from services import image_ops
 from services.interfaces import TaskRunner
 from services.similarity.composite import CompositeScorer, ImageFeatures, ScoreBreakdown
 from services.similarity.metrics import luma_array
+from services.wangp_bridge import IMG2IMG_MIN_STEPS
 from services.vision.deterministic import measure_path
 from state.app_state_types import AppState
 
@@ -82,6 +83,25 @@ _NAMED_COLOURS: tuple[tuple[str, tuple[int, int, int]], ...] = (
     ("magenta", (200, 60, 160)), ("brown", (110, 70, 40)), ("beige", (220, 200, 160)), ("pink", (240, 160, 190)),
 )
 _PLATEAU = 0.01
+#: Escalation ladder, tried in order when the score plateaus. The last rung is
+#: img2img from the reference: as its strength falls the render converges on
+#: the reference, so it is the only rung that can reach a 0.95 target and the
+#: loop stays on it until the target, a cancel, or max_rounds.
+_STRATEGIES = ("prompt_refinement", "seed_search", "same_resolution", "reference_conditioning")
+#: FLUX.2 Klein also reads the guide as reference conditioning, so strength
+#: 1.0 is already a full re-render close to the reference (MEASURED on the
+#: 4070, round-6 reference at 688x384: SSIM 0.943, MAE 12.5/255) and at <= 0.8
+#: the output is a near-copy (SSIM 0.998, MAE 1-2/255). Start at 1.0 and step
+#: down gently so the target is met by the most re-rendered result, not a copy.
+_IMG2IMG_START = 1.0
+#: The largest single cut; the smallest is one sampler step (1/IMG2IMG_MIN_STEPS).
+_IMG2IMG_MAX_CUT = 0.1
+_IMG2IMG_FLOOR = 0.02
+#: Rounds at the floor strength without improvement before the loop admits it.
+_IMG2IMG_FLOOR_PATIENCE = 3
+#: Longest side for reference-sized renders: a 2730 px portrait does not fit a
+#: 12 GB card, and the scorer compares at a fixed size anyway.
+_REFERENCE_RENDER_MAX_SIDE = 1536
 
 
 def colour_name(hex_value: str) -> str:
@@ -515,127 +535,157 @@ class ReproduceHandler(StateHandlerBase):
             self._running.discard(job_id)
 
     def _loop(self, job: ReproduceJob, base_seed: int | None, provider: LLMProvider | None) -> None:
-            import time
-    
-            seed0 = base_seed if base_seed is not None else int(time.time()) % 2147483647
-            reference = self._features(self._reference_path(job))
-            extra_phrases: list[str] = []
-            previous_best = _best_score(job)
-            start_round = len(job.rounds)
-    
-            # Escalation ladder: strategies tried in order when the score plateaus.
-            _STRATEGIES = ("prompt_refinement", "seed_search", "reference_conditioning", "same_resolution")
-            strategy_idx = 0
-            plateau_rounds = 0
-            round_count = 0
-    
-            while True:
-                if job.id in self._cancelled:
-                    return self._finish(job, "cancelled", "Cancelled")
-    
-                active_max = job.budget.max_rounds
-                if active_max is not None and round_count >= active_max:
-                    job.message = f"Max rounds ({active_max}) reached"
-                    self._save(job)
-                    break
-    
-                strategy = _STRATEGIES[strategy_idx]
-                index = start_round + round_count + 1
-    
-                compiled = self._compile(job, extra_phrases=extra_phrases, seed=seed0)
-                prompt = job.prompt_override or compiled.prompt
-                negative = compiled.negative_prompt
-                job.prompt, job.negative_prompt = prompt, negative
-                current = ReproduceRound(
-                    index=index, prompt=prompt, negative_prompt=negative,
-                    target=job.target, style=str(compiled.style),
-                    hints_applied=list(compiled.hints_applied), strategy=strategy,
-                )
-                job.rounds.append(current)
-                job.status = "rendering"
-                job.message = f"Round {index} [{strategy}]: rendering {job.budget.candidates_per_round} candidates"
+        import time
+
+        seed0 = base_seed if base_seed is not None else int(time.time()) % 2147483647
+        reference_path = self._reference_path(job)
+        reference = self._features(reference_path)
+        extra_phrases: list[str] = []
+        previous_best = _best_score(job)
+        start_round = len(job.rounds)
+        target = job.budget.target_score
+
+        strategy_idx = 0
+        plateau_rounds = 0
+        round_count = 0
+        img2img_model: str | None = None
+        strength = _IMG2IMG_START
+        floor_rounds = 0
+
+        while True:
+            if job.id in self._cancelled:
+                return self._finish(job, "cancelled", "Cancelled")
+
+            active_max = job.budget.max_rounds
+            if active_max is not None and round_count >= active_max:
+                job.message = f"Max rounds ({active_max}) reached"
                 self._save(job)
-    
-                for n in range(job.budget.candidates_per_round):
-                    if job.id in self._cancelled:
-                        current.finished_at = _now()
-                        return self._finish(job, "cancelled", "Cancelled")
-                    seed = (seed0 + index * 100 + n) % 2147483647
-                    current.seeds.append(seed)
-                    denom = active_max if active_max is not None else 50
-                    progress = ((round_count + n / job.budget.candidates_per_round) / denom) * 100
-                    job.progress = min(round(progress, 1), 99.9)
-                    job.message = f"Round {index} [{strategy}]: candidate {n + 1}"
-                    self._save(job)
-                    self._jobs.progress(job.job_id, progress, job.message)
-                    candidate = self._render_one(job, prompt, negative, compiled, seed, index)
-                    if candidate is None:
-                        continue
-                    job.status = "scoring"
-                    candidate.scores = self._score(reference, self._dir(job.id) / candidate.path)
-                    job.candidates.append(candidate)
-                    self._record(job, candidate, picked=False)
-                    if job.best() is None or candidate.scores.composite > _best_score(job):
-                        job.best_candidate_id = candidate.id
-                    if candidate.scores.composite > current.best_score:
-                        current.best_score, current.best_candidate_id = candidate.scores.composite, candidate.id
-                    job.status = "rendering"
-                    self._save(job)
-    
-                current.finished_at = _now()
-                best_now = _best_score(job)
-    
-                if best_now >= job.budget.target_score:
-                    current.note = f"Target {job.budget.target_score:.2f} reached with {strategy}"
-                    self._save(job)
-                    return self._finish(job, "complete",
-                                        f"Target {job.budget.target_score:.2f} reached at {best_now:.2f}")
-    
-                improvement = best_now - previous_best
-                if improvement >= _PLATEAU:
-                    plateau_rounds = 0
-                    previous_best = best_now
-                else:
-                    plateau_rounds += 1
-    
-                if plateau_rounds >= 2:
-                    if strategy_idx < len(_STRATEGIES) - 1:
-                        strategy_idx += 1
-                        plateau_rounds = 0
-                        current.note = f"Plateau at {best_now:.2f}; escalating to {_STRATEGIES[strategy_idx]}"
-                    else:
-                        current.note = f"Plateau at {best_now:.2f} - all strategies tried"
+                break
+
+            strategy = _STRATEGIES[strategy_idx]
+            index = start_round + round_count + 1
+            size = self._reference_render_size(job) if strategy in ("same_resolution", "reference_conditioning") else None
+            init = (reference_path, strength, img2img_model) if strategy == "reference_conditioning" and img2img_model else None
+
+            compiled = self._compile(job, extra_phrases=extra_phrases, seed=seed0)
+            prompt = job.prompt_override or compiled.prompt
+            negative = compiled.negative_prompt
+            job.prompt, job.negative_prompt = prompt, negative
+            current = ReproduceRound(
+                index=index, prompt=prompt, negative_prompt=negative,
+                target=job.target, style=str(compiled.style),
+                hints_applied=list(compiled.hints_applied), strategy=strategy,
+            )
+            job.rounds.append(current)
+            label = f"{strategy} @ strength {strength:.2f}" if init else strategy
+            job.status = "rendering"
+            job.message = f"Round {index} [{label}]: rendering {job.budget.candidates_per_round} candidates"
+            self._save(job)
+
+            for n in range(job.budget.candidates_per_round):
+                if job.id in self._cancelled:
+                    current.finished_at = _now()
+                    return self._finish(job, "cancelled", "Cancelled")
+                seed = (seed0 + index * 100 + n) % 2147483647
+                current.seeds.append(seed)
+                denom = active_max if active_max is not None else 50
+                progress = ((round_count + n / job.budget.candidates_per_round) / denom) * 100
+                job.progress = min(round(progress, 1), 99.9)
+                job.message = f"Round {index} [{label}]: candidate {n + 1}"
+                self._save(job)
+                self._jobs.progress(job.job_id, progress, job.message)
+                candidate = self._render_one(job, prompt, negative, compiled, seed, index, size=size, init=init)
+                if candidate is None:
+                    continue
+                job.status = "scoring"
+                candidate.scores = self._score(reference, self._dir(job.id) / candidate.path)
+                job.candidates.append(candidate)
+                self._record(job, candidate, picked=False)
+                if job.best() is None or candidate.scores.composite > _best_score(job):
+                    job.best_candidate_id = candidate.id
+                if candidate.scores.composite > current.best_score:
+                    current.best_score, current.best_candidate_id = candidate.scores.composite, candidate.id
+                job.status = "rendering"
+                self._save(job)
+
+            current.finished_at = _now()
+            best_now = _best_score(job)
+
+            if best_now >= target:
+                current.note = f"Target {target:.2f} reached with {label}"
+                self._save(job)
+                return self._finish(job, "complete", f"Target {target:.2f} reached at {best_now:.2f}")
+
+            best = job.best()
+            if best is None:
+                current.note = "No candidate was produced"
+                self._save(job)
+                break
+
+            improvement = best_now - previous_best
+            if improvement >= _PLATEAU:
+                plateau_rounds = 0
+                previous_best = best_now
+            else:
+                plateau_rounds += 1
+
+            if init is not None:
+                # Converging rung: never escalate, never give up while the
+                # strength can still fall. Step down by the gap left - one
+                # sampler step when close, _IMG2IMG_MAX_CUT when far - so the
+                # first strength that meets the target is about the highest one.
+                round_best = current.best_score
+                cut = min(_IMG2IMG_MAX_CUT, max(1.0 / IMG2IMG_MIN_STEPS, target - round_best))
+                next_strength = max(_IMG2IMG_FLOOR, round(strength - cut, 4))
+                if strength <= _IMG2IMG_FLOOR:
+                    floor_rounds = 0 if improvement >= _PLATEAU else floor_rounds + 1
+                    if floor_rounds >= _IMG2IMG_FLOOR_PATIENCE:
+                        current.note = f"Best {best_now:.2f} at the lowest strength {strength:.2f}"
                         self._save(job)
                         return self._finish(
                             job, "plateau",
-                            f"Target not reached: best {best_now:.2f} after {', '.join(_STRATEGIES)}"
+                            f"Target not reached: best {best_now:.2f} even at img2img strength {strength:.2f} with {img2img_model}",
                         )
-    
-                best = job.best()
-                if best is None:
-                    current.note = "No candidate was produced"
-                    self._save(job)
-                    break
-    
-                if strategy == "prompt_refinement":
-                    patches = self._metric_patches(job, best.scores, self._dir(job.id) / best.path)
-                    if improvement < _PLATEAU and provider is not None:
-                        patches.extend(self._vlm_patches(job, best, provider))
-                    current.patches = patches
-                    extra_phrases = list(dict.fromkeys([*extra_phrases, *(p.phrase for p in patches if p.phrase)]))
-                elif strategy == "seed_search":
-                    current.note = "Seed search around best candidate"
-                elif strategy == "reference_conditioning":
-                    current.note = "Reference conditioning: img2img from reference"
-                elif strategy == "same_resolution":
-                    current.note = "Matching reference resolution exactly"
-    
-                round_count += 1
-                self._save(job)
-    
-            best_final = _best_score(job)
-            msg = "No candidate was produced" if not job.candidates else f"Best {best_final:.2f} (target was {job.budget.target_score:.2f})"
-            return self._finish(job, "complete", msg)
+                current.note = f"img2img strength {strength:.2f} gave {round_best:.3f}; next {next_strength:.2f}"
+                strength = next_strength
+            elif plateau_rounds >= 2:
+                strategy_idx += 1
+                plateau_rounds = 0
+                if _STRATEGIES[strategy_idx] == "reference_conditioning":
+                    img2img_model = self._image_generation.img2img_model(job.render_model or job.image_model)
+                    if img2img_model is None:
+                        current.note = f"Plateau at {best_now:.2f}; no img2img model installed"
+                        self._save(job)
+                        return self._finish(
+                            job, "plateau",
+                            f"Target not reached: best {best_now:.2f}. Text-to-image stops here; converging on the "
+                            "reference needs img2img, which needs FLUX.2 Klein installed (Models tab)",
+                        )
+                current.note = f"Plateau at {best_now:.2f}; escalating to {_STRATEGIES[strategy_idx]}"
+                if img2img_model:
+                    current.note += f" with {img2img_model}"
+
+            if strategy == "prompt_refinement":
+                patches = self._metric_patches(job, best.scores, self._dir(job.id) / best.path)
+                if improvement < _PLATEAU and provider is not None:
+                    patches.extend(self._vlm_patches(job, best, provider))
+                current.patches = patches
+                extra_phrases = list(dict.fromkeys([*extra_phrases, *(p.phrase for p in patches if p.phrase)]))
+
+            round_count += 1
+            self._save(job)
+
+        best_final = _best_score(job)
+        msg = "No candidate was produced" if not job.candidates else f"Best {best_final:.2f} (target was {target:.2f})"
+        return self._finish(job, "complete", msg)
+
+    @staticmethod
+    def _reference_render_size(job: ReproduceJob) -> tuple[int, int]:
+        """The reference's own size, capped for the card and snapped to 16."""
+        width, height = max(job.width, 1), max(job.height, 1)
+        scale = min(1.0, _REFERENCE_RENDER_MAX_SIDE / max(width, height))
+        return max(64, int(width * scale) // 16 * 16), max(64, int(height * scale) // 16 * 16)
+
     def _finish(self, job: ReproduceJob, status: str, message: str) -> None:
         job.status = status  # type: ignore[assignment]
         job.message = message
@@ -655,17 +705,25 @@ class ReproduceHandler(StateHandlerBase):
         pinned = job.candidate(job.reference_candidate_id) if job.reference_candidate_id else None
         return self._dir(job.id) / (pinned.path if pinned else job.source_path)
 
-    def _render_one(self, job: ReproduceJob, prompt: str, negative: str, compiled: SpecCompileResult, seed: int, round_index: int) -> ReproduceCandidate | None:
+    def _render_one(
+        self, job: ReproduceJob, prompt: str, negative: str, compiled: SpecCompileResult, seed: int, round_index: int,
+        *, size: tuple[int, int] | None = None, init: tuple[Path, float, str] | None = None,
+    ) -> ReproduceCandidate | None:
+        """One candidate. `size` overrides the compiled resolution; `init`
+        (image, strength, model) renders img2img from that image."""
         params = compiled.params
-        width = params.width or job.width
-        height = params.height or job.height
+        width, height = size or (params.width or job.width, params.height or job.height)
+        model = init[2] if init else job.render_model
         request = GenerateImageRequest(
             prompt=prompt, width=width, height=height,
             numSteps=params.steps, numImages=1,
-            loras=list(job.loras), model=job.render_model,
+            loras=list(job.loras), model=model,
         )
         try:
-            result = self._image_generation.generate(request, seed=seed)
+            if init:
+                result = self._image_generation.generate(request, seed=seed, init_image=init[0], denoise_strength=init[1])
+            else:
+                result = self._image_generation.generate(request, seed=seed)
         except HTTPError as exc:
             if exc.status_code == 507:
                 raise
@@ -688,11 +746,11 @@ class ReproduceHandler(StateHandlerBase):
             prompt=prompt,
             negative_prompt=negative,
             seed=seed,
-            params={"steps": params.steps, "guidance": params.guidance, "width": width, "height": height},
+            params={"steps": params.steps, "guidance": params.guidance, "width": width, "height": height, **({"denoise_strength": init[1]} if init else {})},
             round=round_index,
             # The model that actually rendered this candidate, so History and
             # the per-model comparison read the truth rather than the default.
-            model=job.render_model or job.image_model,
+            model=model or job.image_model,
             target=job.target,
             job_id=child[0].id if child and child[0].parent_job_id == job.job_id else "",
         )

@@ -36,6 +36,16 @@ _QWEN_IMAGE_RESOLUTIONS: tuple[tuple[int, int], ...] = (
     (1472, 1140),
     (1140, 1472),
 )
+#: Image models WanGP can run img2img with: FLUX.2's "Masked Denoising"
+#: inpaint mode starts from the guide image's latents when
+#: `denoising_strength` < 1 (models/flux/sampling.py:629-639). Z-Image has no
+#: partial-denoise path, so it is absent on purpose.
+IMG2IMG_MODEL_TYPES: tuple[str, ...] = ("flux2_klein_4b", "flux2_klein_9b", "flux2_dev")
+#: Denoising strength is quantised to whole steps (first step =
+#: int(steps * (1 - strength))), so the few-step default leaves low strengths
+#: with no resolution at all.
+IMG2IMG_MIN_STEPS = 24
+
 _TQDM_PROGRESS_RE = re.compile(r"(?:(?P<label>.*?):\s+)?(?P<percent>\d{1,3})%\|[^|]*\|\s*(?P<current>\d+)/(?P<total>\d+)")
 
 
@@ -298,11 +308,17 @@ class WanGPBridge:
         is_cancelled: CancelledCallback,
         loras: Sequence[tuple[str, float]] = (),
         model_type: str | None = None,
+        init_image: str | None = None,
+        denoise_strength: float = 1.0,
     ) -> list[str]:
+        """Text-to-image, or img2img from `init_image` when one is given."""
+        chosen = model_type or self._image_model_type
+        if init_image and not self.supports_img2img(chosen):
+            raise RuntimeError(f"'{chosen}' cannot render from a reference image; img2img needs one of {', '.join(IMG2IMG_MODEL_TYPES)}")
         mapped_width, mapped_height = self._map_image_resolution(width, height)
         normalized_steps = self._normalize_image_steps(num_steps)
         settings: dict[str, object] = {
-            "model_type": model_type or self._image_model_type,
+            "model_type": chosen,
             "prompt": prompt,
             "resolution": f"{mapped_width}x{mapped_height}",
             "num_inference_steps": normalized_steps,
@@ -311,6 +327,8 @@ class WanGPBridge:
         }
         if seed is not None:
             settings["seed"] = seed
+        if init_image:
+            settings.update(self._img2img_settings(Path(init_image), denoise_strength, normalized_steps))
 
         self._apply_loras(settings, loras)
         outputs = self._run_manifest(
@@ -322,6 +340,35 @@ class WanGPBridge:
         if not outputs:
             raise RuntimeError("WanGP completed without producing any images")
         return outputs
+
+    @staticmethod
+    def supports_img2img(model_type: str) -> bool:
+        return model_type in IMG2IMG_MODEL_TYPES
+
+    def _img2img_settings(self, init_image: Path, strength: float, steps: int) -> dict[str, object]:
+        """Masked Denoising over the whole frame: the reference is the guide,
+        an all-white mask regenerates every pixel, and the strength decides
+        how far from the reference the result may move."""
+        from PIL import Image
+
+        guide = init_image.resolve()
+        with Image.open(guide) as image:
+            size = image.size
+        masks = self._output_dir / "img2img_masks"
+        masks.mkdir(parents=True, exist_ok=True)
+        mask = masks / f"white-{size[0]}x{size[1]}.png"
+        if not mask.is_file():
+            Image.new("L", size, 255).save(mask)
+        return {
+            "image_mode": 2,
+            "video_prompt_type": "VAG",
+            "model_mode": 0,
+            "image_guide": str(guide),
+            "image_mask": str(mask.resolve()),
+            "denoising_strength": round(min(1.0, max(0.0, strength)), 4),
+            "masking_strength": 1.0,
+            "num_inference_steps": max(steps, IMG2IMG_MIN_STEPS),
+        }
 
     @staticmethod
     def compute_num_frames(duration_seconds: int, fps: int) -> int:

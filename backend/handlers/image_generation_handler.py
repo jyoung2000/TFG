@@ -20,7 +20,7 @@ from handlers.vision_handler import VisionHandler
 from handlers.generation_handler import GenerationHandler
 from handlers.pipelines_handler import PipelinesHandler
 from services.interfaces import ZitAPIClient
-from services.wangp_bridge import WanGPBridge
+from services.wangp_bridge import IMG2IMG_MODEL_TYPES, WanGPBridge
 from state.app_state_types import AppState
 
 if TYPE_CHECKING:
@@ -79,8 +79,13 @@ class ImageGenerationHandler(StateHandlerBase):
         *,
         job_id: str | None = None,
         seed: int | None = None,
+        init_image: Path | None = None,
+        denoise_strength: float = 1.0,
     ) -> GenerateImageResponse:
-        """Render images. `job_id` reuses an existing History job; `seed` pins the seed (re-runs)."""
+        """Render images. `job_id` reuses an existing History job; `seed` pins the seed (re-runs).
+
+        `init_image` + `denoise_strength` < 1 render img2img from that image
+        (WanGP FLUX.2 only - see `img2img_model`)."""
         if self._generation.is_generation_running():
             raise HTTPError(409, "Generation already in progress")
         # F-034: bound dimensions before any pipeline or CUDA work — 99999²
@@ -94,10 +99,10 @@ class ImageGenerationHandler(StateHandlerBase):
             if self._vision is not None:
                 model_type = self._config.wangp_image_model_type if self._config.wangp_enabled else "z_image"
                 with self._vision.render_scope(model_type) as scope:
-                    response = self._dispatch(req, tracked, seed)
+                    response = self._dispatch(req, tracked, seed, init_image, denoise_strength)
                 peak_mb = scope.peak_mb
             else:
-                response = self._dispatch(req, tracked, seed)
+                response = self._dispatch(req, tracked, seed, init_image, denoise_strength)
         except HTTPError as exc:
             self._close_job(tracked, error=str(exc.detail))
             raise
@@ -108,6 +113,19 @@ class ImageGenerationHandler(StateHandlerBase):
             self._jobs.annotate(tracked, metrics={"peak_vram_mb": peak_mb})
         self._close_job(tracked, response=response)
         return response
+
+    def img2img_model(self, preferred: str = "") -> str | None:
+        """The installed model that can render from a reference image.
+
+        `preferred` wins when it can; otherwise the first img2img-capable
+        model whose weights are on disk. None when there is none - the local
+        Z-Image pipeline and WanGP's Z-Image have no partial-denoise path."""
+        if not self._config.wangp_enabled:
+            return None
+        preferred = preferred.strip() or self._config.wangp_image_model_type
+        if self._wangp_bridge.supports_img2img(preferred) and self._wangp_bridge.weights_installed(preferred) is not False:
+            return preferred
+        return next((m for m in IMG2IMG_MODEL_TYPES if self._wangp_bridge.weights_installed(m) is True), None)
 
     def cancel_current(self) -> None:
         """Cancel whatever image generation is running (used by the Reproduce loop)."""
@@ -160,9 +178,14 @@ class ImageGenerationHandler(StateHandlerBase):
         if job_id and self._jobs is not None:
             self._jobs.annotate(job_id, seed=seed)
 
-    def _dispatch(self, req: GenerateImageRequest, job_id: str, seed_override: int | None) -> GenerateImageResponse:
+    def _dispatch(
+        self, req: GenerateImageRequest, job_id: str, seed_override: int | None,
+        init_image: Path | None = None, denoise_strength: float = 1.0,
+    ) -> GenerateImageResponse:
         if self._config.wangp_enabled:
-            return self._generate_via_wangp(req, job_id=job_id, seed_override=seed_override)
+            return self._generate_via_wangp(req, job_id=job_id, seed_override=seed_override, init_image=init_image, denoise_strength=denoise_strength)
+        if init_image is not None:
+            raise HTTPError(400, "Rendering from a reference image needs WanGP with FLUX.2 installed")
 
         if self._generation.is_generation_running():
             raise HTTPError(409, "Generation already in progress")
@@ -218,7 +241,8 @@ class ImageGenerationHandler(StateHandlerBase):
             raise HTTPError(500, str(e)) from e
 
     def _generate_via_wangp(
-        self, req: GenerateImageRequest, *, job_id: str = "", seed_override: int | None = None
+        self, req: GenerateImageRequest, *, job_id: str = "", seed_override: int | None = None,
+        init_image: Path | None = None, denoise_strength: float = 1.0,
     ) -> GenerateImageResponse:
         if self._generation.is_generation_running():
             raise HTTPError(409, "Generation already in progress")
@@ -262,6 +286,8 @@ class ImageGenerationHandler(StateHandlerBase):
                 is_cancelled=self._generation.is_generation_cancelled,
                 loras=[(lora.name, lora.multiplier) for lora in req.loras if Path(lora.name).is_file()],
                 model_type=model_type,
+                init_image=str(init_image) if init_image is not None else None,
+                denoise_strength=denoise_strength,
             )
             self._generation.complete_generation(output_paths)
             return GenerateImageResponse(status="complete", image_paths=output_paths)
@@ -279,7 +305,7 @@ class ImageGenerationHandler(StateHandlerBase):
                 if stop_fn is not None:
                     stop_fn()
                 try:
-                    return self._generate_via_wangp(req, job_id=job_id, seed_override=seed_override)
+                    return self._generate_via_wangp(req, job_id=job_id, seed_override=seed_override, init_image=init_image, denoise_strength=denoise_strength)
                 except Exception as retry_e:
                     if self._generation.is_generation_cancelled() or "cancelled" in str(retry_e).lower():
                         self._generation.cancel_generation()
