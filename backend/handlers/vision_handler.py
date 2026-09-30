@@ -327,14 +327,22 @@ class VisionHandler(StateHandlerBase):
             name = str(item.get("name", "") or "")
             if not name:
                 continue
+            # /api/tags puts `digest` at the TOP level (verified live), not in
+            # `details`, and already carries `capabilities` - so the common case
+            # needs no /api/show probe at all. Reading details.digest found
+            # nothing and left llava:latest and llava:7b as two phantom options.
             details = item.get("details") if isinstance(item.get("details"), dict) else {}
-            digest = str(cast(dict[str, Any], details).get("digest", "") or "")
+            digest = str(item.get("digest", "") or cast(dict[str, Any], details).get("digest", "") or "")
             key = digest or name
             if key in seen:
                 continue
             seen.add(key)
             size = item.get("size")
-            capabilities = self._probe_capabilities(root, name)
+            raw_caps = item.get("capabilities")
+            if isinstance(raw_caps, list) and raw_caps:
+                capabilities = [str(c) for c in raw_caps]
+            else:
+                capabilities = self._probe_capabilities(root, name)
             entries.append(VisionModelEntry(
                 id=name,
                 name=name,

@@ -400,12 +400,11 @@ class TestVisionModelPicker:
         # a picker that offers both is a phantom second option.
         http = fake_services.http
         http.queue("get", FakeResponse(200, json_payload={"models": [
-            {"name": "llava:latest", "size": 4_700_000_000, "details": {"digest": "8dd30f6b0cb5"}},
-            {"name": "llava:7b", "size": 4_700_000_000, "details": {"digest": "8dd30f6b0cb5"}},
+            {"name": "llava:latest", "size": 4_700_000_000, "digest": "8dd30f6b0cb5",
+             "capabilities": ["completion", "vision"]},
+            {"name": "llava:7b", "size": 4_700_000_000, "digest": "8dd30f6b0cb5",
+             "capabilities": ["completion", "vision"]},
         ]}))
-        for _ in range(2):
-            http.queue("post", FakeResponse(200, json_payload={"capabilities": ["completion", "vision"]}))
-
         models = client.get("/api/vision/models").json()["models"]
         names = [m["id"] for m in models]
         assert len(names) == len(set(names)), names
