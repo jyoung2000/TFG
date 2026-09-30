@@ -23,6 +23,10 @@ extraResources:
     filter:
       - "**/*.py"
       - pyproject.toml
+      # Runtime data the backend reads: CLIP style-tag term lists and the
+      # media capability catalog (both were silently missing before).
+      - "services/vision/clip_data/**"
+      - "film/data/**"
       - "!**/__pycache__/**"
       - "!**/*.pyc"
       - "!.venv/**"

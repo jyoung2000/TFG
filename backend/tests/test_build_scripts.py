@@ -149,3 +149,35 @@ def test_the_default_output_folder_is_unchanged_when_no_override_is_given() -> N
     release = _script("wangp-release.ps1")
     assert "Join-Path $ProjectDir 'release-wangp'" in release
     assert "if ($OutputDir)" in release, "the override must be conditional"
+
+
+def test_backend_runtime_data_files_are_packaged() -> None:
+    """The backend resource filter was `**/*.py` + `pyproject.toml`, so every
+    data file the backend reads at runtime was left out of the installed app,
+    silently: the CLIP term lists (services/vision/clip_data/*.txt - style
+    tags came back empty, MEASURED on job ia-da9ab2af6672) and the media
+    capability catalog (film/data/model_catalog.json - load_catalog() returns
+    an empty catalog when the file is missing)."""
+    from fnmatch import fnmatch
+
+    lines = (REPO_ROOT / "electron-builder.yml").read_text(encoding="utf-8").splitlines()
+    start = next(i for i, line in enumerate(lines) if line.strip() == "- from: backend")
+    patterns: list[str] = []
+    for line in lines[start + 1:]:
+        text = line.strip()
+        if text.startswith("- from:"):
+            break
+        if text.startswith('- "') or text.startswith("- "):
+            patterns.append(text[2:].strip().strip('"'))
+    includes = [p for p in patterns if not p.startswith("!") and p not in ("filter:",)]
+
+    tracked = subprocess.run(["git", "ls-files", "backend"], cwd=REPO_ROOT, capture_output=True, text=True, check=True).stdout.split()
+    dev_only = {"pyrightconfig.json", "vision-requirements.txt", "install_sageattention.bat", "py.typed", "uv.lock"}
+    runtime_data = [
+        f[len("backend/"):] for f in tracked
+        if not f.endswith((".py", ".md", ".pyi")) and "/tests/" not in f and not f.startswith("backend/tests/")
+        and Path(f).name not in dev_only and not Path(f).name.startswith(".")
+    ]
+    assert runtime_data, "expected the backend's runtime data files"
+    missing = [f for f in runtime_data if not any(fnmatch(f, p) or fnmatch(f, p.replace("**/", "")) for p in includes)]
+    assert missing == [], f"not packaged into the installed app: {missing}"
