@@ -290,6 +290,79 @@ class VisionHandler(StateHandlerBase):
 
     # ---- render arbitration -------------------------------------------------
 
+    def list_image_models(self) -> Any:
+        """Models this app can read an image with, for the "Analyse with" picker.
+
+        Every model the configured vision provider serves is listed. A text-only
+        model comes back with `can_analyse_images: False` rather than being
+        dropped, so the user can see what they have and why it is not offered.
+        Two names sharing one digest (llava:latest and llava:7b) collapse to a
+        single entry, because they are the same weights and offering both is a
+        phantom option.
+        """
+        from _routes.vision import VisionModelEntry, VisionModelListResponse
+
+        with self.lock:
+            vision = self._state.app_settings.model_copy(deep=True).vision
+        if vision.vlm_provider != "ollama" or not vision.vlm_base_url.strip():
+            return VisionModelListResponse(models=[], note="Set a vision provider in Settings \u2192 Vision.")
+        root = self._ollama_target(vision)[0]
+        if not root:
+            return VisionModelListResponse(models=[], note="Set a vision provider in Settings \u2192 Vision.")
+        try:
+            response = self._http.get(f"{root}/api/tags", timeout=5)
+            if response.status_code != 200:
+                return VisionModelListResponse(models=[], note=f"Ollama answered HTTP {response.status_code}.")
+            payload = cast(dict[str, Any], response.json())
+        except Exception as exc:  # noqa: BLE001 - an absent provider is a state, not a crash
+            logger.info("Could not list Ollama models: %s", exc)
+            return VisionModelListResponse(models=[], note=f"Could not reach Ollama at {root}.")
+
+        entries: list[Any] = []
+        seen: set[str] = set()
+        for row in cast(list[Any], payload.get("models", []) or []):
+            if not isinstance(row, dict):
+                continue
+            item = cast(dict[str, Any], row)
+            name = str(item.get("name", "") or "")
+            if not name:
+                continue
+            details = item.get("details") if isinstance(item.get("details"), dict) else {}
+            digest = str(cast(dict[str, Any], details).get("digest", "") or "")
+            key = digest or name
+            if key in seen:
+                continue
+            seen.add(key)
+            size = item.get("size")
+            capabilities = self._probe_capabilities(root, name)
+            entries.append(VisionModelEntry(
+                id=name,
+                name=name,
+                provider="ollama",
+                size_gb=round(float(size) / 1_000_000_000, 1) if isinstance(size, (int, float)) else None,
+                can_analyse_images="vision" in capabilities,
+                detail=", ".join(capabilities),
+            ))
+        entries.sort(key=lambda e: (not e.can_analyse_images, str(e.id)))
+        return VisionModelListResponse(models=entries)
+
+    def _probe_capabilities(self, root: str, model: str) -> list[str]:
+        try:
+            response = self._http.post(
+                f"{root}/api/show",
+                headers={"Content-Type": "application/json"},
+                json_payload={"model": model},
+                timeout=20,
+            )
+            if response.status_code != 200:
+                return []
+            payload = cast(dict[str, Any], response.json())
+            caps = payload.get("capabilities", [])
+            return [str(c) for c in caps] if isinstance(caps, list) else []
+        except Exception as exc:  # noqa: BLE001 - a failed probe leaves it text-only
+            logger.info("Capability probe for %s failed: %s", model, exc)
+            return []
+
     def prepare_for_render(self, model_type: str) -> None:
         """Raise an actionable HTTPError instead of letting CUDA OOM."""
         try:

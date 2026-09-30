@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app_handler import AppHandler
 from handlers.vision_handler import VisionAnalysis, VramStatus
@@ -37,6 +39,24 @@ class UnloadResponse(BaseModel):
     unloaded: list[str]
 
 
+class VisionModelEntry(BaseModel):
+    """One model the "Analyse with" picker can offer."""
+    id: str
+    name: str = ""
+    provider: str = "ollama"
+    size_gb: float | None = None
+    #: False for a text-only model: still listed, never offered as a choice.
+    can_analyse_images: bool = False
+    detail: str = ""
+
+
+class VisionModelListResponse(BaseModel):
+    models: list[VisionModelEntry] = Field(default_factory=list[VisionModelEntry])
+    #: Set when the vision provider could not be reached, so the UI says why the
+    #: list is empty rather than showing a picker with nothing in it.
+    note: str = ""
+
+
 @router.get("/status", response_model=VisionStatusResponse)
 def route_vision_status(handler: AppHandler = Depends(get_state_service)) -> VisionStatusResponse:
     vlm = handler.vision.optional_vlm(handler.film_director.optional_provider("storyboard"))
@@ -46,6 +66,19 @@ def route_vision_status(handler: AppHandler = Depends(get_state_service)) -> Vis
         cache=handler.vision.cache_summary(),
         vlm=f"{vlm.name}:{vlm.model}" if vlm is not None else "",
     )
+
+
+@router.get("/models", response_model=VisionModelListResponse)
+def route_vision_models(handler: AppHandler = Depends(get_state_service)) -> VisionModelListResponse:
+    """Every model the configured vision provider serves.
+
+    Powers the "Analyse with" picker in Reproduce image and Reproduce video.
+    A text-only model is returned with `can_analyse_images: False` rather than
+    dropped, so a model the user has on disk is never silently missing; and two
+    names sharing one digest collapse to one entry, because `llava:latest` and
+    `llava:7b` are the same weights and offering both is a phantom option.
+    """
+    return handler.vision.list_image_models()
 
 
 @router.post("/analyze", response_model=VisionAnalysis)

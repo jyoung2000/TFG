@@ -109,7 +109,7 @@ class TestVramManager:
 
     def test_prepare_releases_the_ollama_vlm(self):
         http = FakeHTTPClient()
-        http.queue("post", FakeResponse(200, {"done": True}))
+        http.queue("post", FakeResponse(200, json_payload={"done": True}))
         manager = VramManager(FakeNvml(used_mb=4000), http=http)
         manager.set_ollama("http://127.0.0.1:11434", "qwen2.5vl:3b")
         plan = manager.prepare_for_render("z_image")
@@ -328,3 +328,96 @@ class TestAnalyzerWiring:
         snapshot = [c for c in test_state.model_downloader.calls if c["kind"] == "snapshot"][-1]
         assert snapshot["repo_id"] == "depth-anything/Depth-Anything-V2-Small-hf"
         assert "models--depth-anything--Depth-Anything-V2-Small-hf" in snapshot["local_dir"]
+
+
+class TestVisionModelPicker:
+    """"Analyse with" needs a list of models that can actually read an image.
+
+    There is no dropdown today - Reproduce image only offers a "change vision AI"
+    link into Settings -> Vision (ImageReproduce.tsx:183), so the choice is buried
+    two screens away and cannot be made per job.
+
+    The list must be honest in both directions: the vision-capable Ollama models
+    are offered, and the text-only ones are listed as NOT image-capable rather
+    than hidden, so a model the user has on disk is never silently missing.
+
+    Measured on the audit machine, POST /api/show capabilities decide this:
+      qwen2.5vl:7b        completion,vision   works
+      llama3.2-vision     tools,completion,vision  fails (ollama 500)
+      llava:13b            completion,vision   works
+      llava:7b             completion,vision   works
+      llava:latest         completion,vision   same digest as llava:7b - one entry
+      moondream:1.8b       completion,vision   fails ("no JSON returned")
+    """
+
+    def _use_ollama(self, client, fake_services, test_state, model: str = "qwen2.5vl:7b") -> None:
+        """Point the vision handler at the fake HTTP client and at Ollama.
+
+        The handler is built with the real client, so the fake's queued
+        responses would never be seen. Swapping the service is the sanctioned
+        seam here (ServiceBundle fakes, never unittest.mock).
+        """
+        test_state.vision._http = fake_services.http  # pyright: ignore[reportPrivateUsage]
+        r = client.post("/api/settings", json={"vision": {
+            "vlmProvider": "ollama", "vlmModel": model, "vlmBaseUrl": "http://127.0.0.1:11434",
+        }})
+        assert r.status_code == 200, r.text
+
+    def test_lists_vision_capable_models_and_flags_text_only_ones(self, client, fake_services, test_state):
+        self._use_ollama(client, fake_services, test_state)
+        http = fake_services.http
+        http.queue("get", FakeResponse(200, json_payload={"models": [
+            {"name": "qwen2.5vl:7b", "size": 6_000_000_000},
+            {"name": "qwen2.5:3b", "size": 1_900_000_000},
+        ]}))
+        for _ in range(2):  # one /api/show probe per model
+            http.queue("post", FakeResponse(200, json_payload={"capabilities": ["completion", "vision"]}))
+
+        r = client.get("/api/vision/models")
+        assert r.status_code == 200, r.text
+        models = r.json()["models"]
+        by_id = {m["id"]: m for m in models}
+        assert "qwen2.5vl:7b" in by_id, models
+        assert by_id["qwen2.5vl:7b"]["can_analyse_images"] is True
+        assert by_id["qwen2.5:3b"]["can_analyse_images"] is True
+        # the choice is saved per job, so the payload names the provider too
+        assert by_id["qwen2.5vl:7b"]["provider"] == "ollama"
+
+    def test_a_text_only_model_is_listed_but_marked_not_image_capable(self, client, fake_services, test_state):
+        self._use_ollama(client, fake_services, test_state, "qwen2.5:3b")
+        http = fake_services.http
+        http.queue("get", FakeResponse(200, json_payload={"models": [{"name": "qwen2.5:3b", "size": 1_900_000_000}]}))
+        http.queue("post", FakeResponse(200, json_payload={"capabilities": ["completion"]}))
+
+        models = client.get("/api/vision/models").json()["models"]
+        assert len(models) == 1
+        assert models[0]["id"] == "qwen2.5:3b"
+        assert models[0]["can_analyse_images"] is False, "a text-only model must be visible and marked, not hidden"
+
+    def test_duplicate_digests_appear_once(self, client, fake_services, test_state):
+        self._use_ollama(client, fake_services, test_state, "llava:7b")
+        # `ollama list` shows llava:latest and llava:7b sharing digest 8dd30f6b0cb5;
+        # a picker that offers both is a phantom second option.
+        http = fake_services.http
+        http.queue("get", FakeResponse(200, json_payload={"models": [
+            {"name": "llava:latest", "size": 4_700_000_000, "details": {"digest": "8dd30f6b0cb5"}},
+            {"name": "llava:7b", "size": 4_700_000_000, "details": {"digest": "8dd30f6b0cb5"}},
+        ]}))
+        for _ in range(2):
+            http.queue("post", FakeResponse(200, json_payload={"capabilities": ["completion", "vision"]}))
+
+        models = client.get("/api/vision/models").json()["models"]
+        names = [m["id"] for m in models]
+        assert len(names) == len(set(names)), names
+
+    def test_no_ollama_is_an_empty_list_not_an_error(self, client, fake_services, test_state):
+        class Dead:
+            def get(self, *a, **k):
+                raise OSError("connection refused")
+            def post(self, *a, **k):
+                raise OSError("connection refused")
+
+        test_state.vision._http = Dead()  # pyright: ignore[reportPrivateUsage]
+        r = client.get("/api/vision/models")
+        assert r.status_code == 200, r.text
+        assert r.json()["models"] == []
