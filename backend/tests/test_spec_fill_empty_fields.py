@@ -52,3 +52,58 @@ def test_locked_sections_are_left_alone():
     spec.locks["camera"] = True
     fill_empty_fields(spec, {"camera.aperture": "f/2"}, 0.6)
     assert spec.camera.aperture == ""
+
+
+class TestAFailedComponentIsRetriedNotCached:
+    """MEASURED in the installed app (2026-09-30): after Florence-2 was fixed
+    (transformers 4.54 -> 4.57.6), a re-analysis of the same image still said
+    "cannot import name 'Florence2ForConditionalGeneration'": the vision cache
+    treated the recorded *failure* as a final answer. A disabled component
+    stays cached; a failed one is retried."""
+
+    def _png(self, tmp_path):
+        from PIL import Image
+
+        path = tmp_path / "ref.png"
+        Image.new("RGB", (64, 48), (200, 30, 30)).save(path)
+        return str(path)
+
+    def test_a_component_that_failed_is_run_again(self, test_state, fake_services, tmp_path):
+        image = self._png(tmp_path)
+        original = fake_services.vision.caption
+
+        def broken(*args, **kwargs):  # noqa: ANN002, ANN003
+            raise RuntimeError("cannot import name 'Florence2ForConditionalGeneration' from 'transformers'")
+
+        fake_services.vision.caption = broken
+        first = test_state.vision.analyze(image)
+        assert first.caption is None and "caption" in first.notes
+        fake_services.vision.caption = original
+        second = test_state.vision.analyze(image)
+        assert second.caption is not None, "the cached failure was served instead of retrying"
+
+    def test_a_disabled_component_stays_cached(self, test_state, fake_services, tmp_path):
+        image = self._png(tmp_path)
+        fake_services.vision.disabled.add("florence")
+        test_state.vision.analyze(image)
+        calls: list[int] = []
+        original = fake_services.vision.caption
+        fake_services.vision.caption = lambda *a, **k: calls.append(1) or original(*a, **k)
+        test_state.vision.analyze(image)
+        assert calls == [], "a component the user switched off was retried"
+
+
+def test_the_prompt_does_not_repeat_scene_terms():
+    """MEASURED (ia-da9ab2af6672): location, environment, time of day and
+    weather all answered "studio" and the prompt read "studio, studio,
+    studio, studio"."""
+    from film.prompt_compiler import compile_from_spec
+
+    spec = ShotSpec()
+    spec.scene.location = "studio"
+    spec.scene.environment = "Studio"
+    spec.scene.time_of_day = "studio"
+    spec.scene.weather = "studio"
+    spec.scene.bg = "white"
+    prompt = compile_from_spec(spec, "z_image").prompt.lower()
+    assert "studio, studio" not in prompt and prompt.count("studio") == 1, prompt

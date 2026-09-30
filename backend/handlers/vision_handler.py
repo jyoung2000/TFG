@@ -263,13 +263,20 @@ class VisionHandler(StateHandlerBase):
 
     @staticmethod
     def _cache_satisfies(cached: VisionAnalysis, caption: bool, regions: bool, tags: bool, depth: bool) -> bool:
-        if caption and cached.caption is None and "caption" not in cached.notes:
+        def settled(component: str) -> bool:
+            # A component the user switched off is a final answer; one that
+            # *failed* (an import error, a missing model) is retried - it may
+            # have been fixed since (Florence-2 after transformers 4.57.6).
+            note = cached.notes.get(component, "")
+            return bool(note) and "disabled" in note.lower()
+
+        if caption and cached.caption is None and not settled("caption"):
             return False
-        if regions and not cached.regions and "regions" not in cached.notes:
+        if regions and not cached.regions and not settled("regions"):
             return False
-        if tags and cached.tags is None and "tags" not in cached.notes:
+        if tags and (cached.tags is None or not cached.tags.tags) and not settled("tags"):
             return False
-        if depth and (cached.depth is None or not Path(cached.depth.depth_png).is_file()) and "depth" not in cached.notes:
+        if depth and (cached.depth is None or not Path(cached.depth.depth_png).is_file()) and not settled("depth"):
             return False
         return True
 

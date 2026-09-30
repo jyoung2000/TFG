@@ -640,7 +640,13 @@ def brief_from_spec(spec: "ShotSpec") -> ShotBrief:
             label = f"{label} ({', '.join(subject.attributes)})"
         subjects.append(label)
     scene = spec.scene
-    location = ", ".join(p for p in (scene.location, scene.environment, scene.time_of_day, scene.weather) if p)
+    # Deduplicated: a studio image answers "studio" for location, environment,
+    # time of day and weather alike ("studio, studio, studio, studio").
+    seen: dict[str, str] = {}
+    for part in (scene.location, scene.environment, scene.time_of_day, scene.weather):
+        if part and part.strip():
+            seen.setdefault(part.strip().lower(), part.strip())
+    location = ", ".join(seen.values())
     layers = "; ".join(f"{name}: {value}" for name, value in (("foreground", scene.fg), ("midground", scene.mg), ("background", scene.bg)) if value)
     if layers:
         location = f"{location}. {layers}" if location else layers
