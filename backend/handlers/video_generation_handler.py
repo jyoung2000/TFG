@@ -41,6 +41,10 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+#: Wan 2.2 TI2V FastWan 5B: fits a 32 GB machine where LTX-2 22B (~39 GB of
+#: weights) pages. Start image yes; end frame / control video no.
+LIGHT_VIDEO_MODEL = "ti2v_2_2_fastwan"
+
 #: CUDA error substrings that indicate a stale context — the worker should be
 #: restarted once before reporting the failure.
 _CUDA_ERRORS = (
@@ -225,16 +229,30 @@ class VideoGenerationHandler(StateHandlerBase):
         target.write_bytes(result.content)
         return GenerateVideoResponse(status="complete", video_path=str(target), seed=seed)
 
+    def _wangp_video_model(self, req: GenerateVideoRequest) -> str:
+        """The WanGP model this request renders with. A named model wins;
+        otherwise a fast render uses the light model when it is installed and
+        the request needs nothing it lacks (end frame, control/depth video)."""
+        named = (req.wangpModel or "").strip()
+        if named:
+            return named
+        default = self._config.wangp_video_model_type
+        needs_default = bool(req.endFramePath or req.controlVideoPath or req.depthVideoPath)
+        if req.model.strip().lower() == "fast" and not needs_default and default != LIGHT_VIDEO_MODEL:
+            if self._wangp_bridge.weights_installed(LIGHT_VIDEO_MODEL) is True:
+                return LIGHT_VIDEO_MODEL
+        return default
+
     def _render_model_type(self, req: GenerateVideoRequest) -> str:
         if self._config.wangp_enabled:
-            return self._config.wangp_video_model_type
+            return self._wangp_video_model(req)
         return f"ltx2-{req.model.strip().lower() or 'fast'}"
 
     def _open_job(self, req: GenerateVideoRequest, job_id: str | None, seed: int | None) -> str:
         if self._jobs is None:
             return ""
         if self._config.wangp_enabled:
-            provider, model = "wangp", self._config.wangp_video_model_type
+            provider, model = "wangp", self._wangp_video_model(req)
         elif should_video_generate_with_ltx_api(
             force_api_generations=self._config.force_api_generations, settings=self.state.app_settings
         ):
@@ -773,7 +791,7 @@ class VideoGenerationHandler(StateHandlerBase):
         # A render must never turn into a silent multi-GB checkpoint download
         # (wgp.py auto-downloads missing weights on load). Refuse with the
         # explicit path instead: the Models tab downloads with progress/cancel.
-        model_type = self._config.wangp_video_model_type
+        model_type = self._wangp_video_model(req)
         if self._wangp_bridge.weights_installed(model_type) is False:
             raise HTTPError(
                 409,
@@ -819,6 +837,7 @@ class VideoGenerationHandler(StateHandlerBase):
                 reference_images=[p for p in (_existing_file(r) for r in req.referenceImagePaths) if p],
                 end_frame_path=_existing_file(req.endFramePath),
                 control_strength=req.controlStrength,
+                model_type=model_type,
             )
 
             self._generation.complete_generation(output_path)

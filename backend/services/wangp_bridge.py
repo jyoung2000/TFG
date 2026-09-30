@@ -168,6 +168,17 @@ class WanGPBridge:
             except OSError:
                 existing = set()
         definitions: list[dict[str, object]] = []
+        # A definition may name another model instead of listing files
+        # (FastWan 5B: "URLs": "ti2v_2_2"); it uses that model's weights.
+        own_urls: dict[str, list[str]] = {}
+        for path in sorted(defaults.glob("*.json")):
+            try:
+                model = json.loads(path.read_text(encoding="utf-8")).get("model")
+            except (OSError, ValueError, AttributeError):
+                continue
+            listed = cast(dict[str, object], model).get("URLs") if isinstance(model, dict) else None
+            if isinstance(listed, list):
+                own_urls[path.stem] = [str(u) for u in cast(list[object], listed) if isinstance(u, str)]
         for path in sorted(defaults.glob("*.json")):
             try:
                 raw = json.loads(path.read_text(encoding="utf-8"))
@@ -184,7 +195,7 @@ class WanGPBridge:
             if isinstance(urls_raw, list):
                 urls = [str(u) for u in cast(list[object], urls_raw) if isinstance(u, str)]
             elif isinstance(urls_raw, str):
-                urls = [urls_raw]
+                urls = own_urls.get(urls_raw, [urls_raw]) if not urls_raw.startswith("http") else [urls_raw]
             filenames = [u.rsplit("/", 1)[-1] for u in urls]
             installed = any(name in existing for name in filenames) if filenames else False
             architecture = str(model_dict.get("architecture", "") or "")
@@ -241,21 +252,23 @@ class WanGPBridge:
         reference_images: Sequence[str] = (),
         end_frame_path: str | None = None,
         control_strength: float | None = None,
+        model_type: str | None = None,
     ) -> str:
+        chosen = (model_type or "").strip() or self._video_model_type
         resolution = self._map_video_resolution(resolution_label, aspect_ratio)
         merged_prompt = prompt + self._camera_motion_prompts.get(camera_motion, "")
         video_length = self.compute_num_frames(duration_seconds, fps)
 
         settings: dict[str, object] = {
-            "model_type": self._video_model_type,
+            "model_type": chosen,
             "prompt": merged_prompt,
             "resolution": resolution,
-            "num_inference_steps": max(1, steps),
+            "num_inference_steps": self._video_steps(chosen, steps),
             "video_length": video_length,
             "duration_seconds": duration_seconds,
             "force_fps": fps,
         }
-        if self._video_model_type.startswith("ltx2_"):
+        if chosen.startswith("ltx2_"):
             settings["sliding_window_size"] = video_length
         if negative_prompt.strip():
             settings["negative_prompt"] = negative_prompt.strip()
@@ -462,6 +475,15 @@ class WanGPBridge:
             return ""
         except Exception as exc:  # noqa: BLE001 - reported by the caller, renders re-raise it
             return str(exc)
+
+    def _video_steps(self, model_type: str, requested: int) -> int:
+        """An accelerated model (FastWan: 3 steps) renders with its own step
+        count; the app's step setting is tuned for LTX-2."""
+        if not model_type.startswith("ltx2_"):
+            default = next((d.get("default_steps") for d in self.list_model_definitions() if d.get("id") == model_type), None)
+            if isinstance(default, int) and 0 < default <= 8:
+                return default
+        return max(1, requested)
 
     def held_vram_mb(self) -> int:
         """VRAM held by this bridge's own WanGP process that a render may

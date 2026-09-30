@@ -290,6 +290,8 @@ class GenerateVideoRequest(BaseModel):
     #: Strength of `controlVideoPath` (WanGP "G" guide denoising); None = the
     #: model's default use of the control video.
     controlStrength: float | None = None
+    #: WanGP video model to render with; None = chosen from `model` (fast/pro).
+    wangpModel: str | None = None
 
 
 class GenerateImageRequest(BaseModel):
