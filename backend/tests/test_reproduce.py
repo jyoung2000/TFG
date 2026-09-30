@@ -363,14 +363,14 @@ class TestNonsenseTargetDoesNotTruncateTheLoop:
 
         from film.reproduce_models import ReproduceBudget
 
-        assert ReproduceBudget(target_score=0.0).target_score == 0.95
-        assert ReproduceBudget(target_score=0).target_score == 0.95
+        assert ReproduceBudget(target_score=0.0).target_score == 0.98
+        assert ReproduceBudget(target_score=0).target_score == 0.98
         # A negative target is rejected outright rather than silently repaired.
         with pytest.raises(ValueError):
             ReproduceBudget(target_score=-1.0)
         # A real target is left alone.
         assert ReproduceBudget(target_score=0.8).target_score == 0.8
-        assert ReproduceBudget().target_score == 0.95
+        assert ReproduceBudget().target_score == 0.98
 
     def test_start_with_a_zero_target_keeps_running(self, client, create_fake_model_files, tmp_path):
         job = _setup(client, create_fake_model_files, tmp_path)
@@ -380,7 +380,7 @@ class TestNonsenseTargetDoesNotTruncateTheLoop:
         )
         assert started.status_code == 200, started.text
         # The stored budget is the real default, not the 0 the UI sent.
-        assert started.json()["budget"]["target_score"] == 0.95
+        assert started.json()["budget"]["target_score"] == 0.98
         done = client.get(f"/api/reproduce/{job['id']}").json()
         rounds = done.get("rounds") or []
         assert len(rounds) >= 1

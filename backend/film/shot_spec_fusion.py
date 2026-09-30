@@ -508,3 +508,88 @@ def merge_specs(base: ShotSpec, update: ShotSpec) -> ShotSpec:
 
 def spec_camera_defaults(spec: ShotSpec) -> SpecCamera:
     return spec.camera
+
+
+#: Spec fields a vision model can answer from one frame, and what each means
+#: (the hint is sent with the question). Field-level, so a follow-up can fill
+#: exactly what the first read left out.
+FILLABLE_FIELDS: dict[str, str] = {
+    "scene.location": "where it is",
+    "scene.environment": "indoor/outdoor, setting type",
+    "scene.time_of_day": "dawn|day|golden hour|dusk|night|studio",
+    "scene.weather": "weather, or 'studio' indoors",
+    "scene.fg": "what is in the foreground",
+    "scene.mg": "what is in the midground",
+    "scene.bg": "what is in the background",
+    "camera.shot_size": "extreme wide|wide|full|medium|close-up|extreme close-up",
+    "camera.angle": "eye level|high|low|dutch|overhead",
+    "camera.height": "camera height",
+    "camera.focal_mm": "estimated focal length in mm (number)",
+    "camera.fov_deg": "estimated horizontal field of view in degrees (number)",
+    "camera.lens_estimate": "wide|normal|telephoto",
+    "camera.aperture": "estimated aperture, e.g. f/2.8",
+    "camera.dof": "shallow|medium|deep",
+    "camera.focus": "what is in focus",
+    "camera.move": "static for a still image",
+    "lighting.key_direction": "where the key light comes from",
+    "lighting.quality": "soft|hard|diffused|mixed",
+    "lighting.color_temp": "warm|neutral|cool, or kelvin",
+    "lighting.mood": "the mood the light creates",
+    "narrative.what_happens": "one sentence: what the image shows",
+    "narrative.purpose": "what the image is for (portrait, product, fashion, ...)",
+    "narrative.beat": "the moment captured",
+    "style.medium": "vector|photo|3d-render|painting|pixel-art|line-art|anime",
+}
+_NUMERIC_FIELDS = {"camera.focal_mm", "camera.fov_deg"}
+
+
+def empty_fields(spec: ShotSpec) -> list[str]:
+    """FILLABLE_FIELDS still empty, skipping locked sections."""
+    missing: list[str] = []
+    for name in FILLABLE_FIELDS:
+        section, field = name.split(".", 1)
+        if spec.is_locked(section):
+            continue
+        value = getattr(getattr(spec, section), field)
+        if value in ("", None):
+            missing.append(name)
+    return missing
+
+
+def _number(value: object) -> float | None:
+    import re
+
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    found = re.search(r"\d+(?:\.\d+)?", str(value or ""))
+    return float(found.group()) if found else None
+
+
+def fill_empty_fields(spec: ShotSpec, answers: dict[str, Any], confidence: float = 0.5) -> list[str]:
+    """Write `answers` (keyed "section.field") into fields that are still
+    empty; never overwrite, skip locked sections and placeholder answers.
+    Returns the fields written."""
+    wrote: list[str] = []
+    for name, raw in answers.items():
+        if name not in FILLABLE_FIELDS:
+            continue
+        section, field = name.split(".", 1)
+        if spec.is_locked(section):
+            continue
+        block = getattr(spec, section)
+        if getattr(block, field) not in ("", None):
+            continue
+        if name in _NUMERIC_FIELDS:
+            value: object = _number(raw)
+            if value is None:
+                continue
+        else:
+            text = ", ".join(str(v) for v in cast(list[object], raw)) if isinstance(raw, list) else str(raw or "").strip()
+            if not text or _is_placeholder(text):
+                continue
+            value = text
+        setattr(block, field, value)
+        wrote.append(name)
+        if section not in spec.provenance:
+            spec.set_section(section, "vlm", confidence)  # type: ignore[arg-type]
+    return wrote

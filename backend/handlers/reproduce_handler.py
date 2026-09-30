@@ -37,7 +37,7 @@ from film.reproduce_models import (
     migrate_document,
 )
 from film.shot_spec import ShotSpec
-from film.shot_spec_fusion import apply_user, apply_vlm, apply_vlm_subjects, spec_from_vision, subjects_are_derived
+from film.shot_spec_fusion import FILLABLE_FIELDS, apply_user, apply_vlm, apply_vlm_subjects, empty_fields, fill_empty_fields, spec_from_vision, subjects_are_derived
 from handlers.base import StateHandlerBase
 from handlers.image_generation_handler import ImageGenerationHandler
 from handlers.jobs_handler import JobsHandler
@@ -341,21 +341,31 @@ class ReproduceHandler(StateHandlerBase):
         conf = float(confidence) if isinstance(confidence, (int, float)) else 0.5
         apply_vlm(job.spec, fields, conf)
         job.vision_model = f"{provider.name}:{provider.model}"
-        missing = [block for block, (_, keys) in VLM_BLOCKS.items() if not job.spec.is_locked(block) and not any(fields.get(k) for k in keys)]
-        if missing:
-            # Ask once, only for what the main read left out.
+        still_empty = empty_fields(job.spec)
+        if still_empty:
+            # One follow-up for everything the main read left empty, field by
+            # field (a block the read filled partly used to keep its holes:
+            # time of day, focal length, aperture, background, ...). Merged
+            # without overwriting; flat keys are accepted too.
             try:
                 reply = provider.chat(
                     [
-                        LLMMessage(role="system", content="You describe ONE image for a cinematographer. Reply with JSON only with string fields: " + ", ".join(VLM_BLOCKS[b][0] for b in missing) + "."),
-                        LLMMessage(role="user", content=f"Describe this image.\n\n{grounding}", images=[url]),
+                        LLMMessage(role="system", content=(
+                            "You describe ONE image for a cinematographer. Reply with JSON only, one key per field below, "
+                            "each a short best estimate (never 'unknown'):\n"
+                            + "\n".join(f'"{name}": {FILLABLE_FIELDS[name]}' for name in still_empty)
+                        )),
+                        LLMMessage(role="user", content=f"Fill every field for this image.\n\n{grounding}", images=[url]),
                     ],
                     json_mode=True,
                     timeout=120,
                 )
-                apply_vlm(job.spec, read_json(reply.text) or {}, conf)
-            except Exception as exc:  # noqa: BLE001 - the main read stands
-                job.why["blocks_vlm"] = f"{provider.name}:{provider.model} follow-up for {', '.join(missing)} failed: {exc}"
+                answers = read_json(reply.text) or {}
+                apply_vlm(job.spec, answers, conf)
+                filled_fields = fill_empty_fields(job.spec, answers, conf)
+                job.why["fields_vlm"] = f"{provider.name}:{provider.model} filled {len(filled_fields)} of {len(still_empty)} empty fields"
+            except Exception as exc:  # noqa: BLE001 - the reads above stand
+                job.why["fields_vlm"] = f"{provider.name}:{provider.model} field follow-up failed: {exc}"
         if not job.spec.is_locked("subjects") and (not job.spec.subjects or subjects_are_derived(job.spec)):
             # A long instruction dilutes the subjects request; ask once, briefly.
             try:

@@ -21,6 +21,7 @@ from film.shot_spec import ShotSpec
 from film.shot_spec_fusion import apply_vlm
 from film.video_analysis_models import AnalyzedShot, NarrativeAnalysis, VisualAnalysis
 from handlers.video_analysis_handler import VideoAnalysisHandler
+from handlers.reproduce_handler import SUBJECTS_INSTRUCTION
 
 # What qwen2.5vl:7b returned for the leather-outfit reference in the report.
 QWEN_READ: dict[str, object] = {
@@ -201,7 +202,8 @@ class TestFocusedSubjectsFollowUp:
         imported = client.post("/api/reproduce/import", json={"path": str(_png(tmp_path / "reference.png"))}).json()
         job = client.post(f"/api/reproduce/{imported['id']}/analyze").json()
 
-        assert len(systems) == 2, "no focused follow-up for subjects"
+        # One focused subjects follow-up (a separate field follow-up may run too).
+        assert systems.count(SUBJECTS_INSTRUCTION) == 1, "no focused follow-up for subjects"
         subject = job["spec"]["subjects"][0]
         assert subject["label"] == "woman"
         assert subject["attributes"] == ["black leather corset", "hands on hips"]
@@ -217,14 +219,16 @@ class TestFocusedSubjectsFollowUp:
             model = "qwen2.5vl:7b"
 
             def chat(self, messages, **kwargs):  # noqa: ANN001, ANN003
-                calls.append(1)
+                calls.append(messages[0].content)
                 return LLMReply(text=json.dumps(dict(QWEN_READ, subjects=["woman"])), tool_calls=[], model=self.model)
 
         monkeypatch.setattr(test_state.film_director, "optional_provider", lambda role: _Qwen())
         client.post("/api/settings", json={"vision": {"vlmProvider": "director"}})
         imported = client.post("/api/reproduce/import", json={"path": str(_png(tmp_path / "reference.png"))}).json()
         client.post(f"/api/reproduce/{imported['id']}/analyze")
-        assert len(calls) == 1
+        # The main read named the subjects: no subjects follow-up. (Fields it
+        # left empty - time of day, focal length, ... - get their own ask.)
+        assert calls and SUBJECTS_INSTRUCTION not in calls
 
 
 class TestMissingBlocksFollowUp:
@@ -250,7 +254,8 @@ class TestMissingBlocksFollowUp:
         imported = client.post("/api/reproduce/import", json={"path": str(_png(tmp_path / "reference.png"))}).json()
         job = client.post(f"/api/reproduce/{imported['id']}/analyze").json()
 
-        assert len(systems) == 2, "no follow-up for the missing blocks"
+        follow_ups = [s for s in systems[1:] if "location" in s]
+        assert len(follow_ups) == 1, "no follow-up for the missing blocks, or more than one"
         assert "location" in systems[1] and "subjects" not in systems[1]
         for block in ("scene", "camera", "lighting", "narrative"):
             assert job["spec"]["provenance"].get(block) == "vlm", block

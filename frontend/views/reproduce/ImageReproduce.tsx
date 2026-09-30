@@ -38,10 +38,10 @@ export function ImageReproduce() {
   // Which vision model reads the reference. Seeded from the job so a
   // re-opened run keeps the reader it last used.
   const [vlmModel, setVlmModel] = useState('')
-  // 0.95 is the brief's bar (composite >= 0.95 == 95 % identical) and matches
+  // 0.98 is the image bar (composite >= 0.98 == 98 % identical) and matches
   // ReproduceBudget.target_score. The UI always sends its own budget, so this is
   // what the loop actually uses; the backend default only applies to API callers.
-  const [budget, setBudget] = useState<ReproduceBudget>({ candidates_per_round: 6, max_rounds: null, target_score: 0.95 })
+  const [budget, setBudget] = useState<ReproduceBudget>({ candidates_per_round: 6, max_rounds: null, target_score: 0.98 })
   const [seed, setSeed] = useState<string>('')
   const [useVlm, setUseVlm] = useState(false)
   const [loras, setLoras] = useState<LoraUse[]>([])

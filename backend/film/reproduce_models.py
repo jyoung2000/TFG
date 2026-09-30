@@ -22,14 +22,15 @@ ReproduceStatus = Literal["idle", "analyzing", "rendering", "scoring", "complete
 CandidateSource = Literal["render", "fix", "patch", "inpaint", "legacy"]
 
 
-#: The bar the brief asks for: composite >= 0.95, reported as 95 % identical.
-DEFAULT_TARGET_SCORE = 0.95
+#: The image bar: composite >= 0.98 ("98-100 %", the user's minimum, 2026-09-30).
+#: MEASURED: FLUX.2 img2img reached 0.956-0.982 on four jobs at the old 0.95 bar.
+DEFAULT_TARGET_SCORE = 0.98
 
 
 class ReproduceBudget(BaseModel):
     candidates_per_round: int = Field(default=6, ge=1, le=12)
     max_rounds: int | None = Field(default=None)
-    #: Stop once the best composite reaches this. 0.95 = 95 % identical.
+    #: Stop once the best composite reaches this. 0.98 = 98 % identical.
     target_score: float = Field(default=DEFAULT_TARGET_SCORE, ge=0.0, le=1.0)
 
     @field_validator("target_score")
