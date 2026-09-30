@@ -44,6 +44,10 @@ logger = logging.getLogger(__name__)
 #: Wan 2.2 TI2V FastWan 5B: fits a 32 GB machine where LTX-2 22B (~39 GB of
 #: weights) pages. Start image yes; end frame / control video no.
 LIGHT_VIDEO_MODEL = "ti2v_2_2_fastwan"
+#: VACE 1.3B: positioned frames (start/end) and a raw guide video, the rungs
+#: FastWan cannot render. MEASURED (4070, 3 s at 832x480, raw guide): 0.924
+#: at 10 steps, ~2-3 min per segment, vs LTX-2's 20-30 min on a 10 s shot.
+GUIDED_VIDEO_MODEL = "vace_1.3B"
 
 #: CUDA error substrings that indicate a stale context — the worker should be
 #: restarted once before reporting the failure.
@@ -237,10 +241,14 @@ class VideoGenerationHandler(StateHandlerBase):
         if named:
             return named
         default = self._config.wangp_video_model_type
-        needs_default = bool(req.endFramePath or req.controlVideoPath or req.depthVideoPath)
-        if req.model.strip().lower() == "fast" and not needs_default and default != LIGHT_VIDEO_MODEL:
-            if self._wangp_bridge.weights_installed(LIGHT_VIDEO_MODEL) is True:
-                return LIGHT_VIDEO_MODEL
+        if req.model.strip().lower() != "fast":
+            return default
+        guided = bool(req.endFramePath or req.controlVideoPath or req.depthVideoPath)
+        # A fast render that needs frames/guide FastWan cannot take goes to
+        # VACE 1.3B (minutes, fits the machine) rather than LTX-2 (20-30 min).
+        light = GUIDED_VIDEO_MODEL if guided else LIGHT_VIDEO_MODEL
+        if light != default and self._wangp_bridge.weights_installed(light) is True:
+            return light
         return default
 
     def _render_model_type(self, req: GenerateVideoRequest) -> str:

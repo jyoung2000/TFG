@@ -89,3 +89,52 @@ class TestReferenceDefinitionsResolve:
         assert fast["installed"] is True
         assert all(str(u).startswith("https://") for u in fast["urls"]) and len(fast["urls"]) == 2
         assert fast["default_steps"] == 3
+
+
+class TestVaceTakesTheFramesAndTheGuide:
+    """VACE 1.3B (the 1.3B Wan 2.1 base + a 1.4 GB VACE module) renders the
+    reproduce rungs FastWan cannot - an end frame, the reference clip as a
+    guide. MEASURED on the RTX 4070 (3 s of the reference clip, 832x480):
+    raw guide 0.924 at 10 steps (169 s incl. load), 0.922 at 15 steps (143 s
+    warm) vs LTX-2's 20-30 min per round on the 10 s shot. VACE takes no start
+    image: frames are injected by position ("FI" + image_refs +
+    frames_positions) and the guide is raw ("V")."""
+
+    def _enable(self, test_state, fake_services):
+        _enable(test_state, fake_services)
+        fake_services.wangp_bridge.definitions.append({"id": "vace_1.3B", "name": "Vace 1.3B", "installed": True})
+
+    def test_an_end_frame_renders_with_vace_frames_by_position(self, client, test_state, fake_services, tmp_path):
+        from PIL import Image
+
+        self._enable(test_state, fake_services)
+        start, end = tmp_path / "start.png", tmp_path / "end.png"
+        Image.new("RGB", (64, 64)).save(start)
+        Image.new("RGB", (64, 64)).save(end)
+        r = client.post("/api/generate", json={**_T2V, "imagePath": str(start), "endFramePath": str(end)})
+        assert r.status_code == 200, r.text
+        params = _last_params(fake_services)
+        assert params["model_type"] == "vace_1.3B"
+        assert "image_start" not in params and "image_end" not in params
+        assert [Path(p).name for p in params["image_refs"]] == ["start.png", "end.png"]
+        assert params["frames_positions"] == f"1 {params['video_length']}"
+        assert "FI" in params["video_prompt_type"]
+        assert params["resolution"] == "832x480"
+        assert "sliding_window_size" not in params
+
+    def test_a_guide_video_renders_raw_with_vace(self, client, test_state, fake_services, tmp_path):
+        self._enable(test_state, fake_services)
+        guide = tmp_path / "guide.mp4"
+        guide.write_bytes(b"\x00\x00\x00\x18ftypmp42")
+        client.post("/api/generate", json={**_T2V, "controlVideoPath": str(guide), "controlStrength": 0.8})
+        params = _last_params(fake_services)
+        assert params["model_type"] == "vace_1.3B"
+        assert params["video_guide"] == str(guide.resolve())
+        assert "V" in params["video_prompt_type"] and "G" not in params["video_prompt_type"]
+
+    def test_a_pro_render_keeps_ltx2(self, client, test_state, fake_services, tmp_path):
+        self._enable(test_state, fake_services)
+        guide = tmp_path / "guide.mp4"
+        guide.write_bytes(b"\x00\x00\x00\x18ftypmp42")
+        client.post("/api/generate", json={**_T2V, "model": "pro", "controlVideoPath": str(guide), "controlStrength": 0.8})
+        assert _last_params(fake_services)["model_type"] == "ltx2_22B_distilled"

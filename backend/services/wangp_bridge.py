@@ -302,6 +302,8 @@ class WanGPBridge:
                 # LTX-2 "VG" is the raw control video and higher = closer to it.
                 settings["video_prompt_type"] = str(settings["video_prompt_type"]).replace("G", "") + "G"
                 settings["denoising_strength"] = round(min(1.0, max(0.0, control_strength)), 4)
+        if chosen.startswith("vace"):
+            self._vace_settings(settings, image_path, end_frame_path, video_length, aspect_ratio)
 
         outputs = self._run_manifest(
             manifest=[{"id": 1, "params": settings, "plugin_data": {}}],
@@ -475,6 +477,29 @@ class WanGPBridge:
             return ""
         except Exception as exc:  # noqa: BLE001 - reported by the caller, renders re-raise it
             return str(exc)
+
+    @staticmethod
+    def _vace_settings(settings: dict[str, object], start: str | None, end: str | None, video_length: int, aspect_ratio: str) -> None:
+        """VACE takes no start/end image: those frames are injected by
+        position ("FI" + image_refs + frames_positions), a guide video is raw
+        ("V", VACE has no guide strength), and it renders at its native 480p."""
+        for key in ("image_prompt_type", "image_start", "image_end", "denoising_strength"):
+            settings.pop(key, None)
+        letters = "V" if settings.get("video_guide") else ""
+        refs: list[str] = []
+        positions: list[str] = []
+        if start:
+            refs.append(str(Path(start).resolve()))
+            positions.append("1")
+        if end:
+            refs.append(str(Path(end).resolve()))
+            positions.append(str(video_length))
+        if refs:
+            letters += "FI"
+            settings["image_refs"] = refs
+            settings["frames_positions"] = " ".join(positions)
+        settings["video_prompt_type"] = letters
+        settings["resolution"] = "480x832" if aspect_ratio == "9:16" else "832x480"
 
     def _video_steps(self, model_type: str, requested: int) -> int:
         """An accelerated model (FastWan: 3 steps) renders with its own step
