@@ -405,6 +405,10 @@ class VideoReproduceHandler(StateHandlerBase):
             round_index += 1
             strategy = ladder[rung]
             control = strength if strategy == "reference_video" else None
+            if strategy == "reference_video" and self._reference_clip(job, shot) is None:
+                # Never render an unconditioned take under this rung's name.
+                shot.note = f"Plateau at {best:.2f}: the reference clip could not be cut from the source (see the log)"
+                return True
             produced = False
             for n in range(job.candidates_per_shot):
                 if self._is_cancelled(job.analysis_id):
@@ -501,8 +505,13 @@ class VideoReproduceHandler(StateHandlerBase):
         count = max(2, int(round(shot.duration_seconds * job.fps)))
         span = max(0.05, min(shot.duration_seconds, (shot.end - shot.start) or shot.duration_seconds))
         frames: list[Path] = []
+        # The last frames of a file often sit a few ms before the shot's
+        # nominal end; never ask for a frame past the source.
+        last = (analysis.source.duration_seconds - 1.0 / max(1, job.fps)) if analysis.source.duration_seconds > 0 else None
         for i in range(count):
             at = shot.start + span * i / count
+            if last is not None:
+                at = min(at, max(shot.start, last))
             try:
                 data = self._probe.extract_jpeg(source, at, max_width=1280, quality=92)
             except OSError as exc:

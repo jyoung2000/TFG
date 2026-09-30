@@ -92,7 +92,7 @@ class FfmpegStitcher:
         listing.write_text(lines, encoding="utf-8")
         try:
             result = subprocess.run(
-                [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-f", "concat", "-safe", "0", "-i", str(listing), "-vsync", "vfr", "-r", str(fps), "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "veryfast", "-crf", "18", "-movflags", "+faststart", str(output)],
+                [ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-f", "concat", "-safe", "0", "-i", str(listing), "-r", str(fps), "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "veryfast", "-crf", "18", "-movflags", "+faststart", str(output)],
                 capture_output=True, text=True, check=False,
             )
             if result.returncode != 0 or not output.is_file():

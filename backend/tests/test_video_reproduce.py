@@ -268,6 +268,27 @@ class TestRealStitcher:
         with pytest.raises(StitchError):
             FfmpegStitcher(ffmpeg="ffmpeg").concat([tmp_path / "missing.mp4"], tmp_path / "x.mp4")
 
+    def test_encode_frames_with_the_real_ffmpeg(self, tmp_path: Path):
+        """`-vsync vfr` together with `-r` is refused by ffmpeg 7.1 ("One of
+        -r/-fpsmax was specified together a non-CFR -vsync/-fps_mode"), so
+        every frames-to-clip encode failed - found live when Video Reproduce's
+        reference_video rung could not build its control clip."""
+        if not find_ffmpeg():
+            pytest.skip("ffmpeg missing")
+        from PIL import Image
+
+        from services.media_probe.media_probe_impl import MediaProbeImpl
+
+        frames = []
+        for i in range(12):
+            frame = tmp_path / f"f{i:03d}.jpg"
+            Image.new("RGB", (64, 48), (i * 20, 40, 200 - i * 10)).save(frame)
+            frames.append(frame)
+        out = FfmpegStitcher().encode_frames(frames, 24, tmp_path / "out" / "clip.mp4")
+        info = MediaProbeImpl().probe(str(out))
+        assert info["fps"] == pytest.approx(24, rel=0.05)
+        assert info["duration_seconds"] == pytest.approx(0.5, abs=0.1)
+
 
 class TestTheVideoLoopKeepsGoingUntilTheTarget:
     """The video loop must not stop at a fixed number of passes.
