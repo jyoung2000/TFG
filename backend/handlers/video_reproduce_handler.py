@@ -155,16 +155,22 @@ class VideoReproduceHandler(StateHandlerBase):
 
     def media_path(self, analysis_id: str, relative: str) -> Path:
         """Only files this document recorded: candidate clips (absolute), frame
-        thumbnails and the stitched result (both inside the reproduce folder)."""
+        thumbnails, each shot's reference clip and the stitched result (inside
+        the reproduce folder), and "source" - the analysed original."""
         job = self.get(analysis_id)
         folder = self._folder(analysis_id)
+        if relative == "source":
+            original = Path(self._analysis.load(analysis_id).source.path or "")
+            if not original.is_file():
+                raise HTTPError(404, "The original video is no longer on disk")
+            return original
         clips = {c.path for shot in job.shots for c in shot.candidates if c.path}
         if relative in clips:
             path = Path(relative)
             if path.is_file() and is_within(self._config.outputs_dir, path):
                 return path
             raise HTTPError(404, "Candidate clip not found")
-        inside = {job.stitched_path, *(frame for shot in job.shots for c in shot.candidates for frame in c.frames)}
+        inside = {job.stitched_path, *(s.reference_clip for s in job.shots), *(frame for shot in job.shots for c in shot.candidates for frame in c.frames)}
         inside.discard("")
         if relative not in inside:
             raise HTTPError(400, "File is not part of this reproduce job")
@@ -663,6 +669,7 @@ class VideoReproduceHandler(StateHandlerBase):
             candidate.status = "complete"
             candidate.path = version.output_path
             candidate.seed = version.seed if version.seed is not None else seed
+            candidate.model = version.render_model or candidate.model
             if version.peak_vram_gb is not None:
                 job.peak_vram_mb = max(job.peak_vram_mb or 0, round(version.peak_vram_gb * 1024))
             self._score(job, shot, candidate)
@@ -861,6 +868,15 @@ class VideoReproduceHandler(StateHandlerBase):
             shot.best_candidate_id = best.id
             if not shot.picked_candidate_id or shot.candidate(shot.picked_candidate_id) is None:
                 shot.picked_candidate_id = best.id
+            chosen = shot.candidate(shot.picked_candidate_id)
+            if chosen is None:
+                continue
+            # The queue made each finished take current; the storyboard shows
+            # the loop's choice instead.
+            try:
+                self._film.promote_version(job.project_id, shot.film_scene_id, shot.film_shot_id, chosen.version_number)
+            except HTTPError as exc:
+                logger.info("Could not promote the chosen take on the storyboard: %s", exc.detail)
 
     def pick(self, analysis_id: str, shot_id: str, candidate_id: str) -> VideoReproduceJob:
         job = self.get(analysis_id)

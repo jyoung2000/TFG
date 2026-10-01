@@ -507,3 +507,23 @@ class TestLocalRendersKeepTheShotsLength:
         job = client.get(f"/api/video-reproduce/{analysed['id']}").json()
         for shot in job["shots"]:
             assert shot["duration_seconds"] == max(1, round(shot["end"] - shot["start"])), shot
+
+
+class TestTheOriginalPlaysNextToTheReproduction:
+    """Asked 2026-10-01: the UI should make clear what is the original and
+    what is the reproduction. The media route served only rendered files, so
+    the panel could show the original as a still and nothing else."""
+
+    def test_the_source_video_and_each_shots_reference_clip_are_served(self, client, video, fake_services, test_state, create_fake_model_files):
+        analysed = _analysed(client, video, test_state, create_fake_model_files)
+        TestTheVideoLoopKeepsGoingUntilTheTarget._enable_wangp(test_state, fake_services)
+        fake_services.wangp_bridge.definitions.append({"id": "vace_1.3B", "name": "Vace 1.3B", "installed": True})
+        shot_id = analysed["shots"][0]["id"]
+        client.post(f"/api/video-reproduce/{analysed['id']}/start", json={"candidates": 1, "rounds": 1, "shot_ids": [shot_id]})
+        job = client.get(f"/api/video-reproduce/{analysed['id']}").json()
+        clip = job["shots"][0]["reference_clip"]
+        assert clip
+        assert client.get(f"/api/video-reproduce/{analysed['id']}/media", params={"path": clip}).status_code == 200
+        source = client.get(f"/api/video-reproduce/{analysed['id']}/media", params={"path": "source"})
+        assert source.status_code == 200
+        assert source.content == Path(video).read_bytes()

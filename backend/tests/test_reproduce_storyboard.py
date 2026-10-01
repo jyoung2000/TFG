@@ -102,3 +102,52 @@ class TestVideoReproduceSeedsTheStoryboard:
         assert client.post(f"/api/video-reproduce/{analysed['id']}/shots/{shot_id}/pick/{other['id']}").status_code == 200
         film_shot = test_state.film.get_project(job["project_id"]).find_shot(shot["film_shot_id"])[1]  # type: ignore[index]
         assert film_shot.current_version == other["version_number"]
+
+
+class TestTheStoryboardShowsWhatTheLoopChose:
+    """Asked 2026-10-01: video reproduce should produce the storyboard and
+    show which model and prompt made each take. Found: the film queue made
+    every finished take the shot's current version, so the storyboard showed
+    the last take rather than the best; and a take recorded the job's default
+    model (LTX-2) while VACE 1.3B rendered it."""
+
+    def test_the_best_take_is_the_storyboard_shots_current_version(self, client, video, test_state, create_fake_model_files):
+        analysed = _analysed(client, video, test_state, create_fake_model_files)
+        shot_id = analysed["shots"][0]["id"]
+        client.post(f"/api/video-reproduce/{analysed['id']}/start", json={"candidates": 2, "rounds": 1, "shot_ids": [shot_id]})
+        job = client.get(f"/api/video-reproduce/{analysed['id']}").json()
+        shot = job["shots"][0]
+        chosen = next(c for c in shot["candidates"] if c["id"] == shot["picked_candidate_id"])
+        assert len([c for c in shot["candidates"] if c["status"] == "complete"]) == 2
+        film_shot = test_state.film.get_project(job["project_id"]).find_shot(shot["film_shot_id"])[1]  # type: ignore[index]
+        assert film_shot.current_version == chosen["version_number"]
+
+    def test_each_take_records_the_model_that_rendered_it(self, client, video, fake_services, test_state, create_fake_model_files):
+        analysed = _analysed(client, video, test_state, create_fake_model_files)
+        test_state.config.wangp_enabled = True
+        fake_services.wangp_bridge.available = True
+        fake_services.wangp_bridge.definitions.append({"id": "vace_1.3B", "name": "Vace 1.3B", "installed": True})
+        shot_id = analysed["shots"][0]["id"]
+        client.post(f"/api/video-reproduce/{analysed['id']}/start", json={"candidates": 1, "rounds": 1, "shot_ids": [shot_id]})
+        job = client.get(f"/api/video-reproduce/{analysed['id']}").json()
+        take = job["shots"][0]["candidates"][0]
+        assert take["status"] == "complete", take
+        assert take["model"] == "vace_1.3B"
+        film_shot = test_state.film.get_project(job["project_id"]).find_shot(job["shots"][0]["film_shot_id"])[1]  # type: ignore[index]
+        assert film_shot.version(take["version_number"]).render_model == "vace_1.3B"  # type: ignore[union-attr]
+
+
+class TestAnImageRunEndsComposed:
+    """Asked 2026-10-01: "when reproducing images a composite should already
+    be made". The composed storyboard shot existed only after Send to
+    Composer; a finished loop now makes it itself."""
+
+    def test_a_finished_loop_has_its_storyboard_shot_and_composition(self, client, create_fake_model_files, tmp_path, test_state):
+        job = _image_job(client, create_fake_model_files, tmp_path)
+        client.post(f"/api/reproduce/{job['id']}/start", json={"budget": {"candidates_per_round": 1, "max_rounds": 1}})
+        done = client.get(f"/api/reproduce/{job['id']}").json()
+        assert done["candidates"], done["status"]
+        assert done["storyboard_project_id"] and done["storyboard_shot_id"], "no storyboard shot without Send to Composer"
+        _, shot = test_state.film.get_project(done["storyboard_project_id"]).find_shot(done["storyboard_shot_id"])  # type: ignore[misc]
+        assert shot.composition is not None and shot.blockout_path
+        assert shot.visual_prompt == done["prompt"]

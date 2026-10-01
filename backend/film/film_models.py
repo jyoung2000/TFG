@@ -350,6 +350,9 @@ class ShotVersion(BaseModel):
     gpu_name: str = ""
     peak_vram_gb: float | None = None
     execution_mode: str = ""
+    #: The model that actually rendered this take (e.g. "vace_1.3B" for a
+    #: guided fast render), which `model` - the app's tier - does not say.
+    render_model: str = ""
     created_at: int = Field(default_factory=now_ms)
     #: Set when this take was deleted. The rest of the record — prompt, model,
     #: seed, snapshot — is kept, so a deleted take can still be explained and

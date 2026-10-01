@@ -712,6 +712,7 @@ class FilmGenerationHandler(StateHandlerBase):
                     settings = self.state.app_settings
                     settings.seed_locked, settings.locked_seed = restore_seed
         telemetry = self._telemetry(started)
+        telemetry["render_model"] = self._video_generation.render_model_for(request)
         if response.status == "complete" and response.video_path:
             self._finish_version(
                 job, status="complete", output_path=response.video_path, telemetry=telemetry, seed_used=response.seed
@@ -1172,6 +1173,9 @@ class FilmGenerationHandler(StateHandlerBase):
                 peak = telemetry.get("peak_vram_gb")
                 if isinstance(peak, (int, float)):
                     version.peak_vram_gb = float(peak)
+                render_model = telemetry.get("render_model")
+                if isinstance(render_model, str) and render_model:
+                    version.render_model = render_model
                 mode = telemetry.get("execution_mode")
                 if isinstance(mode, str) and mode:
                     version.execution_mode = mode

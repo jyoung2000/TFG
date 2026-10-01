@@ -547,6 +547,20 @@ class ReproduceHandler(StateHandlerBase):
             return
         finally:
             self._running.discard(job_id)
+        self._compose(job_id)
+
+    def _compose(self, job_id: str) -> None:
+        """A finished run is already a composed storyboard shot (prompt, chosen
+        image, cast, 3D composition) - Send to Composer only opens it."""
+        if self._film is None or self._scene is None:
+            return
+        job = self.get(job_id)
+        if not job.candidates or job.is_busy:
+            return
+        try:
+            self.send_to_storyboard(job_id)
+        except Exception as exc:  # noqa: BLE001 - the reproduction stands without its storyboard shot
+            logger.warning("Could not compose %s on the storyboard: %s", job_id, exc)
 
     def _loop(self, job: ReproduceJob, base_seed: int | None, provider: LLMProvider | None) -> None:
         import time
