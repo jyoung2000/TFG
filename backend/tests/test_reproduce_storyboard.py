@@ -222,7 +222,9 @@ class TestOldImageShotsAreReseededWhenOpened:
         project = client.get(f"/api/film/projects/{done['storyboard_project_id']}").json()["project"]
         shot = next(s for sc in project["scenes"] for s in sc["shots"] if s["id"] == done["storyboard_shot_id"])
         composition = shot["composition"]
-        assert composition["seed"].startswith("v7:"), composition["seed"]
+        from handlers.scene_handler import SEED_VERSION
+
+        assert composition["seed"].startswith(f"v{SEED_VERSION}:"), composition["seed"]
         figures = [o for o in composition["objects"] if o["type"] == "figure"]
         assert figures, "still no figure for the person in the photo"
         assert figures[0]["pose"].get("l_elbow", [0, 0, 0])[2] < -60, figures[0]["pose"]

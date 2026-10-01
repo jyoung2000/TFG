@@ -126,6 +126,16 @@ class TestPosedFigures:
         back = layout_from_composition(composer_scene_from_layout(layout, duration=4.0))
         assert next(o for o in back.objects if o.kind == "figure").joints == next(o for o in layout.objects if o.kind == "figure").joints
 
+    def test_a_person_the_detector_gave_no_box_is_placed_from_their_pose(self):
+        # Live 2026-10-01 (screenshot): the job's only subject, "woman", had no
+        # box; the solver placed no figure though DWPose had found her - the
+        # composer opened with a mannequin at rest beside her photo.
+        spec = _portrait_spec(HANDS_ON_HIPS)
+        spec.subjects[0].bbox = []
+        figures = [o for o in layout_from_spec(spec).objects if o.kind == "figure"]
+        assert len(figures) == 1
+        assert figures[0].joints == joints_from_keypoints(HANDS_ON_HIPS, PORTRAIT)
+
     def test_a_pose_outside_the_figure_is_not_given_to_it(self):
         spec = _portrait_spec([[x * 0.1, y * 0.1, s] for x, y, s in HANDS_ON_HIPS])  # someone tiny in the corner
         spec.subjects[0].bbox = [0.5, 0.3, 0.4, 0.65]

@@ -276,6 +276,26 @@ def _solve_camera(subjects: list[SpecSubject], vfov_deg: float, aspect: float, h
     return Camera(pos=(0.0, cam_y, 0.0), pitch=best_pitch, vfov_deg=vfov_deg, aspect=aspect)
 
 
+def _boxed_subjects(spec: ShotSpec) -> list[SpecSubject]:
+    """The subjects, a person the detector gave no box taking the box of a
+    person the pose model found (largest first, each once). MEASURED
+    2026-10-01: a photo's only subject, "woman", had no box, so no figure was
+    placed though DWPose had found her."""
+    poses = sorted(
+        (p for p in spec.poses if len(p.bbox) == 4 and p.bbox[2] > 0 and p.bbox[3] > 0),
+        key=lambda p: p.bbox[2] * p.bbox[3],
+        reverse=True,
+    )
+    boxes = [list(s.bbox) for s in spec.subjects if len(s.bbox) == 4]
+    free = [p for p in poses if not any(share_inside(p.keypoints, box) > 0.5 for box in boxes)]
+    subjects: list[SpecSubject] = []
+    for subject in spec.subjects:
+        if len(subject.bbox) != 4 and is_person(subject.label) and free:
+            subject = subject.model_copy(update={"bbox": list(free.pop(0).bbox)})
+        subjects.append(subject)
+    return subjects
+
+
 def layout_from_spec(spec: ShotSpec, *, vfov_deg: float | None = None) -> SpecLayout3D:
     """Subjects × depth × FOV → world positions, a solved camera, figure sizes."""
     aspect = aspect_of(spec)
@@ -286,7 +306,7 @@ def layout_from_spec(spec: ShotSpec, *, vfov_deg: float | None = None) -> SpecLa
             vfov_deg = vertical_fov(math.degrees(2 * math.atan(36.0 / (2 * spec.camera.focal_mm))), aspect)
         else:
             vfov_deg = DEFAULT_VFOV_DEG
-    subjects = [s for s in spec.subjects if len(s.bbox) == 4 and s.bbox[2] > 0 and s.bbox[3] > 0]
+    subjects = [s for s in _boxed_subjects(spec) if len(s.bbox) == 4 and s.bbox[2] > 0 and s.bbox[3] > 0]
     camera = _solve_camera(subjects, vfov_deg, aspect, spec.camera.height)
     tight = tight_shot_size(spec.camera.shot_size)
     # The words can be wrong (MEASURED, r23: a head-to-toe portrait read as a
@@ -462,7 +482,7 @@ def reprojection_error(spec: ShotSpec, layout: SpecLayout3D) -> float:
     """Largest centre/top/bottom deviation between the spec's boxes and the
     layout's reprojection (fraction of the frame)."""
     boxes = reproject_layout(layout, aspect_of(spec))
-    subjects = [s for s in spec.subjects if len(s.bbox) == 4 and s.bbox[2] > 0 and s.bbox[3] > 0]
+    subjects = [s for s in _boxed_subjects(spec) if len(s.bbox) == 4 and s.bbox[2] > 0 and s.bbox[3] > 0]
     worst = 0.0
     for index, member, _subject, member_box, person in _members(subjects):
         box = boxes.get(_object_id(index, member, person))

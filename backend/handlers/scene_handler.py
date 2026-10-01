@@ -46,7 +46,8 @@ logger = logging.getLogger(__name__)
 #: 4: whole-body boxes overrule the shot-size words; face figures are "person" (r23).
 #: 5: figures take the people's poses (DWPose). 6: whole bodies at a frame edge are life-size.
 #: 7: standing figures on the floor (the camera comes down instead).
-SEED_VERSION = 7
+#: 8: a person the detector gave no box is placed from their pose's box.
+SEED_VERSION = 8
 
 
 def seed_fingerprint(composition: CompositionScene) -> str:
