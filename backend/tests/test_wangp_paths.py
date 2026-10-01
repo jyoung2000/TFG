@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from services.wangp_paths import in_process_diagnostic, resolve_wangp_python, resolve_wangp_root
+from services.wangp_paths import in_process_diagnostic, resolve_wangp_extra_args, resolve_wangp_python, resolve_wangp_root
 
 
 def _checkout(root: Path, *, venv: bool, os_name: str = "nt") -> None:
@@ -238,3 +238,18 @@ def test_a_venvful_checkout_has_nothing_to_explain(tmp_path: Path) -> None:
 
 def test_no_root_has_nothing_to_explain(tmp_path: Path) -> None:
     assert in_process_diagnostic(None, app_data_dir=tmp_path / "appdata", os_name="nt") is None
+
+
+def test_a_separate_wangp_venv_keeps_the_fastest_attention() -> None:
+    """The venv worker has headers and SageAttention: forcing sdpa halved VACE's speed (81 s/step vs ~40)."""
+    args = resolve_wangp_extra_args("", wangp_python=r"C:\Wan2GP\.venv\Scripts\python.exe", current_executable=r"C:\app\python\python.exe")
+    assert "sdpa" not in args
+
+
+def test_wangp_on_the_embedded_interpreter_falls_back_to_sdpa() -> None:
+    args = resolve_wangp_extra_args("", wangp_python=r"C:\app\python\python.exe", current_executable=r"C:\app\python\python.exe")
+    assert args == ("--attention", "sdpa")
+
+
+def test_an_explicit_attention_choice_is_kept() -> None:
+    assert resolve_wangp_extra_args("--attention=sage --profile 4", wangp_python=None, current_executable="py") == ("--attention=sage", "--profile", "4")

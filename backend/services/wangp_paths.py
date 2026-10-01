@@ -11,6 +11,7 @@ The resolution order is documented on `resolve_wangp_root`.
 from __future__ import annotations
 
 import os
+import shlex
 import sys
 from collections.abc import Mapping
 from pathlib import Path
@@ -205,3 +206,21 @@ def resolve_wangp_python(
             return str(candidate)
 
     return current
+
+
+def resolve_wangp_extra_args(raw: str, *, wangp_python: str | None, current_executable: str) -> tuple[str, ...]:
+    """WanGP's own CLI options from `WANGP_EXTRA_ARGS`, plus an attention fallback.
+
+    SageAttention kernels are JIT-compiled by Triton, which needs Python.h. The
+    embedded runtime ships without it, so WanGP running *in-process* on that
+    interpreter is pinned to sdpa. The isolated worker runs on WanGP's own venv,
+    which has the headers and SageAttention: pinning sdpa there halved VACE's
+    speed (81 s/step against ~40), so it is left to the bridge's `auto`.
+    An explicit `--attention` always wins.
+    """
+    args = tuple(shlex.split(raw)) if raw.strip() else ()
+    if any(a == "--attention" or a.startswith("--attention=") for a in args):
+        return args
+    if wangp_python is None or os.path.normcase(os.path.abspath(wangp_python)) == os.path.normcase(os.path.abspath(current_executable)):
+        return args + ("--attention", "sdpa")
+    return args

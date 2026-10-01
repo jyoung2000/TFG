@@ -1,7 +1,6 @@
 """FastAPI composition root for the LTX backend server."""
 import os
 import sys
-import shlex
 from typing import Any, cast
 
 if os.environ.get("BACKEND_DEBUG") == "1":
@@ -156,20 +155,6 @@ def _resolve_wangp_python(wangp_root: Path | None) -> str | None:
     return resolve_wangp_python(wangp_root=wangp_root)
 
 
-def _resolve_wangp_extra_args() -> tuple[str, ...]:
-    raw_args = os.environ.get("WANGP_EXTRA_ARGS", "").strip()
-    args = tuple(shlex.split(raw_args)) if raw_args else ()
-    # SageAttention kernels are JIT-compiled by Triton at generation time.
-    # The embedded python-embed interpreter ships without development headers
-    # (Include/Python.h), so Triton's tcc cannot build cuda_utils.c and every
-    # generation dies with 'include file Python.h not found'. sdpa is the
-    # pure-torch fallback (built-in scaled_dot_product_attention) and works
-    # with the embedded interpreter. Only force it when the caller did not
-    # already pick an attention mode explicitly.
-    if "--attention" not in args and not any(a.startswith("--attention=") for a in args):
-        args = args + ("--attention", "sdpa")
-    return args
-
 # ============================================================
 # Settings
 # ============================================================
@@ -192,6 +177,7 @@ from server_utils.model_layout_migration import migrate_legacy_models_layout
 from services.gpu_info.gpu_info_impl import GpuInfoImpl
 from services.wangp_paths import (
     in_process_diagnostic,
+    resolve_wangp_extra_args,
     resolve_wangp_python,
     resolve_wangp_root,
 )
@@ -209,7 +195,7 @@ WANGP_PYTHON = _resolve_wangp_python(WANGP_ROOT) if WANGP_ENABLED else None
 WANGP_CONFIG_DIR = APP_DATA_DIR / "wangp_bridge"
 WANGP_VIDEO_MODEL_TYPE = os.environ.get("WANGP_VIDEO_MODEL_TYPE", "ltx2_22B_distilled")
 WANGP_IMAGE_MODEL_TYPE = os.environ.get("WANGP_IMAGE_MODEL_TYPE", "z_image")
-WANGP_EXTRA_ARGS = _resolve_wangp_extra_args()
+WANGP_EXTRA_ARGS = resolve_wangp_extra_args(os.environ.get("WANGP_EXTRA_ARGS", ""), wangp_python=WANGP_PYTHON, current_executable=sys.executable)
 
 
 def _resolve_force_api_generations() -> bool:
