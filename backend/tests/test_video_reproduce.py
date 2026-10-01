@@ -491,3 +491,19 @@ class TestTheFirstFrameIsTheShotsFirstFrame:
         assert start_frame.startswith("reproduce/start-"), start_frame
         first_from_source = min(t for path, t in probe.extracted if Path(path) == Path(video))
         assert abs(first_from_source - shot["start"]) < 0.06, first_from_source
+
+
+class TestLocalRendersKeepTheShotsLength:
+    """MEASURED (r19, the reference clip): the 0.93 s second shot was snapped
+    to the LTX API's shortest length, 6 s, so VACE spread 0.93 s of guide
+    motion over 6 s - visual 0.95 but motion 0.85, and the loop plateaued at
+    0.937. Local WanGP renders any whole-second length; the API's 6/8/10 s
+    list now applies only when the render goes to the API."""
+
+    def test_a_short_shot_renders_at_its_own_length_on_wangp(self, client, video, fake_services, test_state, create_fake_model_files):
+        analysed = _analysed(client, video, test_state, create_fake_model_files)
+        TestTheVideoLoopKeepsGoingUntilTheTarget._enable_wangp(test_state, fake_services)
+        client.post(f"/api/video-reproduce/{analysed['id']}/start", json={"candidates": 1, "rounds": 1})
+        job = client.get(f"/api/video-reproduce/{analysed['id']}").json()
+        for shot in job["shots"]:
+            assert shot["duration_seconds"] == max(1, round(shot["end"] - shot["start"])), shot

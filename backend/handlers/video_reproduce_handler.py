@@ -322,7 +322,7 @@ class VideoReproduceHandler(StateHandlerBase):
                     film_shot_id=film_shot.id,
                     start=analysed.start,
                     end=analysed.end,
-                    duration_seconds=self._snap(analysed.duration, model, resolution, fps),
+                    duration_seconds=self._shot_seconds(analysed.duration, model, resolution, fps),
                     start_frame=self._start_frame(analysed),
                     end_frame=self._end_frame(analysed),
                     prompt=prompt,
@@ -339,6 +339,14 @@ class VideoReproduceHandler(StateHandlerBase):
         model = settings.default_model or "fast"
         resolution = settings.default_resolution or "540p"
         return model, resolution, 24
+
+    def _shot_seconds(self, seconds: float, model: str, resolution: str, fps: int) -> float:
+        """The length to render a shot at. Local WanGP renders any whole
+        second; the LTX API's 6/8/10 s list stretched a 0.93 s shot to 6 s
+        (its motion scored 0.85 against the source)."""
+        if self._config.wangp_enabled:
+            return float(max(1, round(seconds)))
+        return self._snap(seconds, model, resolution, fps)
 
     @staticmethod
     def _snap(seconds: float, model: str, resolution: str, fps: int) -> float:
