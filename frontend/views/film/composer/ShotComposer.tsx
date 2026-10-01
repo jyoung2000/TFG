@@ -287,6 +287,7 @@ export function ShotComposer({ projectId, scene, shot, onClose, studio }: ShotCo
     sceneRef.current = composer
     composer.onSelect = id => setSelectedId(id)
     composer.onJointSelect = joint => setSelectedJoint(joint)
+    composer.onGizmoModeChange = mode => setGizmoModeState(mode)
     composer.onTransformChange = () => {
       markDirty()
       setTransformTick(t => t + 1)
@@ -1136,6 +1137,11 @@ export function ShotComposer({ projectId, scene, shot, onClose, studio }: ShotCo
                   ))}
                 </div>
               </div>
+              {gizmoMode !== 'pose' && selectedObject.type === 'figure' && (
+                <button onClick={() => setGizmoMode('pose')} className="w-full text-left text-[10px] text-violet-300 hover:text-violet-200" data-testid="pose-entry-hint">
+                  Double-click a limb or press T to pose · drag hands and feet into place
+                </button>
+              )}
               {gizmoMode === 'pose' && selectedObject.type === 'figure' && (
                 <div className="border-t border-zinc-700 pt-1.5 space-y-1" data-testid="joint-panel">
                   <div className="flex items-center gap-2 text-[11px]">
@@ -1158,7 +1164,7 @@ export function ShotComposer({ projectId, scene, shot, onClose, studio }: ShotCo
                       <NumberField key={axis} label={`${axis}°`} value={jointEuler[index as 0 | 1 | 2]} step={5} min={-180} max={180} onChange={value => updateJoint(index as 0 | 1 | 2, value)} disabled={selectedObject.locked} />
                     ))}
                   </div>
-                  <p className="text-[10px] text-zinc-500">Click any body part to edit it · drag the rings · Ctrl+Z / Ctrl+Y</p>
+                  <p className="text-[10px] text-zinc-500" data-testid="pose-drag-hint">Drag a hand or foot to place it · drag any other part to swing it · rings twist · Ctrl+Z / Ctrl+Y</p>
                 </div>
               )}
             </div>

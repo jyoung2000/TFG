@@ -28,6 +28,7 @@ import type {
 } from '../../../types/film'
 import { buildCameraMove, sampleCameraTrack } from './cameraMotion'
 import { angleCamera, type AngleView } from './angleViews'
+import { dragHandle, dragJoint } from './limbPose'
 import { pickAssetColor } from './assetColors'
 import { applyPose, applyWalkCycle, buildFigure, jointForObject, readPose, sectionMeshes, tintMeshes, type FigureRig, type JointName } from './figure'
 import { travelAlong } from './keyframes'
@@ -88,6 +89,8 @@ export class ComposerScene {
   private selectedId: string | null = null
   private selectionRing: THREE.Mesh
   private dragging: { id: string; offset: THREE.Vector3 } | null = null
+  /** Pose mode: a body part being dragged on a camera-facing plane. */
+  private limbDrag: { id: string; joint: JointName; plane: THREE.Plane; grab: THREE.Vector3 } | null = null
   private pointerDownAt: { x: number; y: number } | null = null
   private disposables: { dispose: () => void }[] = []
   private gizmoModeValue: GizmoMode = 'translate'
@@ -114,6 +117,8 @@ export class ComposerScene {
   onTransformChange: () => void = () => {}
   /** A gizmo drag started (true) or ended (false) — one undo step per drag. */
   onDragStateChange: (dragging: boolean) => void = () => {}
+  /** The composer switched gizmo mode itself (a double-click on a limb enters pose mode). */
+  onGizmoModeChange: (mode: GizmoMode) => void = () => {}
   /** The shot camera was moved by hand (gizmo / numeric input) → manual mode. */
   onCameraManualChange: () => void = () => {}
 
@@ -223,6 +228,7 @@ export class ComposerScene {
     canvas.addEventListener('pointerdown', this.handlePointerDown)
     canvas.addEventListener('pointermove', this.handlePointerMove)
     canvas.addEventListener('pointerup', this.handlePointerUp)
+    canvas.addEventListener('dblclick', this.handleDoubleClick)
 
     this.renderLoop()
   }
@@ -511,10 +517,26 @@ export class ComposerScene {
     const hit = this.hitAtPointer(event)
     const entity = hit?.entity ?? null
     if (entity && this.gizmoModeValue === 'pose') {
-      // Pose mode: a limb picks its joint; nothing slides across the floor.
+      // Pose mode: a limb picks its joint and follows the cursor while the
+      // button is down (a hand / foot goes where it is dragged, any other
+      // part swings from its joint); nothing slides across the floor.
       const joint = entity.rig ? jointForObject(hit?.object ?? null) : null
-      if (joint) this.selectJoint(entity.data.id, joint)
-      else this.select(entity.data.id)
+      if (!joint || !entity.rig) {
+        this.select(entity.data.id)
+        return
+      }
+      this.selectJoint(entity.data.id, joint)
+      if (entity.data.locked) return
+      const handle = dragHandle(entity.rig, joint)
+      const facing = this.editorCamera.getWorldDirection(new THREE.Vector3()).negate()
+      const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(facing, handle)
+      this.raycaster.setFromCamera(this.pointerNdc(event), this.editorCamera)
+      const grabbed = new THREE.Vector3()
+      if (!this.raycaster.ray.intersectPlane(plane, grabbed)) return
+      this.limbDrag = { id: entity.data.id, joint, plane, grab: handle.sub(grabbed) }
+      this.controls.enabled = false
+      this.canvas.setPointerCapture(event.pointerId)
+      this.onDragStateChange(true)
       return
     }
     if (entity) {
@@ -534,6 +556,16 @@ export class ComposerScene {
   }
 
   private handlePointerMove = (event: PointerEvent) => {
+    if (this.limbDrag) {
+      const entity = this.entities.get(this.limbDrag.id)
+      this.raycaster.setFromCamera(this.pointerNdc(event), this.editorCamera)
+      const point = new THREE.Vector3()
+      if (entity?.rig && this.raycaster.ray.intersectPlane(this.limbDrag.plane, point)) {
+        dragJoint(entity.rig, this.limbDrag.joint, point.add(this.limbDrag.grab))
+        this.onTransformChange()
+      }
+      return
+    }
     if (!this.dragging && this.gizmoModeValue === 'pose' && !this.gizmo.dragging) {
       // Pose mode: light up the section a click would pick.
       const hit = this.gizmo.axis ? null : this.hitAtPointer(event)
@@ -556,6 +588,14 @@ export class ComposerScene {
   }
 
   private handlePointerUp = (event: PointerEvent) => {
+    if (this.limbDrag) {
+      this.limbDrag = null
+      this.controls.enabled = true
+      if (this.canvas.hasPointerCapture(event.pointerId)) this.canvas.releasePointerCapture(event.pointerId)
+      this.onDragStateChange(false)
+      this.pointerDownAt = null
+      return
+    }
     if (this.dragging) {
       this.dragging = null
       this.controls.enabled = true
@@ -569,6 +609,18 @@ export class ComposerScene {
       if (moved < 4 && !this.entityAtPointer(event) && !this.cameraAtPointer(event)) this.select(null)
     }
     this.pointerDownAt = null
+  }
+
+  /** A double-click on a figure's limb, in any mode, goes straight to posing that joint. */
+  private handleDoubleClick = (event: MouseEvent) => {
+    const hit = this.hitAtPointer(event as PointerEvent)
+    const joint = hit?.entity.rig ? jointForObject(hit.object) : null
+    if (!hit || !joint) return
+    if (this.gizmoModeValue !== 'pose') {
+      this.setGizmoMode('pose')
+      this.onGizmoModeChange('pose')
+    }
+    this.selectJoint(hit.entity.data.id, joint)
   }
 
   // ---- Transforms / poses ----------------------------------------------
@@ -1161,6 +1213,7 @@ export class ComposerScene {
     this.canvas.removeEventListener('pointerdown', this.handlePointerDown)
     this.canvas.removeEventListener('pointermove', this.handlePointerMove)
     this.canvas.removeEventListener('pointerup', this.handlePointerUp)
+    this.canvas.removeEventListener('dblclick', this.handleDoubleClick)
     this.gizmo.detach()
     this.gizmo.dispose()
     this.controls.dispose()
