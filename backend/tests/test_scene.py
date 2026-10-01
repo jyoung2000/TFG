@@ -277,6 +277,25 @@ class TestCloseUpsAndGroups:
         # The heads sit near the top of the frame, the bodies run out of it.
         assert all(box[1] < 0.2 and box[1] + box[3] > 1.0 for box in figures), figures
 
+    def test_what_a_person_wears_is_part_of_them_not_a_prop(self):
+        """MEASURED (r22, the clip's second shot): a "tie" box became a cube 7 m behind the man."""
+        spec = _spec(("person", [0.1, 0.05, 0.6, 0.95], None), ("tie", [0.3, 0.6, 0.05, 0.3], None), hfov=45)
+        spec.camera.shot_size = "closeup"
+        layout = layout_from_spec(spec)
+        assert [o.kind for o in layout.objects] == ["figure"]
+        # Without a person a worn item is just an object.
+        alone = layout_from_spec(_spec(("hat", [0.4, 0.4, 0.2, 0.2], None)))
+        assert [o.kind for o in alone.objects] == ["prop"]
+
+    def test_more_faces_than_people_means_more_people(self):
+        """MEASURED (r22, the clip's second shot): two faces, one person box -
+        the man and the woman leaning in - seeded one figure."""
+        spec = _spec(("human face", [0.36, 0.16, 0.17, 0.55], None), ("person", [0.37, 0.16, 0.54, 0.82], None), ("tie", [0.4, 0.77, 0.07, 0.14], None), hfov=45)
+        spec.subjects[0].count = 2
+        spec.camera.shot_size = "closeup"
+        layout = layout_from_spec(spec)
+        assert [o.kind for o in layout.objects] == ["figure", "figure"]
+
     def test_a_face_alone_is_still_a_person(self):
         spec = _spec(("face", [0.3, 0.1, 0.4, 0.85], None), hfov=45)
         spec.camera.shot_size = "close-up"

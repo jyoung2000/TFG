@@ -41,8 +41,8 @@ logger = logging.getLogger(__name__)
 
 
 #: Bumped when seeding improves, so untouched older seeds are re-seeded.
-#: 2: close-ups, groups and body parts (r21).
-SEED_VERSION = 2
+#: 2: close-ups, groups and body parts (r21). 3: worn items, extra faces (r22).
+SEED_VERSION = 3
 
 
 def seed_fingerprint(composition: CompositionScene) -> str:

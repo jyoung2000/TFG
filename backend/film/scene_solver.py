@@ -52,6 +52,9 @@ TOLERANCE = 0.05
 #: With a person in the shot they are that person, not props; alone they
 #: stand for one (MEASURED, r21: a "human face" box became a 2 x 3 m box).
 BODY_PART_LABELS = frozenset({"face", "head", "hand", "hands", "eye", "eyes", "lips", "mouth", "nose", "ear", "hair", "arm", "leg"})
+#: What people wear: part of the person when one is in the shot (MEASURED,
+#: r22: a "tie" became a cube 7 m behind the man), an object otherwise.
+WORN_LABELS = frozenset({"tie", "shirt", "jacket", "suit", "coat", "dress", "hat", "cap", "glasses", "sunglasses", "scarf", "necklace", "earring", "earrings", "watch", "glove", "gloves", "mask"})
 #: In a tight shot a person box holds only the top of the body. A whole
 #: 1.7 m figure is then this many frame heights tall - inside the band
 #: `shot_size_from_frame_fraction` reads back as the same size.
@@ -144,6 +147,11 @@ def is_body_part(label: str) -> bool:
     return any(key == p or key.endswith(" " + p) for p in BODY_PART_LABELS)
 
 
+def is_worn(label: str) -> bool:
+    key = label.strip().lower()
+    return any(key == p or key.endswith(" " + p) for p in WORN_LABELS)
+
+
 def tight_shot_size(words: str) -> str:
     """The spec's shot size as a TIGHT_FRAME_FRACTION key, or "" for full and wider."""
     key = "".join(ch for ch in words.lower() if ch.isalpha())
@@ -160,16 +168,25 @@ def tight_shot_size(words: str) -> str:
 
 def _members(subjects: list[SpecSubject]) -> list[tuple[int, int, SpecSubject, list[float], bool]]:
     """(subject index, member index, subject, box, person) per object to place:
-    body parts fold into the people they belong to, and a person box counting
-    n people becomes n figures side by side across it."""
-    has_person = any(is_person(s.label) for s in subjects)
+    body parts and worn things fold into the people they belong to, a person
+    box counting n people becomes n figures side by side across it, and
+    faces beyond the people found stand for more people (MEASURED, r22: two
+    faces and one person box were a man and a woman)."""
+    people = sum(max(1, int(s.count or 1)) for s in subjects if is_person(s.label))
     out: list[tuple[int, int, SpecSubject, list[float], bool]] = []
     for index, subject in enumerate(subjects):
         part = is_body_part(subject.label)
-        if part and has_person:
+        x, y, w, h = subject.bbox
+        if people and is_worn(subject.label):
+            continue
+        if part and people:
+            n = max(1, int(subject.count or 1))
+            extra = n - people
+            # The last faces of the box are the ones no person box accounts for.
+            for k in range(n - extra, n) if extra > 0 else ():
+                out.append((index, k, subject, [x + w * k / n, y, w / n, h], True))
             continue
         person = part or is_person(subject.label)
-        x, y, w, h = subject.bbox
         n = max(1, int(subject.count or 1)) if person else 1
         for k in range(n):
             out.append((index, k, subject, [x + w * k / n, y, w / n, h], person))
