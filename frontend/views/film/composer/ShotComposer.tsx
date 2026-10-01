@@ -37,7 +37,7 @@ import {
 } from 'lucide-react'
 import { Button } from '../../../components/ui/button'
 import { useFilm } from '../../../contexts/FilmContext'
-import { filmApi, filmOutputUrl } from '../../../lib/film-api'
+import { filmApi, filmMediaUrl, filmOutputUrl } from '../../../lib/film-api'
 import { analysisFrameUrl, videoAnalysisApi } from '../../../lib/video-analysis-api'
 import { sceneApi } from '../../../lib/scene-api'
 import { logger } from '../../../lib/logger'
@@ -64,7 +64,7 @@ import { libraryCategories } from './blockout/moves'
 import { renderDeliver, type DeliverPass } from './blockout/deliver'
 import { validateKeyframes } from './keyframes'
 import { CompositionHistory } from './history'
-import { layoutFromComposition } from './sceneFromAnalysis'
+import { layoutFromComposition, underlaySource } from './sceneFromAnalysis'
 
 interface ShotComposerProps {
   projectId: string
@@ -222,7 +222,8 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
   const [genWarnings, setGenWarnings] = useState<string[]>([])
   const dirtyRef = useRef(false)
   // Phase 6: reference underlay, camera words from the 3D layout, undo history, Deliver.
-  const [underlayOn, setUnderlayOn] = useState(Boolean(shot.source_ref?.analysis_id))
+  const underlay = underlaySource(shot)
+  const [underlayOn, setUnderlayOn] = useState(underlay !== null)
   const [underlayOpacity, setUnderlayOpacity] = useState(0.55)
   const [underlayReady, setUnderlayReady] = useState(false)
   const [cameraWords, setCameraWords] = useState('')
@@ -342,12 +343,13 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
     }
   }, [motionPreviewOn, previewT, shot.duration_seconds, transformTick])
 
-  // Reference underlay: the analysed frame behind the viewfinder for shots that came from a video.
+  // Reference underlay in the viewfinder: the analysed frame for a shot that
+  // came from a video, else the shot's capture (a reproduced image).
   useEffect(() => {
     const composer = sceneRef.current
-    const ref = shot.source_ref
+    const source = underlaySource(shot)
     if (!composer) return
-    if (!underlayOn || !ref?.analysis_id) {
+    if (!underlayOn || !source) {
       composer.underlay.clear()
       setUnderlayReady(false)
       return
@@ -355,11 +357,16 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
     let active = true
     void (async () => {
       try {
-        const analysis = await videoAnalysisApi.get(ref.analysis_id)
-        const analysed = analysis.shots.find(s => s.id === ref.analysis_shot_id)
-        const frame = analysed?.frames.find(f => f.role === 'start') ?? analysed?.frames[0]
-        if (!frame || !active) return
-        const url = await analysisFrameUrl(ref.analysis_id, frame.path)
+        let url = ''
+        if (source.kind === 'analysis') {
+          const analysis = await videoAnalysisApi.get(source.analysisId)
+          const analysed = analysis.shots.find(s => s.id === source.shotId)
+          const frame = analysed?.frames.find(f => f.role === 'start') ?? analysed?.frames[0]
+          if (!frame || !active) return
+          url = await analysisFrameUrl(source.analysisId, frame.path)
+        } else {
+          url = await filmMediaUrl(projectId, source.path)
+        }
         if (!active) return
         await composer.underlay.load(url)
         if (active) setUnderlayReady(true)
@@ -369,7 +376,7 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
       }
     })()
     return () => { active = false }
-  }, [underlayOn, shot.source_ref, shot.id])
+  }, [underlayOn, shot.source_ref, shot.capture_path, shot.id, projectId])
 
   useEffect(() => {
     const composer = sceneRef.current
@@ -1193,11 +1200,11 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
 
           <Section title="3D scene" defaultOpen badge={shot.source_ref?.analysis_id ? 'from video' : undefined}>
             <div className="space-y-2" data-testid="composer-3d-scene">
-              {shot.source_ref?.analysis_id ? (
+              {underlay && (
                 <>
                   <label className="flex items-center gap-2 text-[11px] text-zinc-400">
                     <input type="checkbox" checked={underlayOn} onChange={event => setUnderlayOn(event.target.checked)} data-testid="composer-underlay" />
-                    Reference frame in the viewfinder{underlayReady ? '' : underlayOn ? ' (loading…)' : ''}
+                    {underlay.kind === 'capture' ? 'Shot image' : 'Reference frame'} in the viewfinder{underlayReady ? '' : underlayOn ? ' (loading…)' : ''}
                   </label>
                   {underlayOn && (
                     <label className="block text-[11px] text-zinc-400">
@@ -1205,6 +1212,10 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
                       <input type="range" min={0} max={1} step={0.05} value={underlayOpacity} onChange={event => setUnderlayOpacity(Number(event.target.value))} className="w-full mt-1" aria-label="Underlay opacity" />
                     </label>
                   )}
+                </>
+              )}
+              {shot.source_ref?.analysis_id ? (
+                <>
                   <Button size="sm" variant="secondary" disabled={anyBusy} onClick={() => void applyToSpec()} className="w-full gap-1.5">
                     <Layers className="h-3.5 w-3.5" /> Apply 3D layout to the shot spec
                   </Button>

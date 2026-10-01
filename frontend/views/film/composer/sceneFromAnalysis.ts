@@ -134,3 +134,14 @@ export function layoutFromComposition(composition: CompositionScene, base?: Spec
     : { pos: [0, 1.6, 4], rot: [0, 0, 0], fov: DEFAULT_VFOV_DEG }
   return { camera, objects, depth_map_path: base?.depth_map_path ?? '' }
 }
+
+export type UnderlaySource = { kind: 'analysis'; analysisId: string; shotId: string } | { kind: 'capture'; path: string }
+
+/** What the composer shows behind the viewfinder: the analysed frame for a
+ * shot from a video, else the shot's capture (a reproduced image), else nothing. */
+export function underlaySource(shot: { source_ref?: { analysis_id?: string; analysis_shot_id?: string } | null; capture_path?: string }): UnderlaySource | null {
+  const ref = shot.source_ref
+  if (ref?.analysis_id) return { kind: 'analysis', analysisId: ref.analysis_id, shotId: ref.analysis_shot_id ?? '' }
+  if (shot.capture_path) return { kind: 'capture', path: shot.capture_path }
+  return null
+}

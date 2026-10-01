@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { SpecLayout3D } from '../../../types/shotspec'
-import { cameraKeyframes, compositionFromLayout, figureVariantFor, layoutFromComposition } from './sceneFromAnalysis'
+import { cameraKeyframes, compositionFromLayout, figureVariantFor, layoutFromComposition, underlaySource } from './sceneFromAnalysis'
 import { putKeyframe, sampleKeyframes, travelAlong, validateKeyframes } from './keyframes'
 import { CompositionHistory } from './history'
 
@@ -102,5 +102,22 @@ describe('CompositionHistory (Blocking-Room port)', () => {
     history.commit({ n: 6 })
     history.commit({ n: 7 })
     expect(history.length).toBe(4) // limit + 1
+  })
+})
+
+/* MEASURED (r23): a shot made by image reproduce opened in the composer with
+ * no reference at all - the underlay only knew analysed video frames, while the
+ * shot carries the chosen image as its capture. */
+describe('underlaySource', () => {
+  it('uses the analysed frame for a shot that came from a video', () => {
+    expect(underlaySource({ source_ref: { analysis_id: 'va-1', analysis_shot_id: 'vs-1' }, capture_path: 'captures/x.jpg' })).toEqual({ kind: 'analysis', analysisId: 'va-1', shotId: 'vs-1' })
+  })
+
+  it("falls back to the shot's capture, e.g. a reproduced image", () => {
+    expect(underlaySource({ source_ref: null, capture_path: 'captures/shot-1-reproduce.png' })).toEqual({ kind: 'capture', path: 'captures/shot-1-reproduce.png' })
+  })
+
+  it('has nothing to show without either', () => {
+    expect(underlaySource({ source_ref: null, capture_path: '' })).toBeNull()
   })
 })
