@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { FIGURE_HEIGHTS, JOINT_NAMES, applyPose, buildFigure, mirrorPose, readPose } from './figure'
+import { FIGURE_HEIGHTS, JOINT_NAMES, applyPose, buildFigure, jointForObject, mirrorPose, readPose } from './figure'
 
 describe('mirrorPose', () => {
   it('swaps left/right limbs and flips yaw/roll', () => {
@@ -38,5 +38,33 @@ describe('buildFigure', () => {
     applyPose(rig, {})
     expect(readPose(rig)).toEqual({})
     rig.dispose()
+  })
+})
+
+/* Asked 2026-10-01: poses must be easy to edit. In Pose mode a click on a
+ * limb picks the joint that limb hangs from, and the rotate gizmo goes there. */
+describe('jointForObject', () => {
+  it('maps every limb mesh to the joint it hangs from', () => {
+    const rig = buildFigure('female', '#e4572e')
+    for (const name of JOINT_NAMES) {
+      const group = rig.joints[name]
+      // Its own meshes, and those in the unnamed segment wrapper a limb hangs in (not child joints).
+      const meshes = group.children.flatMap(child => (child.type === 'Mesh' ? [child] : child.name === '' ? child.children.filter(c => c.type === 'Mesh') : []))
+      for (const mesh of meshes) expect(jointForObject(mesh)).toBe(name)
+    }
+  })
+
+  it('a forearm click is the elbow, an upper-arm click the shoulder', () => {
+    const rig = buildFigure('male', '#29b6f6')
+    const upper = rig.joints.l_arm.children[0].children.find(c => c.type === 'Mesh')!
+    const lower = rig.joints.l_elbow.children[0].children.find(c => c.type === 'Mesh')!
+    expect(jointForObject(upper)).toBe('l_arm')
+    expect(jointForObject(lower)).toBe('l_elbow')
+  })
+
+  it('the pelvis belongs to no joint: clicking it moves the whole figure', () => {
+    const rig = buildFigure('male', '#29b6f6')
+    const pelvisMesh = rig.root.children[0].children.find(c => c.type === 'Mesh')!
+    expect(jointForObject(pelvisMesh)).toBeNull()
   })
 })

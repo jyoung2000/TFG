@@ -262,6 +262,21 @@ export function buildFigure(variant: FigureVariant, colorHex: string): FigureRig
   }
 }
 
+/**
+ * The posable joint a clicked part of a figure belongs to: the nearest named
+ * joint above it in the rig (a forearm is the elbow, an upper arm the
+ * shoulder). Null for the pelvis or anything outside a rig.
+ */
+export function jointForObject(object: THREE.Object3D | null): JointName | null {
+  let current = object
+  while (current) {
+    if ((JOINT_NAMES as readonly string[]).includes(current.name)) return current.name as JointName
+    if (current.userData.entityId) return null
+    current = current.parent
+  }
+  return null
+}
+
 const toRad = (deg: number) => (deg * Math.PI) / 180
 const toDeg = (rad: number) => (rad * 180) / Math.PI
 

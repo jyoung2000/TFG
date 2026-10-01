@@ -27,18 +27,18 @@ import type {
   Vec3,
 } from '../../../types/film'
 import { buildCameraMove, sampleCameraTrack } from './cameraMotion'
-import { applyPose, applyWalkCycle, buildFigure, readPose, type FigureRig } from './figure'
+import { pickAssetColor } from './assetColors'
+import { applyPose, applyWalkCycle, buildFigure, jointForObject, readPose, type FigureRig, type JointName } from './figure'
 import { travelAlong } from './keyframes'
 import { ReferenceUnderlay } from './blockout/underlay'
 import { keyframesFromPreset, presetById } from './blockout/moves'
 import type { DeliverPass } from './blockout/deliver'
 import { applySolvedShot, getCharacterAnchors, solveShot } from './shotSolver'
 
-const FIGURE_COLORS = ['#7f9cc4', '#c4907f', '#8fc47f', '#b98fc4', '#c4b97f', '#7fc4b9']
-
 export const SHOT_CAMERA_ID = 'shot-camera'
 
-export type GizmoMode = 'translate' | 'rotate' | 'scale'
+/** `pose`: click a figure's limb to rotate that joint with the gizmo. */
+export type GizmoMode = 'translate' | 'rotate' | 'scale' | 'pose'
 
 export interface ComposerEntity {
   data: CompositionObject
@@ -87,6 +87,8 @@ export class ComposerScene {
   private pointerDownAt: { x: number; y: number } | null = null
   private disposables: { dispose: () => void }[] = []
   private gizmoModeValue: GizmoMode = 'translate'
+  /** The joint the gizmo rotates in pose mode. */
+  private selectedJoint: JointName | null = null
 
   /** Camera keyframes for motion preview / hand-authored camera animation. */
   cameraKeyframes: CompositionKeyframe[] = []
@@ -99,6 +101,8 @@ export class ComposerScene {
   readonly underlay: ReferenceUnderlay
 
   onSelect: (id: string | null) => void = () => {}
+  /** Pose mode picked a joint by clicking a limb. */
+  onJointSelect: (joint: JointName) => void = () => {}
   /** Any object transform/pose changed (gizmo, drag, sliders, keyframes). */
   onTransformChange: () => void = () => {}
   /** A gizmo drag started (true) or ended (false) — one undo step per drag. */
@@ -218,18 +222,19 @@ export class ComposerScene {
 
   // ---- Object lifecycle -------------------------------------------------
 
-  private nextColor(): string {
-    const used = this.entities.size
-    return FIGURE_COLORS[used % FIGURE_COLORS.length]
+  private colorsInUse(): string[] {
+    return [...this.entities.values()].map(e => e.data.color).filter((c): c is string => Boolean(c))
   }
 
   addObject(data: CompositionObject): void {
     let node: THREE.Object3D
     let rig: FigureRig | null = null
+    if (data.type !== 'camera') {
+      // Every object its own colour, so separate assets read apart at a glance.
+      data.color = pickAssetColor(data.color, this.colorsInUse())
+    }
     if (data.type === 'figure') {
-      const color = data.color || this.nextColor()
-      data.color = color
-      rig = buildFigure(data.figure_variant, color)
+      rig = buildFigure(data.figure_variant, data.color)
       node = rig.root
       applyPose(rig, data.pose)
     } else if (data.type === 'camera') {
@@ -237,7 +242,7 @@ export class ComposerScene {
     } else {
       const spec = PRIMITIVES[data.type] ?? PRIMITIVES.cube
       const geometry = spec.geometry()
-      const material = new THREE.MeshStandardMaterial({ color: data.color || '#8a93a6', roughness: 0.8 })
+      const material = new THREE.MeshStandardMaterial({ color: data.color, roughness: 0.8 })
       const mesh = new THREE.Mesh(geometry, material)
       mesh.castShadow = true
       mesh.position.y = spec.y
@@ -257,7 +262,7 @@ export class ComposerScene {
   removeObject(id: string): void {
     const entity = this.entities.get(id)
     if (!entity) return
-    if (this.gizmo.object === entity.node) this.gizmo.detach()
+    if (this.gizmo.object && this.isWithin(this.gizmo.object, entity.node)) this.gizmo.detach()
     this.scene.remove(entity.node)
     entity.rig?.dispose()
     this.entities.delete(id)
@@ -325,8 +330,35 @@ export class ComposerScene {
 
   // ---- Selection / gizmo -----------------------------------------------
 
+  private isWithin(object: THREE.Object3D, root: THREE.Object3D): boolean {
+    for (let current: THREE.Object3D | null = object; current; current = current.parent) {
+      if (current === root) return true
+    }
+    return false
+  }
+
+  /** Pose mode: rotate one joint of a figure with the gizmo. */
+  selectJoint(id: string, joint: JointName): void {
+    const entity = this.entities.get(id)
+    if (!entity?.rig) return
+    this.selectedId = id
+    this.selectedJoint = joint
+    if (entity.data.locked) this.gizmo.detach()
+    else this.gizmo.attach(entity.rig.joints[joint])
+    this.applyGizmoConstraints(entity)
+    this.onSelect(id)
+    this.onJointSelect(joint)
+  }
+
   select(id: string | null): void {
     this.selectedId = id
+    const posing = this.gizmoModeValue === 'pose' ? this.entities.get(id ?? '') : undefined
+    if (posing?.rig && this.selectedJoint && !posing.data.locked) {
+      this.gizmo.attach(posing.rig.joints[this.selectedJoint])
+      this.applyGizmoConstraints(posing)
+      this.onSelect(id)
+      return
+    }
     if (id === SHOT_CAMERA_ID) {
       this.gizmo.attach(this.shotCamera)
       this.applyGizmoConstraints(null)
@@ -357,14 +389,32 @@ export class ComposerScene {
   }
 
   setGizmoMode(mode: GizmoMode): void {
+    const wasPosing = this.gizmoModeValue === 'pose'
     this.gizmoModeValue = mode
-    this.gizmo.setMode(mode)
-    this.applyGizmoConstraints(this.selected)
+    this.gizmo.setMode(mode === 'pose' ? 'rotate' : mode)
+    // A joint turns about its own axes; whole objects move in world space.
+    this.gizmo.setSpace(mode === 'pose' ? 'local' : 'world')
+    if (mode === 'pose' || wasPosing) this.select(this.selectedId)
+    else this.applyGizmoConstraints(this.selected)
+  }
+
+  /** The joint pose mode is rotating, if any. */
+  get poseJoint(): JointName | null {
+    return this.gizmoModeValue === 'pose' ? this.selectedJoint : null
+  }
+
+  setPoseJoint(joint: JointName): void {
+    this.selectedJoint = joint
+    if (this.gizmoModeValue === 'pose') this.select(this.selectedId)
   }
 
   private applyGizmoConstraints(entity: ComposerEntity | null): void {
     const isFigure = entity?.data.type === 'figure'
     const mode = this.gizmoModeValue
+    if (mode === 'pose') {
+      this.gizmo.showX = this.gizmo.showY = this.gizmo.showZ = true
+      return
+    }
     // Figures: slide on the floor, spin around Y, scale uniformly.
     this.gizmo.showX = true
     this.gizmo.showZ = true
@@ -388,6 +438,11 @@ export class ComposerScene {
   }
 
   private entityAtPointer(event: PointerEvent): ComposerEntity | null {
+    return this.hitAtPointer(event)?.entity ?? null
+  }
+
+  /** The entity under the pointer and the exact part of it that was hit. */
+  private hitAtPointer(event: PointerEvent): { entity: ComposerEntity; object: THREE.Object3D } | null {
     this.raycaster.setFromCamera(this.pointerNdc(event), this.editorCamera)
     const nodes = [...this.entities.values()].filter(e => e.node.visible).map(e => e.node)
     const hits = this.raycaster.intersectObjects(nodes, true)
@@ -395,7 +450,10 @@ export class ComposerScene {
       let current: THREE.Object3D | null = hit.object
       while (current) {
         const id = current.userData.entityId as string | undefined
-        if (id) return this.entities.get(id) ?? null
+        if (id) {
+          const entity = this.entities.get(id)
+          return entity ? { entity, object: hit.object } : null
+        }
         current = current.parent
       }
     }
@@ -413,7 +471,15 @@ export class ComposerScene {
     // The gizmo owns the pointer while a handle is hovered/dragged.
     if (this.gizmo.axis || this.gizmo.dragging) return
     this.pointerDownAt = { x: event.clientX, y: event.clientY }
-    const entity = this.entityAtPointer(event)
+    const hit = this.hitAtPointer(event)
+    const entity = hit?.entity ?? null
+    if (entity && this.gizmoModeValue === 'pose') {
+      // Pose mode: a limb picks its joint; nothing slides across the floor.
+      const joint = entity.rig ? jointForObject(hit?.object ?? null) : null
+      if (joint) this.selectJoint(entity.data.id, joint)
+      else this.select(entity.data.id)
+      return
+    }
     if (entity) {
       this.select(entity.data.id)
       if (entity.data.locked) return

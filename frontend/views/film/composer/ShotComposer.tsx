@@ -58,7 +58,7 @@ import type {
 import { CAMERA_ANGLES, CAMERA_ELEVATIONS, CAMERA_MOVES, COMPOSITIONS, SHOT_SIZES } from '../../../types/film'
 import { useShotWorkflow } from '../useShotWorkflow'
 import { ComposerScene, SHOT_CAMERA_ID, type GizmoMode } from './composerScene'
-import { JOINT_LABELS, JOINT_NAMES, mirrorPose } from './figure'
+import { JOINT_LABELS, JOINT_NAMES, mirrorPose, type JointName } from './figure'
 import { mergePoseLibrary, type PoseEntry } from './poses'
 import { libraryCategories } from './blockout/moves'
 import { renderDeliver, type DeliverPass } from './blockout/deliver'
@@ -263,6 +263,7 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
     const composer = new ComposerScene(canvas)
     sceneRef.current = composer
     composer.onSelect = id => setSelectedId(id)
+    composer.onJointSelect = joint => setSelectedJoint(joint)
     composer.onTransformChange = () => {
       markDirty()
       setTransformTick(t => t + 1)
@@ -329,7 +330,8 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
     if (!selectedId || selectedId === SHOT_CAMERA_ID) return
     const pose = sceneRef.current?.readPoseOf(selectedId) ?? {}
     setJointEuler(pose[selectedJoint] ?? [0, 0, 0])
-  }, [selectedId, selectedJoint])
+    // Also after every edit: a gizmo rotation in pose mode moves the sliders.
+  }, [selectedId, selectedJoint, transformTick])
 
   // Motion preview scrubber drives the camera + keyframed objects.
   useEffect(() => {
@@ -440,6 +442,7 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
       if (event.key === 'w' || event.key === 'W') setGizmoMode('translate')
       else if (event.key === 'e' || event.key === 'E') setGizmoMode('rotate')
       else if (event.key === 'r' || event.key === 'R') setGizmoMode('scale')
+      else if (event.key === 't' || event.key === 'T') setGizmoMode('pose')
       else if (event.key === 'Escape') composer.select(null)
       else if ((event.key === 'Delete' || event.key === 'Backspace') && selectedId && selectedId !== SHOT_CAMERA_ID) {
         removeObject(selectedId)
@@ -584,6 +587,14 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
     },
     [selectedId, selectedJoint],
   )
+
+  const endSliderDrag = useCallback(() => {
+    const composer = sceneRef.current
+    const history = historyRef.current
+    if (!composer || !history) return
+    history.end(composer.serialize(framing, cameraMove, shot.duration_seconds))
+    setHistoryTick(t => t + 1)
+  }, [framing, cameraMove, shot.duration_seconds])
 
   const updateJoint = useCallback(
     (axis: 0 | 1 | 2, value: number) => {
@@ -849,6 +860,7 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
               ['translate', Move, 'Move (W)'],
               ['rotate', RotateCw, 'Rotate (E)'],
               ['scale', Maximize2, 'Scale (R)'],
+              ['pose', PersonStanding, 'Pose (T): click a limb, drag the rings'],
             ] as const
           ).map(([mode, Icon, title]) => (
             <button
@@ -869,7 +881,7 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
         )}
         <div className="flex items-center rounded-lg border border-zinc-700 overflow-hidden" role="group" aria-label="History">
           <button onClick={undo} disabled={!historyRef.current?.canUndo} aria-label="Undo (Ctrl+Z)" title="Undo (Ctrl+Z)" className="p-1.5 text-zinc-400 hover:bg-zinc-800 disabled:opacity-40"><Undo2 className="h-3.5 w-3.5" /></button>
-          <button onClick={redo} disabled={!historyRef.current?.canRedo} aria-label="Redo (Ctrl+Shift+Z)" title="Redo (Ctrl+Shift+Z)" className="p-1.5 text-zinc-400 hover:bg-zinc-800 disabled:opacity-40"><Redo2 className="h-3.5 w-3.5" /></button>
+          <button onClick={redo} disabled={!historyRef.current?.canRedo} aria-label="Redo (Ctrl+Y)" title="Redo (Ctrl+Y or Ctrl+Shift+Z)" className="p-1.5 text-zinc-400 hover:bg-zinc-800 disabled:opacity-40"><Redo2 className="h-3.5 w-3.5" /></button>
         </div>
         {cameraWords && <span className="hidden lg:inline text-[11px] text-violet-300 truncate max-w-[18rem]" data-testid="composer-camera-words" title="Camera language derived from the 3D scene">{cameraWords}</span>}
         <Button size="sm" variant="secondary" onClick={() => void saveComposition()} disabled={anyBusy} className="gap-1.5">
@@ -917,6 +929,7 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
                   setRenameDraft(object.name)
                 }}
               >
+                <span className="h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-black/40" style={{ background: object.color }} aria-hidden data-testid="object-swatch" />
                 {objectIcon(object.type)}
                 {renamingId === object.id ? (
                   <input
@@ -1266,6 +1279,10 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
           <Section title="Pose">
             {selectedObject && sceneRef.current?.getEntity(selectedObject.id)?.rig ? (
               <div className="space-y-2">
+                <p className="text-[10px] text-zinc-500" data-testid="pose-hint">
+                  <button onClick={() => setGizmoMode('pose')} className={`underline ${gizmoMode === 'pose' ? 'text-violet-300' : 'text-zinc-300'}`}>Pose mode (T)</button>: click a limb in the
+                  viewport, then drag the rings to bend it. Ctrl+Z undoes, Ctrl+Y redoes.
+                </p>
                 <div className="flex flex-wrap gap-1">
                   {poseLibrary.map(entry => (
                     <button
@@ -1304,7 +1321,10 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
                 <div className="border-t border-zinc-800 pt-2 space-y-1">
                   <select
                     value={selectedJoint}
-                    onChange={event => setSelectedJoint(event.target.value)}
+                    onChange={event => {
+                      setSelectedJoint(event.target.value)
+                      sceneRef.current?.setPoseJoint(event.target.value as JointName)
+                    }}
                     className="w-full bg-zinc-800 border border-zinc-700 rounded px-1.5 py-1 text-xs text-zinc-200"
                     aria-label="Joint"
                   >
@@ -1324,6 +1344,10 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
                         step={1}
                         value={jointEuler[index as 0 | 1 | 2]}
                         onChange={event => updateJoint(index as 0 | 1 | 2, Number(event.target.value))}
+                        // One undo step per slider drag, not one per pixel.
+                        onPointerDown={() => historyRef.current?.begin()}
+                        onPointerUp={endSliderDrag}
+                        aria-label={`${JOINT_LABELS[selectedJoint as JointName] ?? selectedJoint} ${axis}`}
                         className="flex-1"
                       />
                       <span className="w-8 text-right tabular-nums">{jointEuler[index as 0 | 1 | 2].toFixed(0)}°</span>
