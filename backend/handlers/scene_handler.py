@@ -44,8 +44,8 @@ logger = logging.getLogger(__name__)
 #: Bumped when seeding improves, so untouched older seeds are re-seeded.
 #: 2: close-ups, groups and body parts (r21). 3: worn items, extra faces (r22).
 #: 4: whole-body boxes overrule the shot-size words; face figures are "person" (r23).
-#: 5: figures take the people's poses (DWPose).
-SEED_VERSION = 5
+#: 5: figures take the people's poses (DWPose). 6: whole bodies at a frame edge are life-size.
+SEED_VERSION = 6
 
 
 def seed_fingerprint(composition: CompositionScene) -> str:

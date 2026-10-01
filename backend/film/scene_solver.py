@@ -319,7 +319,8 @@ def layout_from_spec(spec: ShotSpec, *, vfov_deg: float | None = None) -> SpecLa
         label = "person" if part else subject.label
         whole_body = not part and (legs_visible or (h / max(w, 1e-4)) / aspect >= WHOLE_BODY_BOX_RATIO)
         if person and tight and not whole_body:
-            objects.append(_tight_figure(camera, box, tight, _object_id(index, member, True), label))
+            frame = FIGURE_REF_HEIGHT_M / TIGHT_FRAME_FRACTION[tight]
+            objects.append(_figure_from_box_top(camera, box, frame, _object_id(index, member, True), label))
             pose_figure(objects[-1], box)
             continue
         # Grounded when the box's bottom ray reaches the floor in front of the
@@ -335,6 +336,13 @@ def layout_from_spec(spec: ShotSpec, *, vfov_deg: float | None = None) -> SpecLa
             distance = camera.depth_along_axis((ax, ay, az))
             if distance < 0.4:
                 grounded = False
+        if not grounded and person and whole_body:
+            # Head to toe in the frame but touching its edge: life-size, at the
+            # distance where a 1.7 m body spans the box (MEASURED, r26: the
+            # depth map's 7.1 m made a 10 m woman of a full-length portrait).
+            objects.append(_figure_from_box_top(camera, box, FIGURE_REF_HEIGHT_M / max(h, 0.05), _object_id(index, member, True), label))
+            pose_figure(objects[-1], box)
+            continue
         if not grounded:
             distance = _distance_for(subject, camera)
             rx, ry, rz = camera.ray(x + w / 2, y + h / 2)
@@ -381,12 +389,11 @@ def layout_from_spec(spec: ShotSpec, *, vfov_deg: float | None = None) -> SpecLa
     return layout
 
 
-def _tight_figure(camera: Camera, box: list[float], size: str, object_id: str, label: str) -> SpecLayoutObject:
-    """A whole figure for a person seen in a tight shot: at the distance where
-    the frame holds the top 1/TIGHT_FRAME_FRACTION of a 1.7 m body, its head
-    at the box's top edge and the rest of the body below the frame."""
+def _figure_from_box_top(camera: Camera, box: list[float], frame_height_m: float, object_id: str, label: str) -> SpecLayoutObject:
+    """A life-size figure whose head meets the box's top edge, at the distance
+    where the frame is `frame_height_m` tall: a tight shot frames the top of
+    the body (the rest runs out of the frame), a full one the whole body."""
     x, y, w, _ = box
-    frame_height_m = FIGURE_REF_HEIGHT_M / TIGHT_FRAME_FRACTION[size]
     distance = frame_height_m / (2 * camera.tan_v)
     rx, ry, rz = camera.ray(x + w / 2, y)
     axis = camera.depth_along_axis((camera.pos[0] + rx, camera.pos[1] + ry, camera.pos[2] + rz))

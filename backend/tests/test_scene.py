@@ -314,6 +314,20 @@ class TestCloseUpsAndGroups:
         assert [(o.kind, o.label) for o in layout.objects] == [("figure", "woman")]
         assert describe_camera(layout)["shot_size"] == "full"
 
+    def test_a_whole_body_touching_the_frame_edge_is_life_size(self):
+        """MEASURED (r26, the same image): her box reaches 0.982 of the frame,
+        so she counted as cut off and stood at the depth map's 7.1 m - scaled
+        6x to fill the box: a 10 m woman, only her legs in the composer."""
+        from film.shot_spec import SpecSource
+
+        spec = _spec(("trousers", [0.262, 0.428, 0.529, 0.493], 0.75), ("woman", [0.13, 0.006, 0.747, 0.976], 0.5365), hfov=45)
+        spec.source = SpecSource(width=1125, height=2000, aspect="9:16")
+        spec.camera.shot_size = "medium"
+        figure = next(o for o in layout_from_spec(spec).objects if o.kind == "figure")
+        assert figure.scale[1] == pytest.approx(1.0, abs=0.15), figure
+        box = reproject_layout(layout_from_spec(spec), aspect_of(spec))[figure.id]
+        assert abs(box[1] - 0.006) < 0.03 and abs(box[1] + box[3] - 0.982) < 0.03, box
+
     def test_a_figure_standing_for_a_face_is_named_as_a_person(self):
         spec = _spec(("human face", [0.3, 0.1, 0.4, 0.85], None), hfov=45)
         spec.camera.shot_size = "closeup"
