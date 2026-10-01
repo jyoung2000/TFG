@@ -230,7 +230,7 @@ ANGLE_SUBJECT = "the same person as in the reference image, same face, same hair
 ANGLE_SUBJECT_POSED = "the person from the second image, in exactly the pose, camera angle and framing of the figure in the first image, same face, same hair, same body, same outfit"
 #: Live pose preview: the viewfinder (posed mannequin) is the scene, the photo the person.
 PREVIEW_SUBJECT = "the person from the second image, in exactly the pose, camera angle and framing of the figure in the first image"
-PREVIEW_KEEP = "same face, same hair, same body, same outfit, same lighting and background as the second image, photo, sharp focus"
+PREVIEW_KEEP = "same face, same hair, same body, same outfit and same lighting as the second image, in the setting and background of the second image, not the grey 3D studio of the first image, photo, sharp focus"
 PREVIEW_SEED = 7
 PREVIEW_MAX_EDGE = 1024
 FRAME_CAST = "the people from the reference images as the characters, same faces, same hair, same outfits"
@@ -1537,7 +1537,7 @@ class FilmGenerationHandler(StateHandlerBase):
         folder.mkdir(parents=True, exist_ok=True)
         guide = folder / "pose-guide.png"
         guide.write_bytes(_decode_image(req.guide_base64))
-        prompt = ", ".join(p for p in (PREVIEW_SUBJECT, req.prompt.strip(), PREVIEW_KEEP) if p)
+        prompt = ", ".join(p for p in (PREVIEW_SUBJECT, req.pose.strip(), req.prompt.strip(), PREVIEW_KEEP) if p)
         started = time.perf_counter()
         response = handler.generate(
             GenerateImageRequest(prompt=prompt, width=width, height=height, numImages=1, model=model),

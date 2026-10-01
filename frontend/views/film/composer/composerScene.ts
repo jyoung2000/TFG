@@ -30,6 +30,7 @@ import { buildCameraMove, sampleCameraTrack } from './cameraMotion'
 import { angleCamera, type AngleView } from './angleViews'
 import { dragHandle, dragJoint } from './limbPose'
 import { pickAssetColor } from './assetColors'
+import { poseWords } from './poseWords'
 import { applyPose, applyWalkCycle, buildFigure, jointForObject, readPose, sectionMeshes, tintMeshes, type FigureRig, type JointName } from './figure'
 import { travelAlong } from './keyframes'
 import { ReferenceUnderlay } from './blockout/underlay'
@@ -786,6 +787,21 @@ export class ComposerScene {
     this.cameraHelper.update()
     this.cameraKeyframes = []
     this.previewTime = null
+  }
+
+  /**
+   * The first figure's pose in words for the live preview: only limbs that
+   * differ from `baseline` (the photo's pose), sided as the shot camera sees
+   * them.
+   */
+  describePose(baseline: Record<string, Vec3> | null): string {
+    const id = this.firstFigureId()
+    const entity = id ? this.entities.get(id) : undefined
+    if (!entity?.rig) return ''
+    const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(entity.node.getWorldQuaternion(new THREE.Quaternion())).setY(0).normalize()
+    const toCamera = this.shotCamera.position.clone().sub(entity.node.getWorldPosition(new THREE.Vector3())).setY(0).normalize()
+    const facing = forward.dot(toCamera)
+    return poseWords(entity.rig, baseline, facing > 0.5 ? 'camera' : facing < -0.5 ? 'away' : 'side')
   }
 
   firstFigureId(): string | null {

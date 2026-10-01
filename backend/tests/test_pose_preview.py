@@ -58,6 +58,24 @@ class TestPosePreview:
         assert len(client.get("/api/jobs").json()["jobs"]) == jobs_before
         assert client.get(f"/api/film/projects/{PROJECT}").json()["project"]["assets"] == project_before["assets"]
 
+    def test_the_edit_is_spelled_out_and_the_photo_keeps_its_background(self, client, test_state, fake_services, create_fake_model_files):
+        # Live in r34: shown only the mannequin, FLUX.2 copied the photo's pose
+        # unchanged; told the edit in words it followed it, but took the
+        # mannequin's grey studio for the background until told not to.
+        create_fake_model_files(include_zit=True)
+        _wangp(test_state, fake_services)
+        photo = _photo(client)
+        pose = "the person's left arm (on the right side of the picture) raised straight up above the head"
+        response = client.post(
+            f"/api/film/projects/{PROJECT}/preview-render",
+            json={"guide_base64": _png((200, 90, 40)), "reference_path": photo, "prompt": "a woman", "pose": pose},
+        )
+        assert response.status_code == 200, response.text
+        prompt = [m[0]["params"] for m in fake_services.wangp_bridge.manifests if "image_mode" in m[0]["params"]][-1]["prompt"]
+        assert pose in prompt
+        assert prompt.index(pose) < prompt.index("a woman"), "the edit leads, ahead of the shot description"
+        assert "not the grey 3D studio" in prompt
+
     def test_a_photo_outside_the_project_is_refused(self, client, test_state, fake_services, create_fake_model_files):
         create_fake_model_files(include_zit=True)
         _wangp(test_state, fake_services)

@@ -122,6 +122,9 @@ class PreviewRenderRequest(BaseModel):
     #: Project-relative path of the original photo (a capture or an asset image).
     reference_path: str
     prompt: str = ""
+    #: The edit in words ("the person's left arm ... raised straight up above
+    #: the head"): the image model follows words, not the mannequin alone.
+    pose: str = ""
     width: int = 576
     height: int = 1024
     seed: int | None = None

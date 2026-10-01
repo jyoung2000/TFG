@@ -36,6 +36,9 @@ export function PosePreviewPanel({ projectId, shot, film, getComposer, editTick,
   const [preview, setPreview] = useState('')
   const [status, setStatus] = useState('')
   const [rendering, setRendering] = useState(false)
+  // The photo's pose: the figure as saved when the composer opened. Only the
+  // limbs edited away from it are spelled out to the image model.
+  const [baseline] = useState(() => shot.composition?.objects.find(o => o.type === 'figure')?.pose ?? null)
 
   // The original: what the composer shows behind the viewfinder. The photo the
   // preview keeps must be a project file - for a video frame, the cast's image.
@@ -78,7 +81,8 @@ export function PosePreviewPanel({ projectId, shot, film, getComposer, editTick,
     try {
       // The viewfinder at the photo's shape: the same framing the photo has.
       const guide = composer.capture(width, height)
-      const result = await filmApi.previewRender(projectId, { guide_base64: guide, reference_path: photoPath, prompt, width, height })
+      const pose = composer.describePose(baseline)
+      const result = await filmApi.previewRender(projectId, { guide_base64: guide, reference_path: photoPath, prompt, pose, width, height })
       setPreview(result.image)
       setStatus(`Updated in ${result.seconds.toFixed(1)} s`)
     } catch (e) {
@@ -86,7 +90,7 @@ export function PosePreviewPanel({ projectId, shot, film, getComposer, editTick,
     } finally {
       setRendering(false)
     }
-  }, [getComposer, photoPath, originalAspect, projectId, prompt])
+  }, [getComposer, photoPath, originalAspect, projectId, prompt, baseline])
 
   const renderRef = useRef(renderPreview)
   renderRef.current = renderPreview
