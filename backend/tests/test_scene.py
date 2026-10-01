@@ -325,6 +325,7 @@ class TestCloseUpsAndGroups:
         spec.camera.shot_size = "medium"
         figure = next(o for o in layout_from_spec(spec).objects if o.kind == "figure")
         assert figure.scale[1] == pytest.approx(1.0, abs=0.15), figure
+        assert figure.pos[1] < 0.05, "she stands on the floor (the camera comes down, not her feet up)"
         box = reproject_layout(layout_from_spec(spec), aspect_of(spec))[figure.id]
         assert abs(box[1] - 0.006) < 0.03 and abs(box[1] + box[3] - 0.982) < 0.03, box
 

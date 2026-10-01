@@ -313,6 +313,8 @@ def layout_from_spec(spec: ShotSpec, *, vfov_deg: float | None = None) -> SpecLa
             figure.rot = [0.0, round(math.pi, 5), 0.0]
 
     objects: list[SpecLayoutObject] = []
+    #: Whole bodies placed from their box: their feet belong on the floor.
+    standing: list[SpecLayoutObject] = []
     for index, member, subject, box, person in _members(subjects):
         x, y, w, h = box
         part = is_body_part(subject.label)
@@ -341,6 +343,7 @@ def layout_from_spec(spec: ShotSpec, *, vfov_deg: float | None = None) -> SpecLa
             # distance where a 1.7 m body spans the box (MEASURED, r26: the
             # depth map's 7.1 m made a 10 m woman of a full-length portrait).
             objects.append(_figure_from_box_top(camera, box, FIGURE_REF_HEIGHT_M / max(h, 0.05), _object_id(index, member, True), label))
+            standing.append(objects[-1])
             pose_figure(objects[-1], box)
             continue
         if not grounded:
@@ -381,8 +384,19 @@ def layout_from_spec(spec: ShotSpec, *, vfov_deg: float | None = None) -> SpecLa
                     label=subject.label,
                 )
             )
+    camera_y = camera.pos[1]
+    if standing:
+        # The image fixes the camera relative to the people, not the floor:
+        # bring the camera down until the lowest standing figure's feet touch
+        # it (MEASURED, r27: a full-length portrait floated 0.76 m up).
+        lift = min(o.pos[1] for o in standing)
+        drop = min(lift, camera_y - 0.2)
+        if drop > 0.01:
+            camera_y -= drop
+            for obj in objects:
+                obj.pos[1] = round(max(0.0, obj.pos[1] - drop), 3)
     layout = SpecLayout3D(
-        camera=SpecLayoutCamera(pos=[0.0, round(camera.pos[1], 3), 0.0], rot=[round(camera.pitch, 4), 0.0, 0.0], fov=round(vfov_deg, 2)),
+        camera=SpecLayoutCamera(pos=[0.0, round(camera_y, 3), 0.0], rot=[round(camera.pitch, 4), 0.0, 0.0], fov=round(vfov_deg, 2)),
         objects=objects,
         depth_map_path=spec.layout3d.depth_map_path,
     )
