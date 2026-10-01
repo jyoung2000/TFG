@@ -49,6 +49,8 @@ describe('VideoReproducePanel', () => {
     expect(html).toContain('VACE 1.3B (Wan 2.1)')
     expect(html).toContain('close-up. two people kissing, cinematic light')
     expect(html).toContain('guided by the original clip')
+    // The header names the models the takes used, not the job's default.
+    expect(html).not.toContain('ltx2_22B_distilled')
   })
 
   it("opens the run's own storyboard", () => {

@@ -1197,7 +1197,7 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
                 <>
                   <label className="flex items-center gap-2 text-[11px] text-zinc-400">
                     <input type="checkbox" checked={underlayOn} onChange={event => setUnderlayOn(event.target.checked)} data-testid="composer-underlay" />
-                    Reference frame behind the viewfinder{underlayReady ? '' : underlayOn ? ' (loading…)' : ''}
+                    Reference frame in the viewfinder{underlayReady ? '' : underlayOn ? ' (loading…)' : ''}
                   </label>
                   {underlayOn && (
                     <label className="block text-[11px] text-zinc-400">

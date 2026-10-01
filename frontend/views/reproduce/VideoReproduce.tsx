@@ -34,6 +34,8 @@ export function VideoReproducePanel({ analysis, job, onJob, onClose, onOpenStory
   }, [onJob])
 
   const rendered = job.shots.reduce((n, s) => n + s.candidates.filter(c => c.status === 'complete').length, 0)
+  // The models the takes were rendered with (a fast guided take is VACE, not the job's default).
+  const used = [...new Set(job.shots.flatMap(s => s.candidates.filter(c => c.status === 'complete').map(c => modelName(c.model))))]
 
   return (
     <section className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-3 space-y-3" data-testid="video-reproduce" aria-label="Video reproduce">
@@ -42,7 +44,7 @@ export function VideoReproducePanel({ analysis, job, onJob, onClose, onOpenStory
         <span className={`text-xs ${job.status === 'failed' ? 'text-red-300' : running ? 'text-violet-300' : 'text-zinc-400'}`} data-testid="video-reproduce-status">
           {job.status}{running ? ` ${Math.round(job.progress * 100)}% · ${job.message}` : job.message ? ` · ${job.message}` : ''}
         </span>
-        <span className="text-[11px] text-zinc-500">{job.model} · {job.resolution} · {rendered} rendered{job.peak_vram_mb ? ` · peak ${(job.peak_vram_mb / 1024).toFixed(1)} GB` : ''}</span>
+        <span className="text-[11px] text-zinc-500">{used.length ? used.join(' + ') : modelName(job.model)} · {job.resolution} · {rendered} rendered{job.peak_vram_mb ? ` · peak ${(job.peak_vram_mb / 1024).toFixed(1)} GB` : ''}</span>
         <span className="ml-auto flex items-center gap-1.5">
           {running ? (
             <button onClick={() => void run('Cancelling', () => videoReproduceApi.cancel(analysis.id))} className="btn-chip text-red-300"><Square className="h-3.5 w-3.5" /> Cancel</button>

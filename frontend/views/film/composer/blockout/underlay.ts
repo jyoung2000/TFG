@@ -8,6 +8,11 @@
  * video over the viewport in sync with the timeline. Here the underlay is a
  * plain three.js plane parented to the shot camera, sized to fill its frustum
  * at a fixed distance, rendered only through the viewfinder (PiP / capture).
+ *
+ * It is drawn as a see-through layer over the viewfinder, outside the fog and
+ * without a depth test: at 60 m inside the 26-60 m fog it rendered as pure fog
+ * colour, and the floor hid its lower half (MEASURED, r21) - the whole frame
+ * has to show for figures and camera to be matched against it.
  */
 
 import * as THREE from 'three'
@@ -18,11 +23,11 @@ export class ReferenceUnderlay {
   private readonly distance = 60
 
   constructor(private readonly camera: THREE.PerspectiveCamera) {
-    const material = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.55, depthWrite: false, toneMapped: false })
+    const material = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.55, depthWrite: false, depthTest: false, fog: false, toneMapped: false })
     this.mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), material)
     this.mesh.position.set(0, 0, -this.distance)
     this.mesh.visible = false
-    this.mesh.renderOrder = -10
+    this.mesh.renderOrder = 10
     this.mesh.userData.underlay = true
     camera.add(this.mesh)
   }
