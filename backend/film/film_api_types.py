@@ -114,6 +114,26 @@ class ReferenceSheetRequest(BaseModel):
     seed: int | None = None
 
 
+class PreviewRenderRequest(BaseModel):
+    """A live preview of an edited pose: the composer's viewfinder (the posed
+    mannequin, at the photo's shape) and the original photo it should keep."""
+
+    guide_base64: str
+    #: Project-relative path of the original photo (a capture or an asset image).
+    reference_path: str
+    prompt: str = ""
+    width: int = 576
+    height: int = 1024
+    seed: int | None = None
+
+
+class PreviewRenderResponse(BaseModel):
+    #: The preview as a data URL (throwaway: not saved to the project).
+    image: str
+    seconds: float
+    model: str
+
+
 class FramesRequest(BaseModel):
     """Storyboard frames for the whole project: only shots with no picture yet
     (no frame, capture or finished render) unless `missing_only` is False."""

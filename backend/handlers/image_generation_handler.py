@@ -84,6 +84,7 @@ class ImageGenerationHandler(StateHandlerBase):
         denoise_strength: float = 1.0,
         reference_images: Sequence[str] = (),
         reference_mode: str = "KI",
+        record: bool = True,
     ) -> GenerateImageResponse:
         """Render images. `job_id` reuses an existing History job; `seed` pins the seed (re-runs).
 
@@ -99,7 +100,8 @@ class ImageGenerationHandler(StateHandlerBase):
         for side, value in (("width", req.width), ("height", req.height)):
             if not (_MIN_DIM <= value <= _MAX_DIM):
                 raise HTTPError(400, f"{side} must be between {_MIN_DIM} and {_MAX_DIM} pixels (got {value})")
-        tracked = self._open_job(req, job_id, seed)
+        # `record=False`: a throwaway render (a live preview) leaves no History job.
+        tracked = self._open_job(req, job_id, seed) if record else ""
         peak_mb: int | None = None
         try:
             if self._vision is not None:

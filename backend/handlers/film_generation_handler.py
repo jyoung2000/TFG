@@ -41,6 +41,8 @@ from film.film_api_types import (
     AngleSetRequest,
     FramesRequest,
     FramesResponse,
+    PreviewRenderRequest,
+    PreviewRenderResponse,
     ReferenceSheetRequest,
     ReferenceSheetResponse,
     UpdateAssetRequest,
@@ -226,6 +228,11 @@ class _QueuedShotJob:
 #: the posed mannequin at the angle, the second the person to put there.
 ANGLE_SUBJECT = "the same person as in the reference image, same face, same hair, same body, same outfit"
 ANGLE_SUBJECT_POSED = "the person from the second image, in exactly the pose, camera angle and framing of the figure in the first image, same face, same hair, same body, same outfit"
+#: Live pose preview: the viewfinder (posed mannequin) is the scene, the photo the person.
+PREVIEW_SUBJECT = "the person from the second image, in exactly the pose, camera angle and framing of the figure in the first image"
+PREVIEW_KEEP = "same face, same hair, same body, same outfit, same lighting and background as the second image, photo, sharp focus"
+PREVIEW_SEED = 7
+PREVIEW_MAX_EDGE = 1024
 FRAME_CAST = "the people from the reference images as the characters, same faces, same hair, same outfits"
 ANGLE_QUALITY = "photo, sharp focus, detailed face, natural skin texture, plain light grey studio background, soft even studio light"
 #: A LoRA dataset wants 15-30 varied images; more angles per call is a queue.
@@ -1502,6 +1509,48 @@ class FilmGenerationHandler(StateHandlerBase):
                 except HTTPError as exc:
                     failed.append(f"{shot.title or shot.id}: {exc.detail}")
         return FramesResponse(generated=generated, skipped=skipped, failed=failed)
+
+    def preview_render(self, project_id: str, req: PreviewRenderRequest) -> PreviewRenderResponse:
+        """The photo as the 3D model is now posed: FLUX.2 composes the person
+        from the original photo into the pose, camera angle and framing of
+        the composer's viewfinder. A fixed seed, so successive previews differ
+        by the edit, not by chance. Throwaway: no History job, nothing saved
+        to the project but the one guide file it overwrites."""
+        handler = self._image_generation
+        if handler is None:  # pragma: no cover - wired in AppHandler
+            raise HTTPError(500, "Local image generation is not available in this build")
+        model = handler.reference_model()
+        if model is None:
+            raise HTTPError(400, "Live previews need FLUX.2 Klein installed (Settings → AI Models)")
+        try:
+            photo = self._film.store.resolve_media_path(project_id, req.reference_path)
+        except HTTPError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - an escaping or malformed path
+            raise HTTPError(400, f"The photo is not part of this project: {exc}") from exc
+        if not photo.is_file():
+            raise HTTPError(404, "The original photo is no longer on disk")
+        scale = min(1.0, PREVIEW_MAX_EDGE / max(1, req.width, req.height))
+        width = max(256, int(req.width * scale) // 16 * 16)
+        height = max(256, int(req.height * scale) // 16 * 16)
+        folder = self._film.store.captures_dir(project_id) / "previews"
+        folder.mkdir(parents=True, exist_ok=True)
+        guide = folder / "pose-guide.png"
+        guide.write_bytes(_decode_image(req.guide_base64))
+        prompt = ", ".join(p for p in (PREVIEW_SUBJECT, req.prompt.strip(), PREVIEW_KEEP) if p)
+        started = time.perf_counter()
+        response = handler.generate(
+            GenerateImageRequest(prompt=prompt, width=width, height=height, numImages=1, model=model),
+            seed=req.seed if req.seed is not None else PREVIEW_SEED,
+            reference_images=[str(guide), str(photo)], reference_mode="KI", record=False,
+        )
+        paths = response.image_paths or []
+        if response.status != "complete" or not paths:
+            raise HTTPError(502, "The image model did not return a preview")
+        out = Path(paths[0])
+        mime = "image/png" if out.suffix.lower() == ".png" else "image/jpeg"
+        encoded = base64.b64encode(out.read_bytes()).decode("ascii")
+        return PreviewRenderResponse(image=f"data:{mime};base64,{encoded}", seconds=round(time.perf_counter() - started, 2), model=model)
 
     def asset_dataset(self, project_id: str, asset_id: str) -> Dataset:
         """The asset's images as a LoRA training dataset (character preset for

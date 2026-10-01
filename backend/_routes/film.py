@@ -43,6 +43,8 @@ from film.film_api_types import (
     AngleSetRequest,
     FramesRequest,
     FramesResponse,
+    PreviewRenderRequest,
+    PreviewRenderResponse,
     ReferenceSheetRequest,
     ReferenceSheetResponse,
 )
@@ -363,6 +365,16 @@ def route_shot_frame(
 ) -> FilmShot:
     """A storyboard frame: a still of what the shot describes."""
     return handler.film_generation.generate_frame(project_id, scene_id, shot_id)
+
+
+@router.post("/projects/{project_id}/preview-render", response_model=PreviewRenderResponse)
+def route_preview_render(
+    project_id: str,
+    req: PreviewRenderRequest,
+    handler: AppHandler = Depends(get_state_service),
+) -> PreviewRenderResponse:
+    """A live preview of the photo as the 3D model is now posed (throwaway)."""
+    return handler.film_generation.preview_render(project_id, req)
 
 
 @router.post("/projects/{project_id}/frames", response_model=FramesResponse)

@@ -164,6 +164,16 @@ export const filmApi = {
       body: JSON.stringify({ missing_only: missingOnly }),
     }),
 
+  /** A throwaway preview of the photo as the 3D model is now posed. */
+  previewRender: (
+    projectId: string,
+    data: { guide_base64: string; reference_path: string; prompt: string; width: number; height: number; seed?: number },
+  ) =>
+    request<{ image: string; seconds: number; model: string }>(`/api/film/projects/${enc(projectId)}/preview-render`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
   /** The asset's images as a LoRA training dataset. */
   assetDataset: (projectId: string, assetId: string) =>
     request<{ id: string; name: string; trigger: string; items: unknown[] }>(

@@ -66,6 +66,7 @@ import { validateKeyframes } from './keyframes'
 import { CompositionHistory } from './history'
 import { layoutFromComposition, underlaySource } from './sceneFromAnalysis'
 import { LORA_ANGLES } from './angleViews'
+import { PosePreviewPanel } from './PosePreviewPanel'
 
 /** One generated angle, through the authenticated film media route. */
 function AngleThumb({ projectId, path }: { projectId: string; path: string }) {
@@ -1101,6 +1102,14 @@ export function ShotComposer({ projectId, scene, shot, onClose, studio }: ShotCo
         {/* Center: viewport */}
         <div ref={containerRef} className="flex-1 relative min-w-0">
           <canvas ref={canvasRef} className="absolute inset-0 w-full h-full" />
+          <PosePreviewPanel
+            projectId={projectId}
+            shot={shot}
+            film={film}
+            getComposer={() => sceneRef.current}
+            editTick={transformTick}
+            prompt={shot.visual_prompt || shot.description}
+          />
           {selectedObject && selectedTransform && (
             <div className="absolute top-3 left-3 bg-zinc-900/85 rounded-lg px-2.5 py-2 border border-zinc-700 space-y-1.5">
               <div className="flex items-center gap-2 text-[11px] text-zinc-300">
