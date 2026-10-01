@@ -209,3 +209,38 @@ def test_a_vace_render_without_a_guide_video_keeps_cfg() -> None:
     settings = _vace_settings_for(control_video_path=None, end_frame_path="E:/tmp/last.png")
     assert "guidance_scale" not in settings
     assert settings["num_inference_steps"] == 8
+
+
+def _image_settings(**kwargs: object) -> dict[str, object]:
+    bridge = _make_bridge(image_model_type="flux2_klein_4b")
+    captured: dict[str, object] = {}
+
+    def fake_run_manifest(*, manifest, media_suffixes, on_progress, is_cancelled):  # type: ignore[no-untyped-def]
+        captured["settings"] = manifest[0]["params"]
+        return ["E:/tmp/out.png"]
+
+    bridge._run_manifest = fake_run_manifest  # type: ignore[method-assign]
+    bridge.generate_images(prompt="the woman, seen in profile", width=768, height=1024, num_steps=4, num_images=1, seed=7,
+                           on_progress=lambda *_a: None, is_cancelled=lambda: False, **kwargs)  # type: ignore[arg-type]
+    return captured["settings"]  # type: ignore[return-value]
+
+
+def test_reference_images_go_to_flux2_klein_as_ordered_image_refs() -> None:
+    """Asked 2026-10-01: multi-angle shots good enough to train a LoRA. FLUX.2
+    Klein (installed) composes from ordered reference images: "KI" = the first
+    image is the scene (the composer's posed mannequin at an angle), the next
+    ones the people (the character's reference)."""
+    settings = _image_settings(reference_images=["E:/tmp/guide.png", "E:/tmp/hero.png"], reference_mode="KI")
+    assert settings["video_prompt_type"] == "KI"
+    assert [Path(p).name for p in settings["image_refs"]] == ["guide.png", "hero.png"]  # type: ignore[union-attr]
+    assert settings["image_mode"] == 1
+
+
+def test_a_model_without_reference_images_refuses_them() -> None:
+    bridge = _make_bridge(image_model_type="z_image")
+    bridge._run_manifest = lambda **_k: ["E:/tmp/out.png"]  # type: ignore[method-assign]
+    import pytest
+
+    with pytest.raises(RuntimeError, match="reference images"):
+        bridge.generate_images(prompt="x", width=512, height=512, num_steps=8, num_images=1, seed=1, on_progress=lambda *_a: None,
+                               is_cancelled=lambda: False, reference_images=["E:/tmp/hero.png"])

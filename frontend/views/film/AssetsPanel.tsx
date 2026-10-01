@@ -9,7 +9,7 @@
  *   wizard — one seed image → AI-built kit (`assets/NewAssetWizard.tsx`)
  */
 
-import { useCallback, useEffect, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useState } from 'react'
 import { Lightbox } from '../../components/Lightbox'
 import { useFilm } from '../../contexts/FilmContext'
 import { filmApi } from '../../lib/film-api'
@@ -18,6 +18,9 @@ import { AssetDetail } from './assets/AssetDetail'
 import { AssetGrid } from './assets/AssetGrid'
 import { NewAssetWizard } from './assets/NewAssetWizard'
 import { KIND_META, useReferenceUrls } from './assets/shared'
+import { studioScene, studioShot } from './assets/studio'
+
+const ShotComposer = lazy(() => import('./composer/ShotComposer'))
 
 type View = { kind: 'grid' } | { kind: 'detail'; id: string } | { kind: 'wizard' }
 
@@ -26,6 +29,9 @@ export function AssetsPanel() {
   const [view, setView] = useState<View>({ kind: 'grid' })
   const selected = view.kind === 'detail' ? (film?.assets.find(a => a.id === view.id) ?? null) : null
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null)
+  // The 3D composer on one asset (pose, camera, multi-angle LoRA shots).
+  const [studioId, setStudioId] = useState<string | null>(null)
+  const studioAsset = studioId ? (film?.assets.find(a => a.id === studioId) ?? null) : null
   const lightboxItems = useReferenceUrls(selected)
   useEffect(() => { setLightboxIndex(null) }, [selected?.id])
 
@@ -56,7 +62,7 @@ export function AssetsPanel() {
           onOpenWizard={() => setView({ kind: 'wizard' })} />
       )}
       {view.kind === 'detail' && selected && (
-        <AssetDetail asset={selected} onBack={() => setView({ kind: 'grid' })} onOpenLightbox={setLightboxIndex} />
+        <AssetDetail asset={selected} onBack={() => setView({ kind: 'grid' })} onOpenLightbox={setLightboxIndex} onOpenStudio={() => setStudioId(selected.id)} />
       )}
       {view.kind === 'detail' && !selected && (
         // The asset vanished under us (deleted elsewhere) — fall back home.
@@ -68,6 +74,20 @@ export function AssetsPanel() {
       )}
       {view.kind === 'wizard' && (
         <NewAssetWizard onClose={() => setView({ kind: 'grid' })} onDone={id => setView({ kind: 'detail', id })} />
+      )}
+      {studioAsset && (
+        <Suspense fallback={null}>
+          <ShotComposer
+            projectId={film.id}
+            scene={studioScene(studioAsset)}
+            shot={studioShot(studioAsset)}
+            onClose={() => { setStudioId(null); void refresh() }}
+            studio={{
+              title: studioAsset.name,
+              onSave: async composition => { await filmApi.updateAsset(film.id, studioAsset.id, { composition }) },
+            }}
+          />
+        </Suspense>
       )}
       {lightboxIndex !== null && lightboxItems.length > 0 && (
         <Lightbox

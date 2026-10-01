@@ -126,6 +126,8 @@ export interface FilmAsset {
   lora_trigger: string
   lora_multiplier: number
   seed_lock: number | null
+  /** The asset's 3D studio scene from the composer. */
+  composition?: CompositionScene | null
   created_at: number
   updated_at: number
 }

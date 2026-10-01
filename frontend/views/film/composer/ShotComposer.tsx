@@ -65,12 +65,32 @@ import { renderDeliver, type DeliverPass } from './blockout/deliver'
 import { validateKeyframes } from './keyframes'
 import { CompositionHistory } from './history'
 import { layoutFromComposition, underlaySource } from './sceneFromAnalysis'
+import { LORA_ANGLES } from './angleViews'
+
+/** One generated angle, through the authenticated film media route. */
+function AngleThumb({ projectId, path }: { projectId: string; path: string }) {
+  const [url, setUrl] = useState('')
+  useEffect(() => {
+    let active = true
+    filmMediaUrl(projectId, path).then(u => { if (active) setUrl(u) }).catch(() => undefined)
+    return () => { active = false }
+  }, [projectId, path])
+  return <div className="aspect-[3/4] rounded bg-zinc-800 overflow-hidden">{url && <img src={url} alt={path} className="w-full h-full object-cover" />}</div>
+}
+
+/** The composer on an asset rather than a storyboard shot (Assets tab). */
+export interface ComposerStudio {
+  title: string
+  onSave: (composition: CompositionScene) => Promise<void>
+}
 
 interface ShotComposerProps {
   projectId: string
   scene: FilmScene
   shot: FilmShot
   onClose: () => void
+  /** Asset studio: save to the asset, no shot capture / deliver / render. */
+  studio?: ComposerStudio
 }
 
 let objectCounter = 0
@@ -192,7 +212,7 @@ function NumberField({
   )
 }
 
-export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerProps) {
+export function ShotComposer({ projectId, scene, shot, onClose, studio }: ShotComposerProps) {
   const { film, refresh, isGenerating } = useFilm()
   const workflow = useShotWorkflow(scene, shot)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -209,7 +229,10 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
   const [motionPreviewOn, setMotionPreviewOn] = useState(false)
   const [selectedJoint, setSelectedJoint] = useState<string>('l_arm')
   const [jointEuler, setJointEuler] = useState<Vec3>([0, 0, 0])
-  const [busy, setBusy] = useState<'save' | 'capture' | 'close' | null>(null)
+  const [busy, setBusy] = useState<'save' | 'capture' | 'close' | 'angles' | null>(null)
+  // Multi-angle set (LoRA): which angles, and what the last run produced.
+  const [angleChoice, setAngleChoice] = useState<Set<string>>(() => new Set(LORA_ANGLES.map(v => v.name)))
+  const [angleResults, setAngleResults] = useState<string[]>([])
   const [statusNote, setStatusNote] = useState('')
   const [poseNameDraft, setPoseNameDraft] = useState('')
   const [gizmoMode, setGizmoModeState] = useState<GizmoMode>('translate')
@@ -696,7 +719,8 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
     }
     setBusy('save')
     try {
-      await filmApi.updateShot(projectId, scene.id, shot.id, { composition })
+      if (studio) await studio.onSave(composition)
+      else await filmApi.updateShot(projectId, scene.id, shot.id, { composition })
       await refresh()
       dirtyRef.current = false
       setDirty(false)
@@ -709,7 +733,34 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
     } finally {
       setBusy(null)
     }
-  }, [serialize, projectId, scene.id, shot.id, refresh])
+  }, [serialize, projectId, scene.id, shot.id, refresh, studio])
+
+  // Multi-angle shots of a character for consistency / LoRA training: the
+  // posed figure is rendered from every chosen angle (pose, camera, framing)
+  // and each render guides an image of the asset's person from that angle.
+  const generateAngles = useCallback(async () => {
+    const composer = sceneRef.current
+    const figure = objects.find(o => o.type === 'figure' && o.id === selectedId && o.asset_id) ?? objects.find(o => o.type === 'figure' && o.asset_id)
+    if (!composer || !figure?.asset_id) {
+      setStatusNote('Add a figure linked to a character asset first')
+      return
+    }
+    const views = LORA_ANGLES.filter(v => angleChoice.has(v.name))
+    if (!views.length) return
+    setBusy('angles')
+    try {
+      const shots = views.map(v => ({ name: v.name, view: v.words, guide_base64: composer.captureAngle(figure.id, v) ?? '' }))
+      setStatusNote(`Rendering ${shots.length} angles of ${figure.name} (about ${Math.max(1, Math.round((shots.length * 9) / 60))} min)…`)
+      const result = await filmApi.angleSet(projectId, figure.asset_id, { shots })
+      setAngleResults(result.reference_paths)
+      await refresh()
+      setStatusNote(`Added ${result.reference_paths.length} angles to ${result.asset.name}'s references`)
+    } catch (e) {
+      setStatusNote(`Multi-angle set failed: ${e instanceof Error ? e.message : e}`)
+    } finally {
+      setBusy(null)
+    }
+  }, [objects, selectedId, angleChoice, projectId, refresh])
 
   const captureShot = useCallback(async (): Promise<boolean> => {
     const composer = sceneRef.current
@@ -854,7 +905,7 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
         <Aperture className="h-4 w-4 text-violet-400" />
         <div className="flex-1 min-w-0">
           <div className="text-sm font-semibold text-white truncate">
-            Shot Composer — {scene.title} · {shot.title || `Shot ${shot.order + 1}`}
+            {studio ? `Asset studio — ${studio.title}` : <>Shot Composer — {scene.title} · {shot.title || `Shot ${shot.order + 1}`}</>}
             {dirty && <span className="ml-2 text-[10px] font-normal text-amber-300">unsaved</span>}
           </div>
           <div className="text-[11px] text-zinc-500">
@@ -895,10 +946,12 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
           {busy === 'save' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
           Save
         </Button>
-        <Button size="sm" onClick={() => void captureShot()} disabled={anyBusy} className="gap-1.5">
-          {busy === 'capture' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Camera className="h-3.5 w-3.5" />}
-          Capture Shot
-        </Button>
+        {!studio && (
+          <Button size="sm" onClick={() => void captureShot()} disabled={anyBusy} className="gap-1.5">
+            {busy === 'capture' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Camera className="h-3.5 w-3.5" />}
+            Capture Shot
+          </Button>
+        )}
         <button
           onClick={() => void closeComposer()}
           aria-label="Close composer"
@@ -1408,6 +1461,46 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
             )}
           </Section>
 
+          <Section title="Multi-angle set" badge="LoRA" defaultOpen={Boolean(studio)}>
+            <div className="space-y-2" data-testid="composer-angle-set">
+              <p className="text-[11px] text-zinc-400">
+                Pose the figure, pick angles, and each angle is rendered from the 3D camera and turned into an image of the character’s asset — consistent shots to train a LoRA.
+              </p>
+              <div className="flex gap-1 text-[10px]">
+                <button onClick={() => setAngleChoice(new Set(LORA_ANGLES.map(v => v.name)))} className="px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300">All</button>
+                <button onClick={() => setAngleChoice(new Set(LORA_ANGLES.filter(v => v.size === 'full').map(v => v.name)))} className="px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300">Full body</button>
+                <button onClick={() => setAngleChoice(new Set())} className="px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300">None</button>
+                <span className="ml-auto text-zinc-500">{angleChoice.size} angles</span>
+              </div>
+              <div className="grid grid-cols-2 gap-x-2 gap-y-0.5">
+                {LORA_ANGLES.map(v => (
+                  <label key={v.name} className="flex items-center gap-1 text-[11px] text-zinc-300">
+                    <input
+                      type="checkbox"
+                      checked={angleChoice.has(v.name)}
+                      onChange={event => setAngleChoice(prev => {
+                        const next = new Set(prev)
+                        if (event.target.checked) next.add(v.name)
+                        else next.delete(v.name)
+                        return next
+                      })}
+                    />
+                    {v.label}
+                  </label>
+                ))}
+              </div>
+              <Button size="sm" disabled={anyBusy || angleChoice.size === 0} onClick={() => void generateAngles()} className="w-full gap-1.5" data-testid="composer-generate-angles">
+                {busy === 'angles' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Camera className="h-3.5 w-3.5" />}
+                {busy === 'angles' ? 'Rendering angles…' : `Generate ${angleChoice.size} angle shots`}
+              </Button>
+              {angleResults.length > 0 && (
+                <div className="grid grid-cols-4 gap-1" data-testid="composer-angle-results">
+                  {angleResults.map(path => <AngleThumb key={path} projectId={projectId} path={path} />)}
+                </div>
+              )}
+            </div>
+          </Section>
+
           <Section title="Motion" badge={cameraMove !== 'static' ? cameraMove.replace('_', ' ') : undefined}>
             <div className="space-y-2">
               <PresetGrid
@@ -1558,6 +1651,7 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
             </div>
           </Section>
 
+          {!studio && (<>
           <Section title="Deliver" badge={deliverResult ? 'delivered' : shot.generation.control_video ? 'control on file' : undefined}>
             <div className="space-y-2" data-testid="composer-deliver">
               <p className="text-[11px] text-zinc-400">Render this scene at the shot’s fps as clean / depth / normal passes. The clean and depth passes become the next render’s control signals.</p>
@@ -1734,6 +1828,7 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
               )}
             </div>
           </Section>
+          </>)}
         </aside>
       </div>
     </div>

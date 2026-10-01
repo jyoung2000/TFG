@@ -146,6 +146,20 @@ export const filmApi = {
       { method: 'POST', body: JSON.stringify(data) },
     ),
 
+  /** Multi-angle shots of an asset (LoRA-ready), each composed from its image and, optionally, a composer guide. */
+  angleSet: (projectId: string, assetId: string, data: { shots: { name: string; view: string; guide_base64?: string }[]; seed?: number | null; identity_path?: string }) =>
+    request<{ asset: FilmAsset; prompts: string[]; seed: number | null; reference_paths: string[] }>(
+      `/api/film/projects/${enc(projectId)}/assets/${enc(assetId)}/angle-set`,
+      { method: 'POST', body: JSON.stringify(data) },
+    ),
+
+  /** The asset's images as a LoRA training dataset. */
+  assetDataset: (projectId: string, assetId: string) =>
+    request<{ id: string; name: string; trigger: string; items: unknown[] }>(
+      `/api/film/projects/${enc(projectId)}/assets/${enc(assetId)}/dataset`,
+      { method: 'POST', body: '{}' },
+    ),
+
   addAssetReference: (projectId: string, assetId: string, imageBase64: string, nameHint: string) =>
     request<{ asset: FilmAsset }>(
       `/api/film/projects/${enc(projectId)}/assets/${enc(assetId)}/references`,

@@ -352,13 +352,15 @@ class FilmHandler(StateHandlerBase):
             updates = {
                 key: value
                 for key, value in req.model_dump().items()
-                if value is not None and key not in ("clear_seed_lock", "style_guide")
+                if value is not None and key not in ("clear_seed_lock", "style_guide", "composition")
             }
             for key, value in updates.items():
                 setattr(asset, key, value)
             if req.style_guide is not None:
                 # Assign the model, not its dump, so the field stays typed.
                 asset.style_guide = req.style_guide
+            if req.composition is not None:
+                asset.composition = req.composition
             if req.clear_seed_lock:
                 asset.seed_lock = None
             asset.updated_at = now_ms()

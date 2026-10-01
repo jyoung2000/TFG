@@ -45,6 +45,9 @@ IMG2IMG_MODEL_TYPES: tuple[str, ...] = ("flux2_klein_4b", "flux2_klein_9b", "flu
 #: int(steps * (1 - strength))), so the few-step default leaves low strengths
 #: with no resolution at all.
 IMG2IMG_MIN_STEPS = 24
+#: Image models that compose from ordered reference images (`image_refs`):
+#: FLUX.2 ("KI" = scene first, then people/objects; "I" = people/objects).
+REFERENCE_IMAGE_MODEL_TYPES: tuple[str, ...] = ("flux2_klein_4b", "flux2_klein_9b", "flux2_dev")
 #: A VACE render with a guide video needs no CFG and few steps (see `_vace_settings`).
 VACE_GUIDED_STEPS = 6
 
@@ -345,9 +348,15 @@ class WanGPBridge:
         model_type: str | None = None,
         init_image: str | None = None,
         denoise_strength: float = 1.0,
+        reference_images: Sequence[str] = (),
+        reference_mode: str = "KI",
     ) -> list[str]:
-        """Text-to-image, or img2img from `init_image` when one is given."""
+        """Text-to-image, img2img from `init_image`, or a composition from
+        ordered `reference_images` (FLUX.2: `reference_mode` "KI" puts the
+        scene first, then the people; "I" is people/objects only)."""
         chosen = model_type or self._image_model_type
+        if reference_images and chosen not in REFERENCE_IMAGE_MODEL_TYPES:
+            raise RuntimeError(f"'{chosen}' cannot compose from reference images; that needs one of {', '.join(REFERENCE_IMAGE_MODEL_TYPES)}")
         if init_image and not self.supports_img2img(chosen):
             raise RuntimeError(f"'{chosen}' cannot render from a reference image; img2img needs one of {', '.join(IMG2IMG_MODEL_TYPES)}")
         mapped_width, mapped_height = self._map_image_resolution(width, height)
@@ -364,6 +373,9 @@ class WanGPBridge:
             settings["seed"] = seed
         if init_image:
             settings.update(self._img2img_settings(Path(init_image), denoise_strength, normalized_steps))
+        elif reference_images:
+            settings["video_prompt_type"] = reference_mode if reference_mode in ("KI", "I") else "KI"
+            settings["image_refs"] = [str(Path(p).resolve()) for p in reference_images]
 
         self._apply_loras(settings, loras)
         outputs = self._run_manifest(

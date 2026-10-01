@@ -40,10 +40,12 @@ from film.film_api_types import (
     UpdateShotRequest,
     DeliverRequest,
     DeliverResponse,
+    AngleSetRequest,
     ReferenceSheetRequest,
     ReferenceSheetResponse,
 )
 from film.film_models import FilmScene, FilmShot
+from film.training_models import Dataset
 from state import get_state_service
 from app_handler import AppHandler
 
@@ -166,6 +168,27 @@ def route_reference_sheet(
 ) -> ReferenceSheetResponse:
     """Consistency Kit: multi-angle references with one seed and the asset's LoRA."""
     return handler.film_generation.generate_reference_sheet(project_id, asset_id, req)
+
+
+@router.post("/projects/{project_id}/assets/{asset_id}/angle-set", response_model=ReferenceSheetResponse)
+def route_angle_set(
+    project_id: str,
+    asset_id: str,
+    req: AngleSetRequest,
+    handler: AppHandler = Depends(get_state_service),
+) -> ReferenceSheetResponse:
+    """Multi-angle shots for consistency / LoRA training, composed from the asset's image and the composer's angles."""
+    return handler.film_generation.generate_angle_set(project_id, asset_id, req)
+
+
+@router.post("/projects/{project_id}/assets/{asset_id}/dataset", response_model=Dataset)
+def route_asset_dataset(
+    project_id: str,
+    asset_id: str,
+    handler: AppHandler = Depends(get_state_service),
+) -> Dataset:
+    """The asset's images as a LoRA training dataset."""
+    return handler.film_generation.asset_dataset(project_id, asset_id)
 
 
 @router.put("/projects/{project_id}/assets/{asset_id}", response_model=AssetResponse)

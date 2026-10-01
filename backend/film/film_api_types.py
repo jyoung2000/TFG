@@ -84,6 +84,8 @@ class UpdateAssetRequest(BaseModel):
     continuity_notes: str | None = None
     #: Manual style-guide edits (traits/palette/mood/prompt) persist too.
     style_guide: FilmAssetStyleGuide | None = None
+    #: The asset's 3D studio scene from the composer.
+    composition: CompositionScene | None = None
 
 
 class AssetResponse(BaseModel):
@@ -110,6 +112,25 @@ class ReferenceSheetRequest(BaseModel):
 
     views: list[str] = Field(default_factory=lambda: ["front view", "three-quarter view", "profile view", "back view"])
     seed: int | None = None
+
+
+class AngleShot(BaseModel):
+    """One camera angle of a multi-angle set: its name, the view in words and,
+    from the composer, the posed mannequin seen from that angle (PNG)."""
+
+    name: str
+    view: str
+    guide_base64: str = ""
+
+
+class AngleSetRequest(BaseModel):
+    """Multi-angle shots of a character for consistency and LoRA training,
+    each composed from the asset's reference image (and the angle's guide)."""
+
+    shots: list[AngleShot] = Field(default_factory=list[AngleShot])
+    seed: int | None = None
+    #: Which of the asset's reference images is the identity ("" = the first).
+    identity_path: str = ""
 
 
 class ReferenceSheetResponse(BaseModel):

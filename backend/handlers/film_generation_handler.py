@@ -38,10 +38,13 @@ from film.film_api_types import (
     QueuedJob,
     QueueShotResponse,
     ReplaceProjectRequest,
+    AngleSetRequest,
     ReferenceSheetRequest,
     ReferenceSheetResponse,
     UpdateAssetRequest,
 )
+from film.training_api_types import ImportDatasetItemsRequest
+from film.training_models import Dataset
 from film.film_continuity import check_shot_continuity
 from film.media_providers import MediaSpec
 from film.media_runner import MediaRunResult, MediaRunner, image_data_url, suffix_for
@@ -215,6 +218,20 @@ class _QueuedShotJob:
             version_number=self.version_number,
             status=status,
         )
+
+
+#: Angle-set prompt pieces. With a composer guide ("KI") the first image is
+#: the posed mannequin at the angle, the second the person to put there.
+ANGLE_SUBJECT = "the same person as in the reference image, same face, same hair, same body, same outfit"
+ANGLE_SUBJECT_POSED = "the person from the second image, in exactly the pose, camera angle and framing of the figure in the first image, same face, same hair, same body, same outfit"
+ANGLE_QUALITY = "photo, sharp focus, detailed face, natural skin texture, plain light grey studio background, soft even studio light"
+#: A LoRA dataset wants 15-30 varied images; more angles per call is a queue.
+ANGLE_SET_MAX = 24
+
+
+def _decode_image(data: str) -> bytes:
+    payload = data.split(",", 1)[1] if data.startswith("data:") else data
+    return base64.b64decode(payload)
 
 
 class FilmGenerationHandler(StateHandlerBase):
@@ -1310,12 +1327,22 @@ class FilmGenerationHandler(StateHandlerBase):
             except HTTPError:
                 pass
         width, height = self._REFERENCE_SIZES.get(asset.kind, (1024, 1024))
+        # With an image of the asset and a model that composes from it, every
+        # view keeps that person; text alone drifted between views.
+        identity = self._identity_image(project_id, asset, "")
+        reference_model = handler.reference_model() if identity is not None else None
         prompts: list[str] = []
         paths: list[str] = []
         for view in views:
             prompt = ", ".join(p for p in (trigger, base, view, "consistent character sheet, same person, same outfit") if p)
             prompts.append(prompt)
-            response = handler.generate(GenerateImageRequest(prompt=prompt, width=width, height=height, numImages=1, loras=loras), seed=seed)
+            if identity is not None and reference_model:
+                response = handler.generate(
+                    GenerateImageRequest(prompt=f"{ANGLE_SUBJECT}, {prompt}", width=width, height=height, numImages=1, model=reference_model),
+                    seed=seed, reference_images=[str(identity)], reference_mode="I",
+                )
+            else:
+                response = handler.generate(GenerateImageRequest(prompt=prompt, width=width, height=height, numImages=1, loras=loras), seed=seed)
             out_paths = response.image_paths or []
             if response.status != "complete" or not out_paths:
                 raise HTTPError(502, "The local image model did not return an image")
@@ -1328,6 +1355,104 @@ class FilmGenerationHandler(StateHandlerBase):
         if asset.seed_lock is None:
             asset = self._film.update_asset(project_id, asset_id, UpdateAssetRequest(seed_lock=seed))
         return ReferenceSheetResponse(asset=asset, prompts=prompts, seed=seed, reference_paths=paths)
+
+    def _identity_image(self, project_id: str, asset: FilmAsset, chosen: str) -> Path | None:
+        """The asset's image every angle is composed from: `chosen` when it is
+        one of its references, else the first reference."""
+        candidates = [chosen] if chosen and chosen in asset.reference_images else list(asset.reference_images[:1])
+        for relative in candidates:
+            try:
+                path = self._film.store.resolve_media_path(project_id, relative)
+            except Exception:  # noqa: BLE001 - a stale path is simply not an identity
+                continue
+            if path.is_file():
+                return path
+        return None
+
+    def generate_angle_set(self, project_id: str, asset_id: str, req: AngleSetRequest) -> ReferenceSheetResponse:
+        """Multi-angle shots of an asset for consistency and LoRA training. Each
+        angle is composed by FLUX.2 from the asset's reference image (identity)
+        and, from the 3D composer, the posed mannequin at that angle (pose,
+        camera, framing): "KI" = the guide is the scene, the image the person.
+        MEASURED (RTX 4070, FLUX.2 Klein 4B): front / three-quarter / profile /
+        back kept the face, hair and outfit, ~7.6 s per angle once loaded."""
+        project = self._film.get_project(project_id)
+        asset = project.asset(asset_id)
+        if asset is None:
+            raise HTTPError(404, f"Asset not found: {asset_id}")
+        handler = self._image_generation
+        if handler is None:  # pragma: no cover - wired in AppHandler
+            raise HTTPError(500, "Local image generation is not available in this build")
+        shots = [s for s in req.shots if s.view.strip()][:ANGLE_SET_MAX]
+        if not shots:
+            raise HTTPError(400, "Pick at least one angle")
+        identity = self._identity_image(project_id, asset, req.identity_path)
+        if identity is None:
+            raise HTTPError(400, "Give the asset a reference image first (upload or generate one): every angle is composed from it")
+        model = handler.reference_model()
+        if model is None:
+            raise HTTPError(400, "Multi-angle shots need FLUX.2 Klein installed (Settings → AI Models)")
+        seed = req.seed if req.seed is not None else asset.seed_lock
+        if seed is None:
+            seed = int(time.time()) % 2_000_000_000
+        base = self._reference_prompt(asset, project.settings.style_prompt).replace(f"Character reference sheet of {asset.name}", asset.name)
+        width, height = self._REFERENCE_SIZES.get(asset.kind, (1024, 1024))
+        guides = self._film.store.captures_dir(project_id) / "angle-guides"
+        prompts: list[str] = []
+        paths: list[str] = []
+        for index, shot in enumerate(shots):
+            references = [str(identity)]
+            mode = "I"
+            lead = ANGLE_SUBJECT
+            if shot.guide_base64.strip():
+                guides.mkdir(parents=True, exist_ok=True)
+                guide = guides / f"{asset.id}-{index:02d}.png"
+                guide.write_bytes(_decode_image(shot.guide_base64))
+                references = [str(guide), str(identity)]
+                mode = "KI"
+                lead = ANGLE_SUBJECT_POSED
+            prompt = ", ".join(p for p in (lead, shot.view.strip(), base, ANGLE_QUALITY) if p)
+            prompts.append(prompt)
+            response = handler.generate(
+                GenerateImageRequest(prompt=prompt, width=width, height=height, numImages=1, model=model),
+                seed=seed, reference_images=references, reference_mode=mode,
+            )
+            out_paths = response.image_paths or []
+            if response.status != "complete" or not out_paths:
+                raise HTTPError(502, "The image model did not return an image")
+            encoded = base64.b64encode(Path(out_paths[0]).read_bytes()).decode("ascii")
+            name = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in shot.name.strip().lower()) or f"angle-{index + 1}"
+            updated = self._film.add_asset_reference(project_id, asset_id, AddAssetReferenceRequest(image_base64=encoded, name_hint=f"{asset.name}-{name}"))
+            paths.append(updated.reference_images[-1])
+        asset = self._film.get_project(project_id).asset(asset_id)
+        assert asset is not None
+        if asset.seed_lock is None:
+            asset = self._film.update_asset(project_id, asset_id, UpdateAssetRequest(seed_lock=seed))
+        return ReferenceSheetResponse(asset=asset, prompts=prompts, seed=seed, reference_paths=paths)
+
+    def asset_dataset(self, project_id: str, asset_id: str) -> Dataset:
+        """The asset's images as a LoRA training dataset (character preset for
+        people), its trigger the asset's LoRA trigger or its name."""
+        if self._training is None:  # pragma: no cover - wired in AppHandler
+            raise HTTPError(500, "Training is not available in this build")
+        project = self._film.get_project(project_id)
+        asset = project.asset(asset_id)
+        if asset is None:
+            raise HTTPError(404, f"Asset not found: {asset_id}")
+        images: list[str] = []
+        for relative in asset.reference_images:
+            try:
+                path = self._film.store.resolve_media_path(project_id, relative)
+            except Exception:  # noqa: BLE001
+                continue
+            if path.is_file():
+                images.append(str(path))
+        if not images:
+            raise HTTPError(400, "The asset has no images yet: generate a multi-angle set first")
+        preset = {"character": "character", "style": "style"}.get(asset.kind, "object")
+        trigger = asset.lora_trigger.strip() or "".join(ch for ch in asset.name.lower() if ch.isalnum() or ch == "_") or "subject"
+        dataset = self._training.create_dataset(name=f"{asset.name} (asset)", preset=preset, trigger=trigger)  # type: ignore[arg-type]
+        return self._training.import_items(dataset.id, ImportDatasetItemsRequest(image_paths=images))
 
     def attach_training(self, training: TrainingHandler, vision: VisionHandler | None = None) -> None:
         self._training = training

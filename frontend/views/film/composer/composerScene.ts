@@ -27,6 +27,7 @@ import type {
   Vec3,
 } from '../../../types/film'
 import { buildCameraMove, sampleCameraTrack } from './cameraMotion'
+import { angleCamera, type AngleView } from './angleViews'
 import { pickAssetColor } from './assetColors'
 import { applyPose, applyWalkCycle, buildFigure, jointForObject, readPose, sectionMeshes, tintMeshes, type FigureRig, type JointName } from './figure'
 import { travelAlong } from './keyframes'
@@ -1031,6 +1032,34 @@ export class ComposerScene {
    * Render the shot camera at the output aspect and return a PNG data URL.
    * The renderer is resized for the capture and restored afterwards.
    */
+  /**
+   * The shot camera's picture of figure `id` from `view` (a multi-angle / LoRA
+   * angle) through a 40° lens, as a PNG data URL. The scene's own camera is
+   * left exactly as it was.
+   */
+  captureAngle(id: string, view: AngleView, width = 768, height = 1024): string | null {
+    const entity = this.entities.get(id)
+    if (!entity?.rig) return null
+    const saved = { position: this.shotCamera.position.clone(), quaternion: this.shotCamera.quaternion.clone(), fov: this.shotCamera.fov }
+    this.shotCamera.fov = 40
+    const { position, target } = angleCamera(
+      { position: entity.node.position.toArray() as Vec3, yaw: entity.node.rotation.y, height: entity.rig.height * entity.node.scale.y },
+      view,
+      this.shotCamera.fov,
+    )
+    this.shotCamera.position.set(...position)
+    this.shotCamera.lookAt(new THREE.Vector3(...target))
+    try {
+      return this.capture(width, height)
+    } finally {
+      this.shotCamera.position.copy(saved.position)
+      this.shotCamera.quaternion.copy(saved.quaternion)
+      this.shotCamera.fov = saved.fov
+      this.shotCamera.updateProjectionMatrix()
+      this.cameraHelper.update()
+    }
+  }
+
   capture(width = 1280, height = 720): string {
     const previousSize = new THREE.Vector2()
     this.renderer.getSize(previousSize)

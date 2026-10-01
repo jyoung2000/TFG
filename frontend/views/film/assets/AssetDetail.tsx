@@ -6,7 +6,8 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, Check, Copy, ImagePlus, Layers, Loader2, Lock, Plus, Sparkles, Wand2, X } from 'lucide-react'
+import { ArrowLeft, Box, Check, Copy, GraduationCap, ImagePlus, Layers, Loader2, Lock, Plus, Sparkles, Wand2, X } from 'lucide-react'
+import { useProjects } from '../../../contexts/ProjectContext'
 import { useFilm } from '../../../contexts/FilmContext'
 import { filmApi } from '../../../lib/film-api'
 import { trainingApi } from '../../../lib/training-api'
@@ -16,12 +17,16 @@ import { consistencyOf, inheritedPrompt, looseReferences, sheetImages } from './
 import { EMPTY_GUIDE, StyleGuideEditor } from './StyleGuideEditor'
 import { GalleryThumb, KIND_FIELDS, KIND_META, ThumbError, inputClass, readFileAsDataUrl, useFilmMediaUrl } from './shared'
 
-export function AssetDetail({ asset, onBack, onOpenLightbox }: {
+export function AssetDetail({ asset, onBack, onOpenLightbox, onOpenStudio }: {
   asset: FilmAsset
   onBack: () => void
   onOpenLightbox: (index: number) => void
+  /** Open the 3D composer on this asset (pose it, multi-angle shots for a LoRA). */
+  onOpenStudio?: () => void
 }) {
   const { film, refresh } = useFilm()
+  const { openTrain } = useProjects()
+  const [busyDataset, setBusyDataset] = useState(false)
   const [draft, setDraft] = useState<Partial<FilmAsset>>({ ...asset })
   const [note, setNote] = useState('')
   const [generating, setGenerating] = useState(false)
@@ -79,6 +84,18 @@ export function AssetDetail({ asset, onBack, onOpenLightbox }: {
     finally { setBusySheet(false) }
   }, [film, asset.id, refresh])
 
+  // The asset's images (e.g. a multi-angle set) as a LoRA dataset, opened in Train.
+  const makeDataset = useCallback(async () => {
+    if (!film) return
+    setBusyDataset(true); setNote('')
+    try {
+      const dataset = await filmApi.assetDataset(film.id, asset.id)
+      setNote(`Dataset "${dataset.name}": ${dataset.items.length} images, trigger "${dataset.trigger}"`)
+      openTrain()
+    } catch (e) { setNote('Failed: ' + (e instanceof Error ? e.message : String(e))) }
+    finally { setBusyDataset(false) }
+  }, [film, asset.id, openTrain])
+
   const deleteReference = useCallback(async (path: string) => {
     if (!film || !window.confirm('Remove this reference image? The file is deleted.')) return
     try { await filmApi.deleteAssetReference(film.id, asset.id, path); await refresh() }
@@ -103,6 +120,12 @@ export function AssetDetail({ asset, onBack, onOpenLightbox }: {
         )}
         {note && <span className={'text-[11px] ' + (note.includes('Failed') || note.includes('Style guide failed') ? 'text-red-400' : note.startsWith('Add') ? 'text-amber-400' : 'text-emerald-400')}>{note}</span>}
         <div className="flex-1" />
+        {onOpenStudio && (asset.kind === 'character' || asset.kind === 'prop') && (
+          <button onClick={onOpenStudio} data-testid="asset-open-studio" title="Pose it in 3D and render multi-angle shots for consistency / a LoRA" className="flex items-center gap-1 px-2 py-1 rounded bg-sky-800/70 hover:bg-sky-700 text-[10px] text-sky-100"><Box className="h-3 w-3" /> 3D studio</button>
+        )}
+        {asset.kind !== 'style' && (
+          <button onClick={() => void makeDataset()} disabled={busyDataset || asset.reference_images.length === 0} data-testid="asset-make-dataset" title="Turn this asset's images into a LoRA training dataset" className="flex items-center gap-1 px-2 py-1 rounded bg-emerald-800/70 hover:bg-emerald-700 disabled:opacity-40 text-[10px] text-emerald-100">{busyDataset ? <Loader2 className="h-3 w-3 animate-spin" /> : <GraduationCap className="h-3 w-3" />} LoRA dataset</button>
+        )}
         <button onClick={() => void addReference()} className="flex items-center gap-1 px-2 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-[10px] text-zinc-300"><ImagePlus className="h-3 w-3" /> Add image</button>
         <button onClick={() => void generateReference()} disabled={generating} className="flex items-center gap-1 px-2 py-1 rounded bg-violet-800/70 hover:bg-violet-700 disabled:opacity-40 text-[10px] text-violet-100">{generating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />} Generate image</button>
         <button onClick={() => void generateStyleGuide()} disabled={generatingGuide || asset.reference_images.length === 0} title="Analyze reference image with vision AI" className="flex items-center gap-1 px-2 py-1 rounded bg-amber-800/70 hover:bg-amber-700 disabled:opacity-40 text-[10px] text-amber-100">{generatingGuide ? <Loader2 className="h-3 w-3 animate-spin" /> : <Wand2 className="h-3 w-3" />} {asset.style_guide ? 'Regenerate style guide' : 'Generate style guide'}</button>

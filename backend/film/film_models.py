@@ -178,6 +178,8 @@ class FilmAsset(BaseModel):
     lora_trigger: str = ""
     lora_multiplier: float = 1.0
     seed_lock: int | None = None
+    #: The asset's 3D studio scene (posed figure, camera) from the composer.
+    composition: CompositionScene | None = None
     created_at: int = Field(default_factory=now_ms)
     updated_at: int = Field(default_factory=now_ms)
 
