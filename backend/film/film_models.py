@@ -265,6 +265,10 @@ class CompositionScene(BaseModel):
     framing: ShotFraming = Field(default_factory=ShotFraming)
     camera_move: CameraMove = "static"
     duration_seconds: float = 3.0
+    #: "v<seed version>:<fingerprint>" when the app seeded this scene from an
+    #: analysis; the fingerprint stops matching once anyone edits it, so only
+    #: an untouched, older seed is ever replaced ("" = not app-seeded).
+    seed: str = ""
 
 
 class FilmPose(BaseModel):

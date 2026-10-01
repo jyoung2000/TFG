@@ -48,6 +48,14 @@ FIGURE_REF_HEIGHT_M = 1.7
 DEFAULT_VFOV_DEG = 40.0
 #: Reprojection tolerance the round-trip tests assert (fraction of the frame).
 TOLERANCE = 0.05
+#: Parts of a person a detector reports beside (or instead of) the person.
+#: With a person in the shot they are that person, not props; alone they
+#: stand for one (MEASURED, r21: a "human face" box became a 2 x 3 m box).
+BODY_PART_LABELS = frozenset({"face", "head", "hand", "hands", "eye", "eyes", "lips", "mouth", "nose", "ear", "hair", "arm", "leg"})
+#: In a tight shot a person box holds only the top of the body. A whole
+#: 1.7 m figure is then this many frame heights tall - inside the band
+#: `shot_size_from_frame_fraction` reads back as the same size.
+TIGHT_FRAME_FRACTION: dict[str, float] = {"medium": 1.45, "mcu": 2.2, "closeup": 3.2, "xcu": 5.0}
 
 
 def vertical_fov(hfov_deg: float, aspect: float) -> float:
@@ -131,6 +139,48 @@ def is_person(label: str) -> bool:
     return any(key == p or key.endswith(" " + p) for p in PERSON_LABELS)
 
 
+def is_body_part(label: str) -> bool:
+    key = label.strip().lower()
+    return any(key == p or key.endswith(" " + p) for p in BODY_PART_LABELS)
+
+
+def tight_shot_size(words: str) -> str:
+    """The spec's shot size as a TIGHT_FRAME_FRACTION key, or "" for full and wider."""
+    key = "".join(ch for ch in words.lower() if ch.isalpha())
+    if key in ("xcu", "ecu", "extremecloseup", "bigcloseup", "extremecloseupshot"):
+        return "xcu"
+    if key in ("mcu", "mediumcloseup", "mediumcloseupshot"):
+        return "mcu"
+    if key in ("closeup", "cu", "closeupshot"):
+        return "closeup"
+    if key in ("medium", "ms", "mediumshot", "midshot", "waistshot"):
+        return "medium"
+    return ""
+
+
+def _members(subjects: list[SpecSubject]) -> list[tuple[int, int, SpecSubject, list[float], bool]]:
+    """(subject index, member index, subject, box, person) per object to place:
+    body parts fold into the people they belong to, and a person box counting
+    n people becomes n figures side by side across it."""
+    has_person = any(is_person(s.label) for s in subjects)
+    out: list[tuple[int, int, SpecSubject, list[float], bool]] = []
+    for index, subject in enumerate(subjects):
+        part = is_body_part(subject.label)
+        if part and has_person:
+            continue
+        person = part or is_person(subject.label)
+        x, y, w, h = subject.bbox
+        n = max(1, int(subject.count or 1)) if person else 1
+        for k in range(n):
+            out.append((index, k, subject, [x + w * k / n, y, w / n, h], person))
+    return out
+
+
+def _object_id(index: int, member: int, person: bool) -> str:
+    base = f"fig-{index + 1}" if person else f"prop-{index + 1}"
+    return base if member == 0 else f"{base}-{member + 1}"
+
+
 def figure_variant_for(height_m: float) -> str:
     if height_m < CHILD_MAX_M:
         return "child"
@@ -211,10 +261,13 @@ def layout_from_spec(spec: ShotSpec, *, vfov_deg: float | None = None) -> SpecLa
             vfov_deg = DEFAULT_VFOV_DEG
     subjects = [s for s in spec.subjects if len(s.bbox) == 4 and s.bbox[2] > 0 and s.bbox[3] > 0]
     camera = _solve_camera(subjects, vfov_deg, aspect, spec.camera.height)
+    tight = tight_shot_size(spec.camera.shot_size)
     objects: list[SpecLayoutObject] = []
-    for index, subject in enumerate(subjects):
-        x, y, w, h = subject.bbox
-        person = is_person(subject.label)
+    for index, member, subject, box, person in _members(subjects):
+        x, y, w, h = box
+        if person and tight:
+            objects.append(_tight_figure(camera, box, tight, _object_id(index, member, True), subject.label))
+            continue
         # Grounded when the box's bottom ray reaches the floor in front of the
         # camera: the object then stands exactly where that ray lands, so its
         # reprojection is exact by construction. Otherwise (a window, a bird,
@@ -244,7 +297,7 @@ def layout_from_spec(spec: ShotSpec, *, vfov_deg: float | None = None) -> SpecLa
             unit = height_m / FIGURE_REF_HEIGHT_M
             objects.append(
                 SpecLayoutObject(
-                    id=f"fig-{index + 1}",
+                    id=_object_id(index, member, True),
                     kind="figure",
                     pos=[round(ax, 3), round(ay, 3), round(az, 3)],
                     rot=[0.0, 0.0, 0.0],
@@ -256,7 +309,7 @@ def layout_from_spec(spec: ShotSpec, *, vfov_deg: float | None = None) -> SpecLa
         else:
             objects.append(
                 SpecLayoutObject(
-                    id=f"prop-{index + 1}",
+                    id=_object_id(index, member, False),
                     kind="prop",
                     pos=[round(ax, 3), round(ay, 3), round(az, 3)],
                     rot=[0.0, 0.0, 0.0],
@@ -271,6 +324,28 @@ def layout_from_spec(spec: ShotSpec, *, vfov_deg: float | None = None) -> SpecLa
         depth_map_path=spec.layout3d.depth_map_path,
     )
     return layout
+
+
+def _tight_figure(camera: Camera, box: list[float], size: str, object_id: str, label: str) -> SpecLayoutObject:
+    """A whole figure for a person seen in a tight shot: at the distance where
+    the frame holds the top 1/TIGHT_FRAME_FRACTION of a 1.7 m body, its head
+    at the box's top edge and the rest of the body below the frame."""
+    x, y, w, _ = box
+    frame_height_m = FIGURE_REF_HEIGHT_M / TIGHT_FRAME_FRACTION[size]
+    distance = frame_height_m / (2 * camera.tan_v)
+    rx, ry, rz = camera.ray(x + w / 2, y)
+    axis = camera.depth_along_axis((camera.pos[0] + rx, camera.pos[1] + ry, camera.pos[2] + rz))
+    scale = distance / max(axis, 1e-4)
+    top = (camera.pos[0] + rx * scale, camera.pos[1] + ry * scale, camera.pos[2] + rz * scale)
+    return SpecLayoutObject(
+        id=object_id,
+        kind="figure",
+        pos=[round(top[0], 3), round(max(0.0, top[1] - FIGURE_REF_HEIGHT_M), 3), round(top[2], 3)],
+        rot=[0.0, 0.0, 0.0],
+        scale=[1.0, 1.0, 1.0],
+        pose="stand",
+        label=label,
+    )
 
 
 def camera_from_layout(layout: SpecLayout3D, aspect: float) -> Camera:
@@ -313,14 +388,15 @@ def reprojection_error(spec: ShotSpec, layout: SpecLayout3D) -> float:
     boxes = reproject_layout(layout, aspect_of(spec))
     subjects = [s for s in spec.subjects if len(s.bbox) == 4 and s.bbox[2] > 0 and s.bbox[3] > 0]
     worst = 0.0
-    for index, subject in enumerate(subjects):
-        key = f"fig-{index + 1}" if is_person(subject.label) else f"prop-{index + 1}"
-        box = boxes.get(key)
+    for index, member, _subject, member_box, person in _members(subjects):
+        box = boxes.get(_object_id(index, member, person))
         if box is None:
             return 1.0
-        x, y, w, h = subject.bbox
+        x, y, w, h = member_box
         bx, by, bw, bh = box
-        worst = max(worst, abs((x + w / 2) - (bx + bw / 2)), abs(y - by), abs((y + h) - (by + bh)))
+        # What the frame shows of it: a tight shot's figure runs out of the frame.
+        top, bottom = max(0.0, by), min(1.0, by + bh)
+        worst = max(worst, abs((x + w / 2) - (bx + bw / 2)), abs(y - top), abs(min(1.0, y + h) - bottom))
     return round(worst, 4)
 
 

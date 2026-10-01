@@ -237,3 +237,106 @@ class TestDeliver:
         params = bridge.manifests[0][0]["params"]
         assert isinstance(params, dict)
         assert params["video_guide"] == str(control.resolve()) and params["video_prompt_type"] == "V"
+
+
+class TestCloseUpsAndGroups:
+    """MEASURED in the installed app (r21, the reference clip's 10 s kiss,
+    a close-up): the composer opened on a *full* shot with one standing
+    figure 6 m away and a 2 x 3 m box labelled "Human Face". The solver read
+    every person box as a whole standing body, a "person" box with count 2
+    as one person, and a face as a prop. These are that shot's subjects."""
+
+    @staticmethod
+    def _kiss() -> ShotSpec:
+        spec = _spec(("human face", [0.4156, 0.1824, 0.2266, 0.6791], None), ("person", [0.0813, 0.0169, 0.5625, 0.9662], None), hfov=45)
+        spec.subjects[1].count = 2
+        spec.camera.shot_size = "closeup"
+        return spec
+
+    def test_a_group_box_becomes_one_figure_per_person(self):
+        layout = layout_from_spec(self._kiss())
+        assert len([o for o in layout.objects if o.kind == "figure"]) == 2
+
+    def test_a_face_is_part_of_a_person_not_a_prop(self):
+        layout = layout_from_spec(self._kiss())
+        assert not [o for o in layout.objects if o.kind == "prop"], [o.label for o in layout.objects]
+
+    def test_a_close_up_reads_as_a_close_up(self):
+        from film.shot_vocabulary import describe_camera
+
+        layout = layout_from_spec(self._kiss())
+        assert describe_camera(layout)["shot_size"] == "closeup"
+        scene = composer_scene_from_layout(layout, duration=10.0)
+        assert scene.framing.shot_size == "closeup"
+
+    def test_a_close_up_figure_fills_the_frame_with_its_head_and_shoulders(self):
+        spec = self._kiss()
+        layout = layout_from_spec(spec)
+        boxes = reproject_layout(layout, aspect_of(spec))
+        figures = [boxes[o.id] for o in layout.objects if o.kind == "figure"]
+        # The heads sit near the top of the frame, the bodies run out of it.
+        assert all(box[1] < 0.2 and box[1] + box[3] > 1.0 for box in figures), figures
+
+    def test_a_face_alone_is_still_a_person(self):
+        spec = _spec(("face", [0.3, 0.1, 0.4, 0.85], None), hfov=45)
+        spec.camera.shot_size = "close-up"
+        layout = layout_from_spec(spec)
+        assert [o.kind for o in layout.objects] == ["figure"]
+
+
+class TestSeedingFollowsTheSolver:
+    """MEASURED (r21): an analysis keeps the layout the solver gave at
+    analysis time, and seeding reused it - so a fixed solver never reached a
+    reproduced shot, and a stale seed stayed in the composer for good."""
+
+    def test_a_shot_is_seeded_from_a_fresh_solve_not_the_stored_layout(self, test_state):
+        from film.film_models import FilmProject, FilmScene, FilmShot
+        from film.shot_spec import SpecLayout3D, SpecLayoutObject
+
+        spec = TestCloseUpsAndGroups._kiss()
+        # What the old solver stored: a face prop and one standing figure.
+        spec.layout3d = SpecLayout3D(objects=[SpecLayoutObject(id="prop-1", kind="prop", pos=[0.3, 0.0, -6.0], scale=[2.2, 3.0, 2.2], label="human face")])
+        spec.set_section("layout3d", "depth", 0.6)
+        shot = FilmShot(id="shot-1", order=1, title="kiss")
+        project = FilmProject(id="film-seed", name="seed", scenes=[FilmScene(id="scene-1", order=1, title="s", shots=[shot])])
+        test_state.film.store.save(project)
+        test_state.scene.seed_shot(project, shot, spec, 10.0)
+        assert shot.composition is not None
+        assert [o.type for o in shot.composition.objects] == ["figure", "figure"]
+        assert shot.composition.framing.shot_size == "closeup"
+
+    def test_a_layout_the_user_set_is_kept(self, test_state):
+        from film.film_models import FilmProject, FilmScene, FilmShot
+        from film.shot_spec import SpecLayout3D, SpecLayoutObject
+
+        spec = TestCloseUpsAndGroups._kiss()
+        spec.layout3d = SpecLayout3D(objects=[SpecLayoutObject(id="fig-9", kind="figure", pos=[0.0, 0.0, -3.0], label="hero")])
+        spec.set_section("layout3d", "user", 1.0)
+        shot = FilmShot(id="shot-2", order=1, title="kept")
+        project = FilmProject(id="film-kept", name="kept", scenes=[FilmScene(id="scene-1", order=1, title="s", shots=[shot])])
+        test_state.film.store.save(project)
+        test_state.scene.seed_shot(project, shot, spec, 4.0)
+        assert [o.id for o in shot.composition.objects] == ["fig-9"]  # type: ignore[union-attr]
+
+    def test_an_untouched_older_seed_is_replaced_and_an_edited_one_is_not(self, client, video, test_state, create_fake_model_files):
+        from tests.test_video_reproduce import _analysed as analysed_for_reproduce
+
+        analysed = analysed_for_reproduce(client, video, test_state, create_fake_model_files)
+        ids = [s["id"] for s in analysed["shots"][:2]]
+        client.post(f"/api/video-reproduce/{analysed['id']}/start", json={"candidates": 1, "rounds": 1, "shot_ids": ids})
+        job = client.get(f"/api/video-reproduce/{analysed['id']}").json()
+        project = test_state.film.get_project(job["project_id"])
+        untouched = project.find_shot(job["shots"][0]["film_shot_id"])[1]  # type: ignore[index]
+        edited = project.find_shot(job["shots"][1]["film_shot_id"])[1]  # type: ignore[index]
+        assert untouched.composition.seed and edited.composition.seed  # type: ignore[union-attr]
+        version, fingerprint = untouched.composition.seed.split(":", 1)  # type: ignore[union-attr]
+        # Both as an older seed version left them; the second one then edited.
+        untouched.composition.seed = f"v0:{fingerprint}"  # type: ignore[union-attr]
+        edited.composition.seed = "v0:" + edited.composition.seed.split(":", 1)[1]  # type: ignore[union-attr]
+        edited.composition.duration_seconds = 9.25  # type: ignore[union-attr]
+        test_state.film.store.save(project)
+        client.post(f"/api/video-reproduce/{analysed['id']}/start", json={"candidates": 1, "rounds": 1, "shot_ids": ids})
+        after = test_state.film.get_project(job["project_id"])
+        assert after.find_shot(untouched.id)[1].composition.seed.startswith(version + ":")  # type: ignore[index,union-attr]
+        kept = after.find_shot(edited.id)[1].composition  # type: ignore[index]
+        assert kept.duration_seconds == 9.25 and kept.seed.startswith("v0:")  # type: ignore[union-attr]

@@ -232,7 +232,11 @@ def describe_camera(layout3d: "SpecLayout3D") -> dict[str, str]:
         scale = list(subject.scale) + [1.0] * (3 - len(subject.scale))
         subject_height = 1.7 * scale[1]
         dx, dy, dz = spos[0] - pos[0], spos[1] - pos[1], spos[2] - pos[2]
-        distance = max(0.05, math.sqrt(dx * dx + dy * dy + dz * dz))
+        # Ground distance: the frame height that matters is the one at the
+        # subject's depth. The straight line to its feet counted the camera's
+        # height too and read a 1.1 m close-up as a medium shot (MEASURED, r21).
+        ground = math.sqrt(dx * dx + dz * dz)
+        distance = max(0.05, ground if ground > 0.05 else math.sqrt(dx * dx + dy * dy + dz * dz))
         frame_height = 2 * distance * math.tan(math.radians(fov) / 2)
         result["shot_size"] = shot_size_from_frame_fraction(subject_height / max(0.01, frame_height))
         # Height: where the camera sits relative to the subject's eyes.

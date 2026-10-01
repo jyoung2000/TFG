@@ -10,12 +10,14 @@ scene (`describe_camera`).
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from threading import RLock
 from typing import Any
 
 from _routes._errors import HTTPError
-from film.film_models import FilmProject, FilmShot
+from film.film_models import CompositionScene, FilmProject, FilmShot
 from film.scene_api_types import DescribeSceneResponse, SceneBuildRequest, SceneBuildResponse, ShotSpecUpdateRequest
 from film.scene_solver import (
     blockout_svg,
@@ -36,6 +38,22 @@ from handlers.video_analysis_handler import VideoAnalysisHandler
 from state.app_state_types import AppState
 
 logger = logging.getLogger(__name__)
+
+
+#: Bumped when seeding improves, so untouched older seeds are re-seeded.
+#: 2: close-ups, groups and body parts (r21).
+SEED_VERSION = 2
+
+
+def seed_fingerprint(composition: CompositionScene) -> str:
+    data = composition.model_dump(mode="json", exclude={"seed"})
+    return hashlib.sha256(json.dumps(data, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+
+
+def stale_seed(composition: CompositionScene) -> bool:
+    """An app seed from an older SEED_VERSION that nobody has edited since."""
+    version, _, fingerprint = composition.seed.partition(":")
+    return bool(fingerprint) and version != f"v{SEED_VERSION}" and fingerprint == seed_fingerprint(composition)
 
 
 class SceneHandler(StateHandlerBase):
@@ -125,15 +143,16 @@ class SceneHandler(StateHandlerBase):
 
     def seed_missing(self, project_id: str, analysis: VideoAnalysis) -> int:
         """Seed a composer scene + blockout into every shot of `project_id`
-        that came from `analysis` and has none yet; a shot the user already
-        composed is left alone. Returns how many shots were seeded."""
+        that came from `analysis` and has none yet, or only an untouched seed
+        from an older SEED_VERSION; a shot the user composed is left alone.
+        Returns how many shots were seeded."""
         by_id = {s.id: s for s in analysis.shots}
         seeded = 0
         with self.lock:
             project = self._film.store.load(project_id)
             for _, film_shot in _walk(project):
                 ref = film_shot.source_ref
-                if film_shot.composition is not None or ref is None or ref.analysis_shot_id not in by_id:
+                if (film_shot.composition is not None and not stale_seed(film_shot.composition)) or ref is None or ref.analysis_shot_id not in by_id:
                     continue
                 analysed = by_id[ref.analysis_shot_id]
                 self._seed_shot(project, film_shot, analysed.spec, analysed.duration)
@@ -147,7 +166,17 @@ class SceneHandler(StateHandlerBase):
         self._seed_shot(project, film_shot, spec, duration)
 
     def _seed_shot(self, project: FilmProject, film_shot: FilmShot, spec: ShotSpec, duration: float) -> None:
-        layout = spec.layout3d if spec.layout3d.objects else layout_from_spec(spec)
+        # The stored layout is what the solver gave at analysis time; seeding
+        # solves again unless the user set or locked it.
+        kept = spec.layout3d.objects and (spec.is_locked("layout3d") or spec.provenance.get("layout3d") == "user")
+        layout = spec.layout3d
+        if not kept and any(len(s.bbox) == 4 for s in spec.subjects):
+            try:
+                layout = layout_from_spec(spec)
+            except (ValueError, ZeroDivisionError):
+                layout = spec.layout3d
+        elif not spec.layout3d.objects:
+            layout = layout_from_spec(spec)
         move = camera_move_for(spec)
         composition = composer_scene_from_layout(layout, duration=max(0.5, duration), move=move, motion=spec.motion, framing=film_shot.framing)
         # Figures stand for the shot's cast: link them in order, so the
@@ -155,6 +184,7 @@ class SceneHandler(StateHandlerBase):
         cast = [c.asset_id for c in film_shot.characters]
         for figure, asset_id in zip((o for o in composition.objects if o.type == "figure"), cast):
             figure.asset_id = asset_id
+        composition.seed = f"v{SEED_VERSION}:{seed_fingerprint(composition)}"
         film_shot.composition = composition
         film_shot.framing = composition.framing
         film_shot.camera_move = move
