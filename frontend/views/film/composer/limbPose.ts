@@ -18,6 +18,9 @@ import type { FigureRig, JointName } from './figure'
 const DOWN = new THREE.Vector3(0, -1, 0)
 const UP = new THREE.Vector3(0, 1, 0)
 const UPRIGHT: ReadonlySet<JointName> = new Set(['torso', 'neck', 'head'])
+/** The side a hinge folds toward, in its parent limb's space: forearms fold to the front, shins to the back. */
+const ELBOW_FLEX = new THREE.Vector3(0, 0, 1)
+const KNEE_FLEX = new THREE.Vector3(0, 0, -1)
 
 function worldPosition(object: THREE.Object3D): THREE.Vector3 {
   object.updateWorldMatrix(true, false)
@@ -39,11 +42,45 @@ export function aimJoint(joint: THREE.Object3D, target: THREE.Vector3, axis: THR
 }
 
 /**
+ * Bend a hinge (an elbow, a knee) so the segment below `mid` points along
+ * `direction` (world), as a body does it: the limb above turns about its own
+ * length (the upper arm / thigh rotates) until the hinge's folding side
+ * `flex` (in `root`'s space: +Z for an elbow, which folds the forearm to the
+ * front, -Z for a knee) faces the way the segment must go, then the hinge
+ * bends about its own X axis only. Its twist (Y) is kept; it never bends
+ * sideways.
+ */
+export function bendHinge(root: THREE.Object3D, mid: THREE.Object3D, direction: THREE.Vector3, flex: THREE.Vector3): void {
+  const want = direction.clone().normalize()
+  const rootQuat = root.getWorldQuaternion(new THREE.Quaternion())
+  const bone = DOWN.clone().applyQuaternion(rootQuat).normalize()
+  const side = want.clone().sub(bone.clone().multiplyScalar(want.dot(bone)))
+  if (side.lengthSq() > 1e-8) {
+    side.normalize()
+    const facing = flex.clone().applyQuaternion(rootQuat)
+    facing.sub(bone.clone().multiplyScalar(facing.dot(bone)))
+    if (facing.lengthSq() > 1e-8) {
+      facing.normalize()
+      const angle = Math.atan2(bone.dot(facing.clone().cross(side)), facing.dot(side))
+      const turn = new THREE.Quaternion().setFromAxisAngle(bone, angle)
+      const parentQuat = root.parent ? root.parent.getWorldQuaternion(new THREE.Quaternion()) : new THREE.Quaternion()
+      root.quaternion.copy(parentQuat.invert().multiply(turn.multiply(rootQuat)))
+      root.updateWorldMatrix(false, true)
+    }
+  }
+  const fold = Math.acos(THREE.MathUtils.clamp(bone.dot(want), -1, 1))
+  const twist = mid.rotation.y
+  mid.rotation.set(flex.z > 0 ? -fold : fold, twist, 0, 'XYZ')
+  mid.updateWorldMatrix(false, true)
+}
+
+/**
  * Two-bone IK: rotate `root` and `mid` so `end` reaches `target` (or points
  * at it from as far as the limb reaches). The middle joint keeps bending the
  * way it already bends; a straight limb bends toward `pole` (world direction).
+ * With `flex` the middle joint is a hinge (see `bendHinge`).
  */
-export function solveTwoBone(root: THREE.Object3D, mid: THREE.Object3D, end: THREE.Object3D, target: THREE.Vector3, pole: THREE.Vector3): void {
+export function solveTwoBone(root: THREE.Object3D, mid: THREE.Object3D, end: THREE.Object3D, target: THREE.Vector3, pole: THREE.Vector3, flex?: THREE.Vector3): void {
   const shoulder = worldPosition(root)
   const elbow = worldPosition(mid)
   const wrist = worldPosition(end)
@@ -70,7 +107,9 @@ export function solveTwoBone(root: THREE.Object3D, mid: THREE.Object3D, end: THR
   const out = Math.sqrt(Math.max(0, upper * upper - along * along))
   const elbowAt = shoulder.clone().add(dir.clone().multiplyScalar(along)).add(bend.multiplyScalar(out))
   aimJoint(root, elbowAt, DOWN)
-  aimJoint(mid, shoulder.clone().add(dir.multiplyScalar(reach)), DOWN)
+  const wristAt = shoulder.clone().add(dir.multiplyScalar(reach))
+  if (flex) bendHinge(root, mid, wristAt.sub(elbowAt), flex)
+  else aimJoint(mid, wristAt, DOWN)
 }
 
 /** Drag the body part hanging from `joint` toward `target` (world space). */
@@ -79,13 +118,20 @@ export function dragJoint(rig: FigureRig, joint: JointName, target: THREE.Vector
   const j = rig.joints
   if (joint === 'l_wrist' || joint === 'r_wrist') {
     const side = joint[0] as 'l' | 'r'
-    // Elbows point down and back, so a raised hand comes up in front.
-    const down = new THREE.Vector3(0, -1, 0)
-    solveTwoBone(j[`${side}_arm`], j[`${side}_elbow`], j[joint], target, down.add(forward.clone().multiplyScalar(-0.5)))
+    // Elbows point down, back and a little out, so a raised hand comes up in
+    // front and a hand brought to the chest keeps the forearm off the body.
+    const outward = new THREE.Vector3(side === 'l' ? 1 : -1, 0, 0).applyQuaternion(rig.root.getWorldQuaternion(new THREE.Quaternion()))
+    const pole = new THREE.Vector3(0, -1, 0).add(forward.clone().multiplyScalar(-0.35)).add(outward.multiplyScalar(0.5))
+    solveTwoBone(j[`${side}_arm`], j[`${side}_elbow`], j[joint], target, pole, ELBOW_FLEX)
   } else if (joint === 'l_ankle' || joint === 'r_ankle') {
     const side = joint[0] as 'l' | 'r'
     // Knees bend forward.
-    solveTwoBone(j[`${side}_leg`], j[`${side}_knee`], j[joint], target, forward)
+    solveTwoBone(j[`${side}_leg`], j[`${side}_knee`], j[joint], target, forward, KNEE_FLEX)
+  } else if (joint === 'l_elbow' || joint === 'r_elbow') {
+    // A forearm swings by the upper arm turning and the elbow folding.
+    bendHinge(j[`${joint[0] as 'l' | 'r'}_arm`], j[joint], target.clone().sub(worldPosition(j[joint])), ELBOW_FLEX)
+  } else if (joint === 'l_knee' || joint === 'r_knee') {
+    bendHinge(j[`${joint[0] as 'l' | 'r'}_leg`], j[joint], target.clone().sub(worldPosition(j[joint])), KNEE_FLEX)
   } else {
     aimJoint(j[joint], target, UPRIGHT.has(joint) ? UP : DOWN)
   }

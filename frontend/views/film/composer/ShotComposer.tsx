@@ -57,7 +57,8 @@ import type {
 } from '../../../types/film'
 import { CAMERA_ANGLES, CAMERA_ELEVATIONS, CAMERA_MOVES, COMPOSITIONS, SHOT_SIZES } from '../../../types/film'
 import { useShotWorkflow } from '../useShotWorkflow'
-import { ComposerScene, SHOT_CAMERA_ID, type GizmoMode } from './composerScene'
+import { ComposerScene, SHOT_CAMERA_ID, type GizmoMode, type PoseTool } from './composerScene'
+import type { DragReadout } from './dragReadout'
 import { JOINT_LABELS, JOINT_NAMES, mirrorPose, type JointName } from './figure'
 import { mergePoseLibrary, type PoseEntry } from './poses'
 import { libraryCategories } from './blockout/moves'
@@ -237,6 +238,11 @@ export function ShotComposer({ projectId, scene, shot, onClose, studio }: ShotCo
   const [statusNote, setStatusNote] = useState('')
   const [poseNameDraft, setPoseNameDraft] = useState('')
   const [gizmoMode, setGizmoModeState] = useState<GizmoMode>('translate')
+  // Pose mode: arrows move the selected part, rings turn its joint.
+  const [poseTool, setPoseToolState] = useState<PoseTool>('move')
+  // What is being dragged and how far / why it stopped (kept a moment after release).
+  const [poseReadout, setPoseReadout] = useState<DragReadout | null>(null)
+  const readoutTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameDraft, setRenameDraft] = useState('')
   const [transformTick, setTransformTick] = useState(0)
@@ -295,6 +301,12 @@ export function ShotComposer({ projectId, scene, shot, onClose, studio }: ShotCo
     composer.onTransformChange = () => {
       markDirty()
       setTransformTick(t => t + 1)
+    }
+    composer.onPoseReadout = readout => {
+      if (readoutTimer.current) clearTimeout(readoutTimer.current)
+      readoutTimer.current = null
+      if (readout) setPoseReadout(readout)
+      else readoutTimer.current = setTimeout(() => setPoseReadout(null), 2500)
     }
     composer.onCameraManualChange = () => {
       markDirty()
@@ -479,7 +491,10 @@ export function ShotComposer({ projectId, scene, shot, onClose, studio }: ShotCo
         redo()
         return
       }
-      if (event.key === 'w' || event.key === 'W') setGizmoMode('translate')
+      // Posing, W / E switch between the arrows and the rings on the body part.
+      if (gizmoMode === 'pose' && (event.key === 'w' || event.key === 'W')) setPoseTool('move')
+      else if (gizmoMode === 'pose' && (event.key === 'e' || event.key === 'E')) setPoseTool('rotate')
+      else if (event.key === 'w' || event.key === 'W') setGizmoMode('translate')
       else if (event.key === 'e' || event.key === 'E') setGizmoMode('rotate')
       else if (event.key === 'r' || event.key === 'R') setGizmoMode('scale')
       else if (event.key === 't' || event.key === 'T') setGizmoMode('pose')
@@ -491,7 +506,7 @@ export function ShotComposer({ projectId, scene, shot, onClose, studio }: ShotCo
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedId, undo, redo])
+  }, [selectedId, undo, redo, gizmoMode])
 
   // Playable URLs for completed versions.
   useEffect(() => {
@@ -513,6 +528,11 @@ export function ShotComposer({ projectId, scene, shot, onClose, studio }: ShotCo
   const setGizmoMode = useCallback((mode: GizmoMode) => {
     sceneRef.current?.setGizmoMode(mode)
     setGizmoModeState(mode)
+  }, [])
+
+  const setPoseTool = useCallback((tool: PoseTool) => {
+    sceneRef.current?.setPoseTool(tool)
+    setPoseToolState(tool)
   }, [])
 
   // ---- Object actions ---------------------------------------------------
@@ -928,7 +948,7 @@ export function ShotComposer({ projectId, scene, shot, onClose, studio }: ShotCo
               ['translate', Move, 'Move (W)'],
               ['rotate', RotateCw, 'Rotate (E)'],
               ['scale', Maximize2, 'Scale (R)'],
-              ['pose', PersonStanding, 'Pose (T): click a limb, drag the rings'],
+              ['pose', PersonStanding, 'Pose (T): click a body part, drag it or its arrows'],
             ] as const
           ).map(([mode, Icon, title]) => (
             <button
@@ -1102,6 +1122,17 @@ export function ShotComposer({ projectId, scene, shot, onClose, studio }: ShotCo
         {/* Center: viewport */}
         <div ref={containerRef} className="flex-1 relative min-w-0">
           <canvas ref={canvasRef} className="absolute inset-0 w-full h-full" />
+          {poseReadout && (
+            <div
+              role="status"
+              data-testid="pose-readout"
+              className={`absolute top-3 left-1/2 -translate-x-1/2 z-10 max-w-[70%] truncate rounded-full px-3 py-1 text-[11px] font-medium shadow-lg pointer-events-none ${
+                poseReadout.tone === 'blocked' ? 'bg-red-950/90 text-red-200 border border-red-700/60' : poseReadout.tone === 'hint' ? 'bg-zinc-900/90 text-zinc-200 border border-zinc-700' : 'bg-violet-950/90 text-violet-100 border border-violet-600/60'
+              }`}
+            >
+              {poseReadout.text}
+            </div>
+          )}
           <PosePreviewPanel
             projectId={projectId}
             shot={shot}
@@ -1181,7 +1212,21 @@ export function ShotComposer({ projectId, scene, shot, onClose, studio }: ShotCo
                       <NumberField key={axis} label={`${axis}°`} value={jointEuler[index as 0 | 1 | 2]} step={5} min={-180} max={180} onChange={value => updateJoint(index as 0 | 1 | 2, value)} disabled={selectedObject.locked} />
                     ))}
                   </div>
-                  <p className="text-[10px] text-zinc-500" data-testid="pose-drag-hint">Drag a hand or foot to place it · drag any other part to swing it · rings twist · Ctrl+Z / Ctrl+Y</p>
+                  <div className="flex items-center gap-1" role="group" aria-label="Pose handles">
+                    {([['move', 'Arrows (W)', 'Arrows move the part along the figure: up / down, forward / back, left / right'], ['rotate', 'Rings (E)', 'Rings turn the joint']] as const).map(([tool, label, title]) => (
+                      <button
+                        key={tool}
+                        onClick={() => setPoseTool(tool)}
+                        title={title}
+                        aria-pressed={poseTool === tool}
+                        data-testid={`pose-tool-${tool}`}
+                        className={`flex-1 px-1.5 py-0.5 rounded text-[10px] ${poseTool === tool ? 'bg-violet-600/70 text-white' : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700'}`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-[10px] text-zinc-500" data-testid="pose-drag-hint">Drag the arrows, or the hand, foot or limb itself · joints bend only as a body does, and limbs stop at the body · Ctrl+Z / Ctrl+Y</p>
                 </div>
               )}
             </div>
