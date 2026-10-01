@@ -175,3 +175,37 @@ class TestImg2ImgFromAReference:
                 model_type="z_image", init_image=str(reference), denoise_strength=0.5,
             )
         assert bridge.manifests == [], "nothing reached WanGP"
+
+
+def _vace_settings_for(*, control_video_path: str | None, end_frame_path: str | None) -> dict[str, object]:
+    bridge = _make_bridge()
+    captured: dict[str, object] = {}
+
+    def fake_run_manifest(*, manifest, media_suffixes, on_progress, is_cancelled):  # type: ignore[no-untyped-def]
+        captured["settings"] = manifest[0]["params"]
+        return ["E:/tmp/out.mp4"]
+
+    bridge._run_manifest = fake_run_manifest  # type: ignore[method-assign]
+    bridge.generate_video(
+        prompt="two people kissing", resolution_label="540p", aspect_ratio="16:9", duration_seconds=10, fps=24, steps=8, seed=7,
+        camera_motion="none", negative_prompt="", image_path="E:/tmp/first.png", audio_path=None, on_progress=lambda *_a: None,
+        is_cancelled=lambda: False, control_video_path=control_video_path, end_frame_path=end_frame_path, control_strength=1.0,
+        model_type="vace_1.3B",
+    )
+    return captured["settings"]  # type: ignore[return-value]
+
+
+def test_a_vace_render_with_a_guide_video_skips_cfg_and_takes_six_steps() -> None:
+    """MEASURED (RTX 4070, the reference clip's 10 s shot, SSIM against the
+    source): CFG 5 / 8 steps 0.971 in ~390 s; CFG 1 / 6 steps 0.982 in 206 s;
+    CFG 1 / 4 steps 0.981 in 166 s. With a guide video the unconditional
+    pass doubled the cost and pulled the take away from the source."""
+    settings = _vace_settings_for(control_video_path="E:/tmp/guide.mp4", end_frame_path="E:/tmp/last.png")
+    assert settings["guidance_scale"] == 1.0
+    assert settings["num_inference_steps"] == 6
+
+
+def test_a_vace_render_without_a_guide_video_keeps_cfg() -> None:
+    settings = _vace_settings_for(control_video_path=None, end_frame_path="E:/tmp/last.png")
+    assert "guidance_scale" not in settings
+    assert settings["num_inference_steps"] == 8

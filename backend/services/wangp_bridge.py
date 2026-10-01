@@ -45,6 +45,8 @@ IMG2IMG_MODEL_TYPES: tuple[str, ...] = ("flux2_klein_4b", "flux2_klein_9b", "flu
 #: int(steps * (1 - strength))), so the few-step default leaves low strengths
 #: with no resolution at all.
 IMG2IMG_MIN_STEPS = 24
+#: A VACE render with a guide video needs no CFG and few steps (see `_vace_settings`).
+VACE_GUIDED_STEPS = 6
 
 def _with_default_attention(args: tuple[str, ...]) -> tuple[str, ...]:
     """`--attention auto` unless the caller chose one: WanGP's saved config can
@@ -503,10 +505,18 @@ class WanGPBridge:
             settings["frames_positions"] = " ".join(positions)
         settings["video_prompt_type"] = letters
         settings["resolution"] = "480x832" if aspect_ratio == "9:16" else "832x480"
-        # One window for the whole clip: WanGP's default windows stopped a
-        # 161-frame (10 s) render at 129 frames (MEASURED, r17), so the take
-        # covered 8 s of a 10 s shot. A 1.3B model renders 161 frames at once.
+        # One window for the whole clip. With windows WanGP saves a file after
+        # each one and the first (short) file came back as the take; smaller
+        # windows were not faster either (MEASURED, r18: 4 x 49 frames ~ 1 x 161).
         settings["sliding_window_size"] = video_length
+        if settings.get("video_guide"):
+            # The guide carries the motion and layout: CFG's unconditional pass
+            # doubled the cost and pulled the take off the source (MEASURED, r18,
+            # 10 s shot vs source SSIM: CFG 5/8 steps 0.971 ~390 s; CFG 1/6 steps
+            # 0.982 206 s; CFG 1/4 steps 0.981 166 s).
+            settings["guidance_scale"] = 1.0
+            steps = settings.get("num_inference_steps")
+            settings["num_inference_steps"] = min(steps, VACE_GUIDED_STEPS) if isinstance(steps, int) else VACE_GUIDED_STEPS
 
     def _video_steps(self, model_type: str, requested: int) -> int:
         """An accelerated model (FastWan: 3 steps) renders with its own step
