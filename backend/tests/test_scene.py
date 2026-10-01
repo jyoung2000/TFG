@@ -296,6 +296,29 @@ class TestCloseUpsAndGroups:
         layout = layout_from_spec(spec)
         assert [o.kind for o in layout.objects] == ["figure", "figure"]
 
+    def test_a_head_to_toe_person_is_not_a_tight_shot_whatever_the_words_say(self):
+        """MEASURED (r23, the clothed reference image, 1125 x 2000): the vision
+        model called a head-to-toe portrait a "medium shot"; seeding then put a
+        Medium figure in the composer, and "trousers" became a cube."""
+        from film.shot_spec import SpecSource
+        from film.shot_vocabulary import describe_camera
+
+        spec = _spec(
+            ("human face", [0.443, 0.065, 0.151, 0.102], None), ("jacket", [0.116, 0.162, 0.766, 0.297], None),
+            ("human head", [0.366, 0.009, 0.295, 0.16], None), ("trousers", [0.262, 0.428, 0.529, 0.493], None),
+            ("woman", [0.13, 0.006, 0.747, 0.976], None),
+        )
+        spec.source = SpecSource(width=1125, height=2000, aspect="9:16")
+        spec.camera.shot_size = "medium"
+        layout = layout_from_spec(spec)
+        assert [(o.kind, o.label) for o in layout.objects] == [("figure", "woman")]
+        assert describe_camera(layout)["shot_size"] == "full"
+
+    def test_a_figure_standing_for_a_face_is_named_as_a_person(self):
+        spec = _spec(("human face", [0.3, 0.1, 0.4, 0.85], None), hfov=45)
+        spec.camera.shot_size = "closeup"
+        assert [o.label for o in layout_from_spec(spec).objects] == ["person"]
+
     def test_a_face_alone_is_still_a_person(self):
         spec = _spec(("face", [0.3, 0.1, 0.4, 0.85], None), hfov=45)
         spec.camera.shot_size = "close-up"

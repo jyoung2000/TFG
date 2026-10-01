@@ -151,3 +151,17 @@ class TestAnImageRunEndsComposed:
         _, shot = test_state.film.get_project(done["storyboard_project_id"]).find_shot(done["storyboard_shot_id"])  # type: ignore[misc]
         assert shot.composition is not None and shot.blockout_path
         assert shot.visual_prompt == done["prompt"]
+
+
+    def test_a_composer_edit_survives_the_next_run(self, client, create_fake_model_files, tmp_path, test_state):
+        """Every run now updates its storyboard shot; a run must not undo the user's composer work."""
+        job = _image_job(client, create_fake_model_files, tmp_path)
+        client.post(f"/api/reproduce/{job['id']}/start", json={"budget": {"candidates_per_round": 1, "max_rounds": 1}})
+        done = client.get(f"/api/reproduce/{job['id']}").json()
+        project = test_state.film.get_project(done["storyboard_project_id"])
+        shot = project.find_shot(done["storyboard_shot_id"])[1]  # type: ignore[index]
+        shot.composition.duration_seconds = 7.75  # type: ignore[union-attr]
+        test_state.film.store.save(project)
+        client.post(f"/api/reproduce/{job['id']}/start", json={"budget": {"candidates_per_round": 1, "max_rounds": 2}})
+        again = test_state.film.get_project(done["storyboard_project_id"]).find_shot(done["storyboard_shot_id"])[1]  # type: ignore[index]
+        assert again.composition.duration_seconds == 7.75  # type: ignore[union-attr]

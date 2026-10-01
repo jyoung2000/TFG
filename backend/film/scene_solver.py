@@ -51,10 +51,19 @@ TOLERANCE = 0.05
 #: Parts of a person a detector reports beside (or instead of) the person.
 #: With a person in the shot they are that person, not props; alone they
 #: stand for one (MEASURED, r21: a "human face" box became a 2 x 3 m box).
-BODY_PART_LABELS = frozenset({"face", "head", "hand", "hands", "eye", "eyes", "lips", "mouth", "nose", "ear", "hair", "arm", "leg"})
+BODY_PART_LABELS = frozenset({"face", "head", "hand", "hands", "eye", "eyes", "lips", "mouth", "nose", "ear", "hair", "arm", "arms", "leg", "legs", "foot", "feet", "knee"})
 #: What people wear: part of the person when one is in the shot (MEASURED,
 #: r22: a "tie" became a cube 7 m behind the man), an object otherwise.
-WORN_LABELS = frozenset({"tie", "shirt", "jacket", "suit", "coat", "dress", "hat", "cap", "glasses", "sunglasses", "scarf", "necklace", "earring", "earrings", "watch", "glove", "gloves", "mask"})
+WORN_LABELS = frozenset({
+    "tie", "shirt", "jacket", "suit", "coat", "dress", "hat", "cap", "glasses", "sunglasses", "scarf", "necklace", "earring", "earrings",
+    "watch", "glove", "gloves", "mask", "trousers", "pants", "jeans", "shorts", "skirt", "leggings", "shoes", "boots", "sneakers", "socks",
+    "bodysuit", "catsuit", "belt", "clothing",
+})
+#: Detections that mean the legs are in the frame, so a person box is not a tight shot's top of a body.
+LOWER_BODY_LABELS = frozenset({"trousers", "pants", "jeans", "shorts", "skirt", "leggings", "shoes", "boots", "sneakers", "socks", "leg", "legs", "foot", "feet", "knee"})
+#: A person box this many times taller than wide (in pixels) shows the whole
+#: body: a head-to-toe portrait measured 2.3, head-and-shoulders boxes 0.7-1.6.
+WHOLE_BODY_BOX_RATIO = 2.0
 #: In a tight shot a person box holds only the top of the body. A whole
 #: 1.7 m figure is then this many frame heights tall - inside the band
 #: `shot_size_from_frame_fraction` reads back as the same size.
@@ -279,11 +288,17 @@ def layout_from_spec(spec: ShotSpec, *, vfov_deg: float | None = None) -> SpecLa
     subjects = [s for s in spec.subjects if len(s.bbox) == 4 and s.bbox[2] > 0 and s.bbox[3] > 0]
     camera = _solve_camera(subjects, vfov_deg, aspect, spec.camera.height)
     tight = tight_shot_size(spec.camera.shot_size)
+    # The words can be wrong (MEASURED, r23: a head-to-toe portrait read as a
+    # "medium shot"): legs in the frame or a whole-body box overrule them.
+    legs_visible = any(s.label.strip().lower().split(" ")[-1] in LOWER_BODY_LABELS for s in subjects)
     objects: list[SpecLayoutObject] = []
     for index, member, subject, box, person in _members(subjects):
         x, y, w, h = box
-        if person and tight:
-            objects.append(_tight_figure(camera, box, tight, _object_id(index, member, True), subject.label))
+        part = is_body_part(subject.label)
+        label = "person" if part else subject.label
+        whole_body = not part and (legs_visible or (h / max(w, 1e-4)) / aspect >= WHOLE_BODY_BOX_RATIO)
+        if person and tight and not whole_body:
+            objects.append(_tight_figure(camera, box, tight, _object_id(index, member, True), label))
             continue
         # Grounded when the box's bottom ray reaches the floor in front of the
         # camera: the object then stands exactly where that ray lands, so its
@@ -320,7 +335,7 @@ def layout_from_spec(spec: ShotSpec, *, vfov_deg: float | None = None) -> SpecLa
                     rot=[0.0, 0.0, 0.0],
                     scale=[round(unit, 4)] * 3,
                     pose="stand",
-                    label=subject.label,
+                    label=label,
                 )
             )
         else:

@@ -42,12 +42,19 @@ logger = logging.getLogger(__name__)
 
 #: Bumped when seeding improves, so untouched older seeds are re-seeded.
 #: 2: close-ups, groups and body parts (r21). 3: worn items, extra faces (r22).
-SEED_VERSION = 3
+#: 4: whole-body boxes overrule the shot-size words; face figures are "person" (r23).
+SEED_VERSION = 4
 
 
 def seed_fingerprint(composition: CompositionScene) -> str:
     data = composition.model_dump(mode="json", exclude={"seed"})
     return hashlib.sha256(json.dumps(data, sort_keys=True).encode("utf-8")).hexdigest()[:16]
+
+
+def untouched_seed(composition: CompositionScene) -> bool:
+    """An app seed (any version) that nobody has edited since."""
+    _, _, fingerprint = composition.seed.partition(":")
+    return bool(fingerprint) and fingerprint == seed_fingerprint(composition)
 
 
 def stale_seed(composition: CompositionScene) -> bool:
@@ -162,7 +169,11 @@ class SceneHandler(StateHandlerBase):
         return seeded
 
     def seed_shot(self, project: FilmProject, film_shot: FilmShot, spec: ShotSpec, duration: float) -> None:
-        """Seed one shot's composer scene + blockout from a spec (image reproduce)."""
+        """Seed one shot's composer scene + blockout from a spec (image reproduce)
+        unless the user has composed it: only a missing scene or one still as
+        the app seeded it is (re)seeded."""
+        if film_shot.composition is not None and not untouched_seed(film_shot.composition):
+            return
         self._seed_shot(project, film_shot, spec, duration)
 
     def _seed_shot(self, project: FilmProject, film_shot: FilmShot, spec: ShotSpec, duration: float) -> None:
