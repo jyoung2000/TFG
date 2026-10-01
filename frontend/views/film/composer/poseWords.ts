@@ -40,6 +40,8 @@ function armPhrase(rig: FigureRig, side: 'l' | 'r'): string {
   const out = sign * (hand.x - shoulder.x)
   const forward = hand.z - shoulder.z
   if (hand.distanceTo(head) < 0.1 * H) return 'with the hand on the head'
+  // Folded up: the hand by the shoulder, the elbow down (not an arm held out).
+  if (hand.distanceTo(shoulder) < 0.12 * H && elbow.y < shoulder.y - 0.06 * H) return 'bent up, the hand at the shoulder'
   if (up > 0.12 * H) {
     if (out > 0.15 * H) return 'raised up and out to the side'
     if (forward > 0.15 * H) return 'raised up and forward'

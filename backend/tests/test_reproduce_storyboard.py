@@ -184,3 +184,55 @@ class TestTheComposedImageTakesThePhotosPose:
         shot = test_state.film.get_project(done["storyboard_project_id"]).find_shot(done["storyboard_shot_id"])[1]  # type: ignore[index]
         figures = [o for o in shot.composition.objects if o.type == "figure"]  # type: ignore[union-attr]
         assert figures and figures[0].pose.get("l_elbow", (0, 0, 0))[2] < -60, figures[0].pose if figures else None
+
+
+class TestOldImageShotsAreReseededWhenOpened:
+    """Asked 2026-10-01 (screenshot, "the pose isnt 100% correct"): the
+    composer showed a mannequin standing at rest beside a photo of a woman
+    with her hands on her hips. That shot was seeded by an older version (v4),
+    with no figure, and image shots were only ever seeded right after a
+    reproduce run - opening the storyboard never refreshed them, as it does
+    for video shots."""
+
+    def _old_shot(self, client, create_fake_model_files, tmp_path, test_state, fake_services):
+        from handlers.scene_handler import seed_fingerprint
+        from services.vision.protocol import PosePerson
+        from tests.test_pose import HANDS_ON_HIPS
+
+        fake_services.vision.regions_override = None
+        job = _image_job(client, create_fake_model_files, tmp_path)
+        client.post(f"/api/reproduce/{job['id']}/start", json={"budget": {"candidates_per_round": 1, "max_rounds": 1}})
+        done = client.get(f"/api/reproduce/{job['id']}").json()
+        # The job predates pose reading; the shot holds an untouched v4 seed without figures.
+        stored = test_state.reproduce.get(job["id"])
+        stored.spec.poses = []
+        stored.spec.provenance.pop("poses", None)
+        test_state.reproduce._save(stored)
+        project = test_state.film.get_project(done["storyboard_project_id"])
+        shot = project.find_shot(done["storyboard_shot_id"])[1]  # type: ignore[index]
+        old = shot.composition.model_copy(update={"objects": []})  # type: ignore[union-attr]
+        old.seed = f"v4:{seed_fingerprint(old)}"
+        shot.composition = old
+        test_state.film.store.save(project)
+        fake_services.vision.pose_override = [PosePerson(bbox=[0.2, 0.05, 0.62, 0.88], score=0.9, keypoints=HANDS_ON_HIPS)]
+        return done
+
+    def test_opening_the_project_poses_the_figure_like_the_photo(self, client, create_fake_model_files, tmp_path, test_state, fake_services):
+        done = self._old_shot(client, create_fake_model_files, tmp_path, test_state, fake_services)
+        project = client.get(f"/api/film/projects/{done['storyboard_project_id']}").json()["project"]
+        shot = next(s for sc in project["scenes"] for s in sc["shots"] if s["id"] == done["storyboard_shot_id"])
+        composition = shot["composition"]
+        assert composition["seed"].startswith("v7:"), composition["seed"]
+        figures = [o for o in composition["objects"] if o["type"] == "figure"]
+        assert figures, "still no figure for the person in the photo"
+        assert figures[0]["pose"].get("l_elbow", [0, 0, 0])[2] < -60, figures[0]["pose"]
+
+    def test_a_scene_the_user_edited_is_left_alone(self, client, create_fake_model_files, tmp_path, test_state, fake_services):
+        done = self._old_shot(client, create_fake_model_files, tmp_path, test_state, fake_services)
+        project = test_state.film.get_project(done["storyboard_project_id"])
+        shot = project.find_shot(done["storyboard_shot_id"])[1]  # type: ignore[index]
+        shot.composition.duration_seconds = 6.5  # type: ignore[union-attr]  (an edit: the seed no longer matches)
+        test_state.film.store.save(project)
+        again = client.get(f"/api/film/projects/{done['storyboard_project_id']}").json()["project"]
+        kept = next(s for sc in again["scenes"] for s in sc["shots"] if s["id"] == done["storyboard_shot_id"])["composition"]
+        assert kept["seed"].startswith("v4:") and kept["duration_seconds"] == 6.5 and kept["objects"] == []

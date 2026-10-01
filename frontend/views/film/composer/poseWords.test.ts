@@ -45,6 +45,17 @@ describe('poseWords', () => {
     expect(poseWords(rig, null, 'side')).toContain('right arm stretched out to the side at shoulder height')
   })
 
+  // Live 2026-10-01 (screenshot): a hand brought up to the shoulder, elbow
+  // bent down, was described as "stretched out to the side at shoulder height".
+  it('names a hand brought up to the shoulder with the elbow bent', () => {
+    const rig = figure()
+    const shoulder = rig.root.worldToLocal(rig.joints.l_arm.getWorldPosition(new THREE.Vector3()))
+    dragJoint(rig, 'l_wrist', rig.root.localToWorld(shoulder.clone().add(new THREE.Vector3(-0.02, 0.01, 0.07))))
+    const words = poseWords(rig, null, 'camera')
+    expect(words).toContain('left arm (on the right side of the picture) bent up, the hand at the shoulder')
+    expect(words).not.toContain('stretched out')
+  })
+
   it('names a raised knee', () => {
     const rig = figure()
     const H = rig.height

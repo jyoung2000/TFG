@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import FileResponse
 
@@ -54,6 +56,7 @@ from state import get_state_service
 from app_handler import AppHandler
 
 router = APIRouter(prefix="/api/film", tags=["film"])
+logger = logging.getLogger(__name__)
 
 
 class SceneResponse(FilmScene):
@@ -68,6 +71,11 @@ class ShotResponse(FilmShot):
 def route_get_film_project(
     project_id: str, handler: AppHandler = Depends(get_state_service)
 ) -> FilmProjectResponse:
+    # Old image shots get today's 3D scene (posed like the photo) when opened.
+    try:
+        handler.reproduce.refresh_storyboard(project_id)
+    except Exception:  # noqa: BLE001 - opening a project never fails over a re-seed
+        logger.warning("Could not refresh the storyboard of %s", project_id, exc_info=True)
     return FilmProjectResponse(project=handler.film.get_project(project_id))
 
 

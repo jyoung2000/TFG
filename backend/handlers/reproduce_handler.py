@@ -151,6 +151,8 @@ class ReproduceHandler(StateHandlerBase):
         # The storyboard + 3D composer (built after this handler in AppHandler).
         self._film: Any = None
         self._scene: Any = None
+        #: Shots per project already found to have no job to re-seed from.
+        self._no_job: dict[str, set[str]] = {}
 
     # ---- storage --------------------------------------------------------------
 
@@ -1034,6 +1036,50 @@ class ReproduceHandler(StateHandlerBase):
         job.storyboard_project_id, job.storyboard_shot_id = project.id, shot.id
         self._save(job)
         return {"project_id": project.id, "scene_id": scene.id, "shot_id": shot.id}
+
+    def refresh_storyboard(self, project_id: str) -> bool:
+        """Re-seed the image shots of `project_id` whose composer scene is
+        missing or is still an older version's untouched seed, from the job
+        that made each one (reading the photo's poses if the job predates
+        them). A scene the user composed is left alone. Asked 2026-10-01
+        (screenshot): a v4-seeded shot opened with a mannequin at rest beside a
+        photo of a woman with her hands on her hips - image shots were only
+        seeded right after a run, never refreshed. Returns whether any changed."""
+        from handlers.scene_handler import stale_seed
+
+        if self._film is None or self._scene is None:
+            return False
+        store = self._film.store
+        if not store.exists(project_id):
+            return False
+        project = store.load(project_id)
+        due = {
+            shot.id
+            for scene in project.scenes
+            for shot in scene.shots
+            if shot.capture_path and (shot.composition is None or stale_seed(shot.composition))
+        } - self._no_job.get(project_id, set())
+        if not due:
+            return False
+        jobs = [job for job in self.list() if job.storyboard_project_id == project_id and job.storyboard_shot_id in due]
+        self._no_job.setdefault(project_id, set()).update(due - {job.storyboard_shot_id for job in jobs})
+        if not jobs:
+            return False
+        for job in jobs:
+            try:
+                self._backfill_poses(job)
+                self._save(job)
+            except Exception:  # noqa: BLE001 - no pose reader: seed without poses
+                logger.warning("Could not read the poses of %s", job.id, exc_info=True)
+        with self.lock:
+            project = store.load(project_id)
+            for job in jobs:
+                found = project.find_shot(job.storyboard_shot_id)
+                if found is not None:
+                    shot = found[1]
+                    self._scene.seed_shot(project, shot, job.spec, shot.duration_seconds)
+            store.save(project)
+        return True
 
     def _backfill_poses(self, job: ReproduceJob) -> None:
         """Jobs analysed before the pose component have no poses: read them
