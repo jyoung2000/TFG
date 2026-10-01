@@ -21,6 +21,8 @@ export class ReferenceUnderlay {
   readonly mesh: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>
   private texture: THREE.Texture | null = null
   private readonly distance = 60
+  /** Width over height of the loaded image (0 = unknown: fill the frame). */
+  imageAspect = 0
 
   constructor(private readonly camera: THREE.PerspectiveCamera) {
     const material = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.55, depthWrite: false, depthTest: false, fog: false, toneMapped: false })
@@ -44,16 +46,21 @@ export class ReferenceUnderlay {
     return this.mesh.material.opacity
   }
 
-  /** Fit the plane to the camera frustum at the underlay distance. */
+  /** Fit the plane to the camera frustum's height at the underlay distance,
+   * at the image's own aspect: the composer camera carries the source's
+   * vertical field of view, so the frame height is what lines up (MEASURED,
+   * r24: a 9:16 portrait stretched across the 16:9 viewfinder). */
   fit(): void {
     const height = 2 * this.distance * Math.tan((this.camera.fov * Math.PI) / 360)
-    this.mesh.scale.set(height * this.camera.aspect, height, 1)
+    this.mesh.scale.set(height * (this.imageAspect > 0 ? this.imageAspect : this.camera.aspect), height, 1)
   }
 
   async load(url: string): Promise<void> {
     const loader = new THREE.TextureLoader()
     const texture = await loader.loadAsync(url)
     texture.colorSpace = THREE.SRGBColorSpace
+    const image = texture.image as { width?: number; height?: number } | undefined
+    this.imageAspect = image?.width && image?.height ? image.width / image.height : 0
     this.texture?.dispose()
     this.texture = texture
     this.mesh.material.map = texture

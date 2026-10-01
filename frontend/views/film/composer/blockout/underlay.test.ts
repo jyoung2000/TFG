@@ -22,3 +22,28 @@ describe('ReferenceUnderlay', () => {
     expect(underlay.mesh.renderOrder).toBeGreaterThan(0)
   })
 })
+
+/* MEASURED (r24): a 9:16 reproduced portrait filled the 16:9 viewfinder,
+ * stretched to twice its width. The solved camera keeps the image's vertical
+ * field of view, so the image is fitted to the frame height at its own aspect. */
+describe('ReferenceUnderlay fit', () => {
+  it('keeps the image aspect: a portrait spans the frame height, not its width', () => {
+    const camera = new THREE.PerspectiveCamera(40, 16 / 9, 0.05, 200)
+    const underlay = new ReferenceUnderlay(camera)
+    underlay.imageAspect = 9 / 16
+    underlay.fit()
+    const frameHeight = 2 * 60 * Math.tan((40 * Math.PI) / 360)
+    expect(underlay.mesh.scale.y).toBeCloseTo(frameHeight, 5)
+    expect(underlay.mesh.scale.x / underlay.mesh.scale.y).toBeCloseTo(9 / 16, 5)
+  })
+
+  it('fits a wider image to the frame height too, its sides cropped by the viewfinder', () => {
+    const camera = new THREE.PerspectiveCamera(40, 16 / 9, 0.05, 200)
+    const underlay = new ReferenceUnderlay(camera)
+    underlay.imageAspect = 2.16 // the reference clip, 1280 x 592
+    underlay.fit()
+    const frameHeight = 2 * 60 * Math.tan((40 * Math.PI) / 360)
+    expect(underlay.mesh.scale.y).toBeCloseTo(frameHeight, 5)
+    expect(underlay.mesh.scale.x / underlay.mesh.scale.y).toBeCloseTo(2.16, 5)
+  })
+})
