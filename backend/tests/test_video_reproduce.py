@@ -143,7 +143,8 @@ class TestReproduceLoop:
         for shot in job["shots"]:
             # Duration snapped to what the model allows (never the raw 2.0 s shot length).
             assert shot["duration_seconds"] in get_allowed_durations("ltx-2-3-fast", "540p", 24)
-            assert shot["start_frame"].startswith("frames/")
+            # The source at the shot's start, not the analysis's mid-shot frame.
+            assert shot["start_frame"] == f"reproduce/start-{shot['shot_id']}.jpg"
             assert shot["prompt"]
             assert len(shot["candidates"]) == 2
             assert shot["best_candidate_id"] and shot["picked_candidate_id"]
@@ -467,3 +468,26 @@ class TestCandidatesAreScoredAgainstTheSameMoment:
         span = shot["end"] - shot["start"]
         expected_end = shot["start"] + (duration - 0.1) * span / duration
         assert any(abs(t - expected_end) < 0.05 for t in from_source), (expected_end, from_source)
+
+
+class TestTheFirstFrameIsTheShotsFirstFrame:
+    """MEASURED (r18, the reference clip's 10 s shot): the same VACE render
+    reached 0.971 SSIM against the source standalone and 0.914 in the app,
+    even on its first frames. At the default depth the analysis keeps one
+    representative frame - mid-shot, 5.06 s in - and the loop pinned it as
+    frame 1, against a guide clip that starts at 0 s. The render now starts
+    from the source frame at the shot's start."""
+
+    def test_a_mid_shot_frame_is_not_used_as_the_first_frame(self, client, video, fake_services, test_state, create_fake_model_files):
+        analysed = _analysed(client, video, test_state, create_fake_model_files)
+        shot = analysed["shots"][0]
+        assert all(f["role"] != "start" for f in shot["frames"]), shot["frames"]
+        probe = fake_services.media_probe
+        probe.extracted.clear()
+        client.post(f"/api/video-reproduce/{analysed['id']}/start", json={"candidates": 1, "rounds": 1, "shot_ids": [shot["id"]]})
+        job = client.get(f"/api/video-reproduce/{analysed['id']}").json()
+        start_frame = job["shots"][0]["start_frame"]
+        assert start_frame not in {f["path"] for f in shot["frames"]}, start_frame
+        assert start_frame.startswith("reproduce/start-"), start_frame
+        first_from_source = min(t for path, t in probe.extracted if Path(path) == Path(video))
+        assert abs(first_from_source - shot["start"]) < 0.06, first_from_source

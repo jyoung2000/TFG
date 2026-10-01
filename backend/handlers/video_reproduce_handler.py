@@ -494,6 +494,28 @@ class VideoReproduceHandler(StateHandlerBase):
         shutil.copyfile(source, captures / name)
         return f"captures/{name}"
 
+    def _first_frame(self, job: VideoReproduceJob, shot: ReproduceShot) -> str:
+        """The frame the render starts from: the source at the shot's start.
+        At the default depth the analysis keeps one representative frame from
+        mid-shot; pinned as frame 1 it contradicted the guide clip and the
+        source from the first frame on (0.914 against 0.971 SSIM)."""
+        name = f"start-{shot.shot_id}.jpg"
+        if shot.start_frame == f"{_FOLDER}/{name}":
+            return shot.start_frame
+        analysis = self._analysis.load(job.analysis_id)
+        analysed = analysis.shot(shot.shot_id)
+        if analysed is not None and any(f.role == "start" and f.path == shot.start_frame for f in analysed.frames):
+            return shot.start_frame
+        if not analysis.source.path:
+            return shot.start_frame
+        try:
+            data = self._probe.extract_jpeg(analysis.source.path, shot.start + 0.02, max_width=1280, quality=92)
+        except OSError as exc:
+            logger.info("No first frame for %s: %s", shot.shot_id, exc)
+            return shot.start_frame
+        (self._folder(job.analysis_id) / name).write_bytes(data)
+        return f"{_FOLDER}/{name}"
+
     def _extract_end_frame(self, job: VideoReproduceJob, shot: ReproduceShot) -> str:
         """The shot's last frame, when the analysis depth only sampled start +
         middle. Analysis-relative, like the frames the analysis wrote."""
@@ -559,6 +581,7 @@ class VideoReproduceHandler(StateHandlerBase):
     ) -> VideoCandidate:
         analysis_dir = self._dir(job.analysis_id)
         capture_rel = ""
+        shot.start_frame = self._first_frame(job, shot)
         if shot.start_frame:
             source = analysis_dir / shot.start_frame
             capture_rel = self._capture(job, source, f"{shot.film_shot_id}-reproduce-start{source.suffix.lower() or '.jpg'}")
