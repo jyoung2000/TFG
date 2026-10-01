@@ -89,6 +89,8 @@ export class ComposerScene {
   private selectedId: string | null = null
   private selectionRing: THREE.Mesh
   private dragging: { id: string; offset: THREE.Vector3 } | null = null
+  /** The rotate gizmo's free-spin handles, set aside while posing. */
+  private freeSpinHandles: { parent: THREE.Object3D; handle: THREE.Object3D }[] = []
   /** Pose mode: a body part being dragged on a camera-facing plane. */
   private limbDrag: { id: string; joint: JointName; plane: THREE.Plane; grab: THREE.Vector3 } | null = null
   private pointerDownAt: { x: number; y: number } | null = null
@@ -428,12 +430,37 @@ export class ComposerScene {
   setGizmoMode(mode: GizmoMode): void {
     const wasPosing = this.gizmoModeValue === 'pose'
     this.gizmoModeValue = mode
+    this.setFreeSpin(mode !== 'pose')
     if (mode !== 'pose') this.tintHover([])
     this.gizmo.setMode(mode === 'pose' ? 'rotate' : mode)
     // A joint turns about its own axes; whole objects move in world space.
     this.gizmo.setSpace(mode === 'pose' ? 'local' : 'world')
     if (mode === 'pose' || wasPosing) this.select(this.selectedId)
     else this.applyGizmoConstraints(this.selected)
+  }
+
+  /**
+   * The rotate gizmo's trackball sphere ('XYZE') and view ring ('E') cover
+   * the joint they sit on: posing, a press on the hand under them spun the
+   * wrist instead of dragging the hand (MEASURED, r32). They are taken out
+   * of the gizmo while posing - its picker and its look; the X/Y/Z rings stay.
+   */
+  private setFreeSpin(on: boolean): void {
+    const inner = (this.gizmo as unknown as { _gizmo?: { picker?: Record<string, THREE.Object3D>; gizmo?: Record<string, THREE.Object3D> } })._gizmo
+    if (!inner?.picker?.rotate || !inner.gizmo?.rotate) return
+    if (!on && !this.freeSpinHandles.length) {
+      for (const group of [inner.picker.rotate, inner.gizmo.rotate]) {
+        for (const handle of [...group.children]) {
+          if (handle.name === 'XYZE' || handle.name === 'E') {
+            this.freeSpinHandles.push({ parent: group, handle })
+            group.remove(handle)
+          }
+        }
+      }
+    } else if (on && this.freeSpinHandles.length) {
+      for (const { parent, handle } of this.freeSpinHandles) parent.add(handle)
+      this.freeSpinHandles = []
+    }
   }
 
   /** The joint pose mode is rotating, if any. */

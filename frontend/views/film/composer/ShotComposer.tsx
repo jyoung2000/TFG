@@ -253,6 +253,9 @@ export function ShotComposer({ projectId, scene, shot, onClose, studio }: ShotCo
   const [libraryPreset, setLibraryPreset] = useState('')
   const [historyTick, setHistoryTick] = useState(0)
   const historyRef = useRef<CompositionHistory<CompositionScene> | null>(null)
+  // An undo/redo restore refreshes the panels but is not an edit: recording
+  // it (a reload can differ by rounding) wiped the redo stack (MEASURED, r32).
+  const restoringRef = useRef(false)
   const [deliverPasses, setDeliverPasses] = useState<Record<DeliverPass, boolean>>({ clean: true, depth: true, normal: false })
   const [deliverSize, setDeliverSize] = useState<'640' | '1280'>('640')
   const [deliverProgress, setDeliverProgress] = useState<{ done: number; total: number } | null>(null)
@@ -426,6 +429,10 @@ export function ShotComposer({ projectId, scene, shot, onClose, studio }: ShotCo
     const composer = sceneRef.current
     const history = historyRef.current
     if (!composer || !history || transformTick === 0) return
+    if (restoringRef.current) {
+      restoringRef.current = false
+      return
+    }
     history.commit(composer.serialize(framing, cameraMove, shot.duration_seconds))
     setHistoryTick(t => t + 1)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -446,6 +453,7 @@ export function ShotComposer({ projectId, scene, shot, onClose, studio }: ShotCo
     syncObjects()
     markDirty()
     setHistoryTick(t => t + 1)
+    restoringRef.current = true
     setTransformTick(t => t + 1)
   }, [syncObjects, markDirty, selectedId, selectedJoint, gizmoMode])
 
