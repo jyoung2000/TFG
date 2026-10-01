@@ -114,6 +114,19 @@ class ReferenceSheetRequest(BaseModel):
     seed: int | None = None
 
 
+class FramesRequest(BaseModel):
+    """Storyboard frames for the whole project: only shots with no picture yet
+    (no frame, capture or finished render) unless `missing_only` is False."""
+
+    missing_only: bool = True
+
+
+class FramesResponse(BaseModel):
+    generated: int
+    skipped: int
+    failed: list[str] = Field(default_factory=list[str])
+
+
 class AngleShot(BaseModel):
     """One camera angle of a multi-angle set: its name, the view in words and,
     from the composer, the posed mannequin seen from that angle (PNG)."""

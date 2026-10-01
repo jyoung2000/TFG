@@ -420,6 +420,9 @@ class FilmShot(BaseModel):
     capture_path: str = ""  # relative path of captured reference PNG ('' = none)
     #: Relative path of the isometric blockout thumbnail written by a 3D storyboard build ('' = none).
     blockout_path: str = ""
+    #: Storyboard frame: a still of what the shot describes ('' = none). Kept
+    #: apart from `capture_path`, which the video model uses as a start frame.
+    frame_path: str = ""
 
     generation: ShotGenerationSettings = Field(default_factory=ShotGenerationSettings)
     versions: list[ShotVersion] = Field(default_factory=list[ShotVersion])

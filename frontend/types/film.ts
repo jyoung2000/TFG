@@ -315,6 +315,8 @@ export interface FilmShot {
   capture_path: string
   /** Isometric blockout thumbnail written by a 3D storyboard build ('' = none). */
   blockout_path: string
+  /** Storyboard frame: a still of what the shot describes ('' = none). */
+  frame_path?: string
   generation: ShotGenerationSettings
   versions: ShotVersion[]
   current_version: number | null

@@ -20,14 +20,15 @@ interface ShotCardProps {
   onDrop: (event: React.DragEvent) => void
 }
 
-/** Thumbnail preference: current version output (video) → capture image → placeholder. */
-function useShotThumb(film: FilmProject, shot: FilmShot) {
+/** Thumbnail preference: current version output (video) → composer capture → storyboard frame → 3D blockout. */
+export function useShotThumb(film: FilmProject, shot: FilmShot) {
   const [thumb, setThumb] = useState<{ kind: 'video' | 'image' | 'blockout'; url: string } | null>(null)
   const [videoFallbackUrl, setVideoFallbackUrl] = useState<string | null>(null)
   const [videoFailed, setVideoFailed] = useState(false)
   const version = shot.current_version != null ? shot.versions.find(v => v.number === shot.current_version) : undefined
   const outputPath = version?.status === 'complete' ? version.output_path : ''
   const capturePath = shot.capture_path
+  const framePath = shot.frame_path ?? ''
   const blockoutPath = shot.blockout_path
 
   useEffect(() => {
@@ -38,6 +39,9 @@ function useShotThumb(film: FilmProject, shot: FilmShot) {
         if (!cancelled) setThumb({ kind: 'video', url })
       } else if (capturePath) {
         const url = await filmMediaUrl(film.id, capturePath)
+        if (!cancelled) setThumb({ kind: 'image', url })
+      } else if (framePath) {
+        const url = await filmMediaUrl(film.id, framePath)
         if (!cancelled) setThumb({ kind: 'image', url })
       } else if (blockoutPath) {
         // A 3D storyboard build leaves an isometric blockout until the shot is captured or rendered.
@@ -50,7 +54,7 @@ function useShotThumb(film: FilmProject, shot: FilmShot) {
     return () => {
       cancelled = true
     }
-  }, [film.id, outputPath, capturePath, blockoutPath])
+  }, [film.id, outputPath, capturePath, framePath, blockoutPath])
 
   // When the video thumbnail errors (404, codec, interrupted download), fall
   // back to the composition capture so the card still shows the shot's

@@ -153,6 +153,17 @@ export const filmApi = {
       { method: 'POST', body: JSON.stringify(data) },
     ),
 
+  /** A storyboard frame: a still of what one shot describes. */
+  shotFrame: (projectId: string, sceneId: string, shotId: string) =>
+    request<FilmShot>(`/api/film/projects/${enc(projectId)}/scenes/${enc(sceneId)}/shots/${enc(shotId)}/frame`, { method: 'POST', body: '{}' }),
+
+  /** Storyboard frames for every shot that has no picture yet. */
+  storyboardFrames: (projectId: string, missingOnly = true) =>
+    request<{ generated: number; skipped: number; failed: string[] }>(`/api/film/projects/${enc(projectId)}/frames`, {
+      method: 'POST',
+      body: JSON.stringify({ missing_only: missingOnly }),
+    }),
+
   /** The asset's images as a LoRA training dataset. */
   assetDataset: (projectId: string, assetId: string) =>
     request<{ id: string; name: string; trigger: string; items: unknown[] }>(

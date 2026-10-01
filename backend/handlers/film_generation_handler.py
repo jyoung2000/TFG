@@ -39,6 +39,8 @@ from film.film_api_types import (
     QueueShotResponse,
     ReplaceProjectRequest,
     AngleSetRequest,
+    FramesRequest,
+    FramesResponse,
     ReferenceSheetRequest,
     ReferenceSheetResponse,
     UpdateAssetRequest,
@@ -224,6 +226,7 @@ class _QueuedShotJob:
 #: the posed mannequin at the angle, the second the person to put there.
 ANGLE_SUBJECT = "the same person as in the reference image, same face, same hair, same body, same outfit"
 ANGLE_SUBJECT_POSED = "the person from the second image, in exactly the pose, camera angle and framing of the figure in the first image, same face, same hair, same body, same outfit"
+FRAME_CAST = "the people from the reference images as the characters, same faces, same hair, same outfits"
 ANGLE_QUALITY = "photo, sharp focus, detailed face, natural skin texture, plain light grey studio background, soft even studio light"
 #: A LoRA dataset wants 15-30 varied images; more angles per call is a queue.
 ANGLE_SET_MAX = 24
@@ -1429,6 +1432,76 @@ class FilmGenerationHandler(StateHandlerBase):
         if asset.seed_lock is None:
             asset = self._film.update_asset(project_id, asset_id, UpdateAssetRequest(seed_lock=seed))
         return ReferenceSheetResponse(asset=asset, prompts=prompts, seed=seed, reference_paths=paths)
+
+    def _cast_references(self, project: FilmProject, shot: FilmShot) -> list[str]:
+        """The first image of each character in the shot (at most two)."""
+        out: list[str] = []
+        for character in shot.characters:
+            asset = project.asset(character.asset_id)
+            if asset is None or not asset.reference_images:
+                continue
+            path = self._identity_image(project.id, asset, "")
+            if path is not None:
+                out.append(str(path))
+        return out[:2]
+
+    def generate_frame(self, project_id: str, scene_id: str, shot_id: str) -> FilmShot:
+        """A storyboard frame for one shot: a still of what it describes, from
+        its prompt, with the cast composed in from their reference images
+        when FLUX.2 is installed (so they stay the same people shot to shot)."""
+        handler = self._image_generation
+        if handler is None:  # pragma: no cover - wired in AppHandler
+            raise HTTPError(500, "Local image generation is not available in this build")
+        project = self._film.get_project(project_id)
+        found = project.find_shot(shot_id)
+        if found is None or found[0].id != scene_id:
+            raise HTTPError(404, f"Shot not found: {shot_id}")
+        scene, shot = found
+        prompt = shot.visual_prompt if shot.prompt_locked and shot.visual_prompt else synthesize_prompt(project, scene, shot)
+        width, height = (576, 1024) if shot.generation.aspect_ratio == "9:16" else (1024, 576)
+        references = self._cast_references(project, shot)
+        model = handler.reference_model() if references else None
+        if references and model:
+            response = handler.generate(
+                GenerateImageRequest(prompt=f"{FRAME_CAST}, {prompt}", width=width, height=height, numImages=1, model=model),
+                reference_images=references, reference_mode="I",
+            )
+        else:
+            response = handler.generate(GenerateImageRequest(prompt=prompt, width=width, height=height, numImages=1))
+        paths = response.image_paths or []
+        if response.status != "complete" or not paths:
+            raise HTTPError(502, "The image model did not return a frame")
+        captures = self._film.store.captures_dir(project_id)
+        captures.mkdir(parents=True, exist_ok=True)
+        (captures / f"{shot.id}-frame.png").write_bytes(Path(paths[0]).read_bytes())
+        with self.lock:
+            project = self._film.store.load(project_id)
+            found = project.find_shot(shot_id)
+            if found is None:
+                raise HTTPError(404, f"Shot not found: {shot_id}")
+            found[1].frame_path = f"captures/{shot.id}-frame.png"
+            found[1].updated_at = now_ms()
+            self._film.store.save(project)
+            return found[1]
+
+    def generate_frames(self, project_id: str, req: FramesRequest) -> FramesResponse:
+        """Storyboard frames for every shot (by default only those with no
+        picture yet: no frame, composer capture or finished render)."""
+        project = self._film.get_project(project_id)
+        generated, skipped = 0, 0
+        failed: list[str] = []
+        for scene in sorted(project.scenes, key=lambda s: s.order):
+            for shot in sorted(scene.shots, key=lambda s: s.order):
+                rendered = any(v.status == "complete" and v.output_path for v in shot.versions)
+                if req.missing_only and (shot.frame_path or shot.capture_path or rendered):
+                    skipped += 1
+                    continue
+                try:
+                    self.generate_frame(project_id, scene.id, shot.id)
+                    generated += 1
+                except HTTPError as exc:
+                    failed.append(f"{shot.title or shot.id}: {exc.detail}")
+        return FramesResponse(generated=generated, skipped=skipped, failed=failed)
 
     def asset_dataset(self, project_id: str, asset_id: str) -> Dataset:
         """The asset's images as a LoRA training dataset (character preset for

@@ -41,6 +41,8 @@ from film.film_api_types import (
     DeliverRequest,
     DeliverResponse,
     AngleSetRequest,
+    FramesRequest,
+    FramesResponse,
     ReferenceSheetRequest,
     ReferenceSheetResponse,
 )
@@ -350,6 +352,27 @@ def route_deliver_shot(
 ) -> DeliverResponse:
     """Deliver package: rendered passes → mp4s in the project, wired as control signals."""
     return handler.film.deliver(project_id, scene_id, shot_id, req, handler.stitcher)
+
+
+@router.post("/projects/{project_id}/scenes/{scene_id}/shots/{shot_id}/frame", response_model=ShotResponse)
+def route_shot_frame(
+    project_id: str,
+    scene_id: str,
+    shot_id: str,
+    handler: AppHandler = Depends(get_state_service),
+) -> FilmShot:
+    """A storyboard frame: a still of what the shot describes."""
+    return handler.film_generation.generate_frame(project_id, scene_id, shot_id)
+
+
+@router.post("/projects/{project_id}/frames", response_model=FramesResponse)
+def route_storyboard_frames(
+    project_id: str,
+    req: FramesRequest,
+    handler: AppHandler = Depends(get_state_service),
+) -> FramesResponse:
+    """Storyboard frames for every shot that has no picture yet."""
+    return handler.film_generation.generate_frames(project_id, req)
 
 
 @router.post(
