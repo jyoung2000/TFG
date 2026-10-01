@@ -277,6 +277,42 @@ export function jointForObject(object: THREE.Object3D | null): JointName | null 
   return null
 }
 
+/**
+ * The meshes of one joint's own section: what hangs from it up to the next
+ * joint (the forearm for the elbow, not the hand below the wrist).
+ */
+export function sectionMeshes(rig: FigureRig, joint: JointName): THREE.Mesh[] {
+  const meshes: THREE.Mesh[] = []
+  for (const child of rig.joints[joint].children) {
+    if (child instanceof THREE.Mesh) meshes.push(child)
+    else if (child.name === '') {
+      // The unnamed segment a limb hangs in; named children are other joints.
+      for (const inner of child.children) if (inner instanceof THREE.Mesh) meshes.push(inner)
+    }
+  }
+  return meshes
+}
+
+/**
+ * Light up just these meshes (or restore them with `null`). A figure's limbs
+ * share one material, so each tinted mesh gets its own copy and gets the
+ * shared one back afterwards.
+ */
+export function tintMeshes(meshes: THREE.Mesh[], hex: string | null): void {
+  for (const mesh of meshes) {
+    const base = (mesh.userData.baseMaterial ??= mesh.material) as THREE.MeshStandardMaterial
+    if (mesh.material !== base) (mesh.material as THREE.Material).dispose()
+    if (hex === null) {
+      mesh.material = base
+      continue
+    }
+    const tinted = base.clone()
+    tinted.emissive = new THREE.Color(hex)
+    tinted.emissiveIntensity = 0.6
+    mesh.material = tinted
+  }
+}
+
 const toRad = (deg: number) => (deg * Math.PI) / 180
 const toDeg = (rad: number) => (rad * 180) / Math.PI
 

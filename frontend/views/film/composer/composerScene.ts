@@ -28,7 +28,7 @@ import type {
 } from '../../../types/film'
 import { buildCameraMove, sampleCameraTrack } from './cameraMotion'
 import { pickAssetColor } from './assetColors'
-import { applyPose, applyWalkCycle, buildFigure, jointForObject, readPose, type FigureRig, type JointName } from './figure'
+import { applyPose, applyWalkCycle, buildFigure, jointForObject, readPose, sectionMeshes, tintMeshes, type FigureRig, type JointName } from './figure'
 import { travelAlong } from './keyframes'
 import { ReferenceUnderlay } from './blockout/underlay'
 import { keyframesFromPreset, presetById } from './blockout/moves'
@@ -36,6 +36,9 @@ import type { DeliverPass } from './blockout/deliver'
 import { applySolvedShot, getCharacterAnchors, solveShot } from './shotSolver'
 
 export const SHOT_CAMERA_ID = 'shot-camera'
+/** Pose mode tints: the section under the cursor, and the one being edited. */
+const HOVER_TINT = '#fde047'
+const EDIT_TINT = '#a78bfa'
 
 /** `pose`: click a figure's limb to rotate that joint with the gizmo. */
 export type GizmoMode = 'translate' | 'rotate' | 'scale' | 'pose'
@@ -89,6 +92,9 @@ export class ComposerScene {
   private gizmoModeValue: GizmoMode = 'translate'
   /** The joint the gizmo rotates in pose mode. */
   private selectedJoint: JointName | null = null
+  /** Tinted sections: the one under the cursor and the one being edited. */
+  private hoverSection: THREE.Mesh[] = []
+  private editSection: THREE.Mesh[] = []
 
   /** Camera keyframes for motion preview / hand-authored camera animation. */
   cameraKeyframes: CompositionKeyframe[] = []
@@ -337,12 +343,35 @@ export class ComposerScene {
     return false
   }
 
+  private tintEdit(entity: ComposerEntity | null | undefined, joint: JointName | null): void {
+    tintMeshes(this.editSection, null)
+    this.editSection = entity?.rig && joint && this.gizmoModeValue === 'pose' ? sectionMeshes(entity.rig, joint) : []
+    tintMeshes(this.editSection, EDIT_TINT)
+  }
+
+  private setTintsShown(shown: boolean): void {
+    tintMeshes([...this.hoverSection, ...this.editSection], null)
+    if (!shown) return
+    tintMeshes(this.hoverSection, HOVER_TINT)
+    tintMeshes(this.editSection, EDIT_TINT)
+  }
+
+  private tintHover(meshes: THREE.Mesh[]): void {
+    const keep = new Set(this.editSection)
+    tintMeshes(this.hoverSection.filter(m => !keep.has(m)), null)
+    this.hoverSection = meshes.filter(m => !keep.has(m))
+    tintMeshes(this.hoverSection, HOVER_TINT)
+    this.canvas.style.cursor = this.hoverSection.length ? 'pointer' : ''
+  }
+
   /** Pose mode: rotate one joint of a figure with the gizmo. */
   selectJoint(id: string, joint: JointName): void {
     const entity = this.entities.get(id)
     if (!entity?.rig) return
     this.selectedId = id
     this.selectedJoint = joint
+    this.tintHover([])
+    this.tintEdit(entity, joint)
     if (entity.data.locked) this.gizmo.detach()
     else this.gizmo.attach(entity.rig.joints[joint])
     this.applyGizmoConstraints(entity)
@@ -353,6 +382,7 @@ export class ComposerScene {
   select(id: string | null): void {
     this.selectedId = id
     const posing = this.gizmoModeValue === 'pose' ? this.entities.get(id ?? '') : undefined
+    this.tintEdit(posing, posing?.rig ? this.selectedJoint : null)
     if (posing?.rig && this.selectedJoint && !posing.data.locked) {
       this.gizmo.attach(posing.rig.joints[this.selectedJoint])
       this.applyGizmoConstraints(posing)
@@ -391,6 +421,7 @@ export class ComposerScene {
   setGizmoMode(mode: GizmoMode): void {
     const wasPosing = this.gizmoModeValue === 'pose'
     this.gizmoModeValue = mode
+    if (mode !== 'pose') this.tintHover([])
     this.gizmo.setMode(mode === 'pose' ? 'rotate' : mode)
     // A joint turns about its own axes; whole objects move in world space.
     this.gizmo.setSpace(mode === 'pose' ? 'local' : 'world')
@@ -401,6 +432,11 @@ export class ComposerScene {
   /** The joint pose mode is rotating, if any. */
   get poseJoint(): JointName | null {
     return this.gizmoModeValue === 'pose' ? this.selectedJoint : null
+  }
+
+  /** Put one joint back at rest. */
+  resetJoint(id: string, joint: JointName): void {
+    this.setJointRotation(id, joint, [0, 0, 0])
   }
 
   setPoseJoint(joint: JointName): void {
@@ -497,6 +533,12 @@ export class ComposerScene {
   }
 
   private handlePointerMove = (event: PointerEvent) => {
+    if (!this.dragging && this.gizmoModeValue === 'pose' && !this.gizmo.dragging) {
+      // Pose mode: light up the section a click would pick.
+      const hit = this.gizmo.axis ? null : this.hitAtPointer(event)
+      const joint = hit?.entity.rig ? jointForObject(hit.object) : null
+      this.tintHover(hit?.entity.rig && joint ? sectionMeshes(hit.entity.rig, joint) : [])
+    }
     if (!this.dragging) return
     const entity = this.entities.get(this.dragging.id)
     if (!entity) return
@@ -829,6 +871,7 @@ export class ComposerScene {
     const previousPixelRatio = this.renderer.getPixelRatio()
     const gizmoHelper = this.gizmo.getHelper()
     const visible = { helper: this.cameraHelper.visible, ring: this.selectionRing.visible, gizmo: gizmoHelper.visible, underlay: this.underlay.visible }
+    this.setTintsShown(false) // editing tints never reach a pass
     this.cameraHelper.visible = false
     this.selectionRing.visible = false
     gizmoHelper.visible = false
@@ -875,6 +918,7 @@ export class ComposerScene {
     this.selectionRing.visible = visible.ring
     gizmoHelper.visible = visible.gizmo
     this.underlay.mesh.visible = visible.underlay
+    this.setTintsShown(true)
     return dataUrl.replace(/^data:image\/png;base64,/, '')
   }
 
@@ -965,6 +1009,8 @@ export class ComposerScene {
 
   /** Restore a saved composition (objects + camera + keyframes). */
   hydrate(composition: CompositionScene): void {
+    this.hoverSection = []
+    this.editSection = []
     for (const id of [...this.entities.keys()]) this.removeObject(id)
     for (const object of composition.objects) this.addObject(object)
     if (composition.camera) {
@@ -994,6 +1040,7 @@ export class ComposerScene {
     const gizmoHelper = this.gizmo.getHelper()
     const gizmoWasVisible = gizmoHelper.visible
     const underlayWasVisible = this.underlay.visible
+    this.setTintsShown(false) // nor the captured reference frame
     this.cameraHelper.visible = false
     this.selectionRing.visible = false
     gizmoHelper.visible = false
@@ -1007,6 +1054,7 @@ export class ComposerScene {
     this.renderer.render(this.scene, this.shotCamera)
     const dataUrl = this.canvas.toDataURL('image/png')
     this.underlay.mesh.visible = underlayWasVisible
+    this.setTintsShown(true)
     this.renderer.setPixelRatio(previousPixelRatio)
     this.renderer.setSize(previousSize.x, previousSize.y, false)
     this.cameraHelper.visible = helperWasVisible

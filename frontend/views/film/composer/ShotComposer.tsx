@@ -411,12 +411,19 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
     const composer = sceneRef.current
     if (!composer || !snapshot) return
     composer.hydrate(snapshot)
+    // Undo/redo keep your place: the same object (and joint, posing) stays selected.
+    if (selectedId && snapshot.objects.some(o => o.id === selectedId)) {
+      const isFigure = snapshot.objects.some(o => o.id === selectedId && o.type === 'figure')
+      if (gizmoMode === 'pose' && isFigure) composer.selectJoint(selectedId, selectedJoint as JointName)
+      else composer.select(selectedId)
+    }
     setCameraMove(snapshot.camera_move)
     setFraming(snapshot.framing)
     syncObjects()
     markDirty()
     setHistoryTick(t => t + 1)
-  }, [syncObjects, markDirty])
+    setTransformTick(t => t + 1)
+  }, [syncObjects, markDirty, selectedId, selectedJoint, gizmoMode])
 
   const undo = useCallback(() => restoreSnapshot(historyRef.current?.undo() ?? null), [restoreSnapshot])
   const redo = useCallback(() => restoreSnapshot(historyRef.current?.redo() ?? null), [restoreSnapshot])
@@ -1063,7 +1070,7 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
               <div className="flex items-center gap-2">
                 <NumberField label="Yaw" value={toDeg(selectedTransform.rotation[1])} step={5} onChange={yawDeg => updateSelectedTransform({ yawDeg })} disabled={selectedObject.locked} />
                 <NumberField label="Sc" value={selectedTransform.scale[1]} step={0.05} min={0.05} max={20} onChange={scale => updateSelectedTransform({ scale })} disabled={selectedObject.locked} />
-                <div className="flex items-center gap-0.5">
+                <div className="flex items-center gap-0.5" data-testid="yaw-steps">
                   {[-45, -15, 15, 45].map(deg => (
                     <button
                       key={deg}
@@ -1076,6 +1083,31 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
                   ))}
                 </div>
               </div>
+              {gizmoMode === 'pose' && selectedObject.type === 'figure' && (
+                <div className="border-t border-zinc-700 pt-1.5 space-y-1" data-testid="joint-panel">
+                  <div className="flex items-center gap-2 text-[11px]">
+                    <PersonStanding className="h-3.5 w-3.5 text-violet-300" />
+                    <span className="font-medium text-violet-200" data-testid="joint-name">{JOINT_LABELS[selectedJoint as JointName] ?? selectedJoint}</span>
+                    <button
+                      onClick={() => {
+                        if (!selectedId) return
+                        sceneRef.current?.resetJoint(selectedId, selectedJoint as JointName)
+                        setJointEuler([0, 0, 0])
+                      }}
+                      disabled={selectedObject.locked}
+                      className="ml-auto px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 text-[10px] text-zinc-200"
+                    >
+                      Reset joint
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {(['X', 'Y', 'Z'] as const).map((axis, index) => (
+                      <NumberField key={axis} label={`${axis}°`} value={jointEuler[index as 0 | 1 | 2]} step={5} min={-180} max={180} onChange={value => updateJoint(index as 0 | 1 | 2, value)} disabled={selectedObject.locked} />
+                    ))}
+                  </div>
+                  <p className="text-[10px] text-zinc-500">Click any body part to edit it · drag the rings · Ctrl+Z / Ctrl+Y</p>
+                </div>
+              )}
             </div>
           )}
           {cameraSelected && (
