@@ -1,17 +1,19 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Loader2, Play, RefreshCw, Scissors, Square, Star, X } from 'lucide-react'
+import { Clapperboard, Copy, Loader2, Play, RefreshCw, Scissors, Square, Star, X } from 'lucide-react'
 import { analysisFrameUrl } from '../../lib/video-analysis-api'
 import { videoReproduceApi, videoReproduceMediaUrl } from '../../lib/video-reproduce-api'
 import { METRIC_LABEL } from '../../types/reproduce'
 import type { VideoAnalysis } from '../../types/video-analysis'
 import { chosenCandidate, type ReproduceShot, type VideoCandidate, type VideoReproduceJob } from '../../types/video-reproduce'
+import { MediaBadge, modelName, strategyName } from './OriginalBadge'
 
 /**
- * Video Reproduce v2: one strip per analysed shot — the reference frame next
- * to the chosen candidate — with per-shot scores, pick / redo, and Stitch.
- * Every clip plays through the authenticated media route.
+ * Video Reproduce v2: one strip per analysed shot — the original next to the
+ * chosen reproduction, each labelled, with the model / prompt / settings that
+ * made the take beside it — plus pick / redo, Stitch, and the storyboard the
+ * run builds as it goes. Every clip plays through the authenticated media route.
  */
-export function VideoReproducePanel({ analysis, job, onJob, onClose, onBuild3D }: { analysis: VideoAnalysis; job: VideoReproduceJob; onJob: (job: VideoReproduceJob) => void; onClose: () => void; onBuild3D?: () => void }) {
+export function VideoReproducePanel({ analysis, job, onJob, onClose, onOpenStoryboard }: { analysis: VideoAnalysis; job: VideoReproduceJob; onJob: (job: VideoReproduceJob) => void; onClose: () => void; onOpenStoryboard?: (projectId: string) => void }) {
   const [busy, setBusy] = useState('')
   const [error, setError] = useState('')
   const running = job.status === 'running'
@@ -47,7 +49,7 @@ export function VideoReproducePanel({ analysis, job, onJob, onClose, onBuild3D }
           ) : (
             <button onClick={() => void run('Stitching', () => videoReproduceApi.stitch(analysis.id))} disabled={!!busy || rendered === 0} className="btn-chip">{busy === 'Stitching' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Scissors className="h-3.5 w-3.5" />} Stitch picks</button>
           )}
-          {onBuild3D && !running && <button onClick={onBuild3D} className="btn-chip" title="Storyboard whose shots open the composer pre-seeded from this analysis">Build 3D storyboard</button>}
+          {onOpenStoryboard && job.project_id && <button onClick={() => onOpenStoryboard(job.project_id)} className="btn-chip" title="The storyboard this run builds: one shot per original shot, its 3D composition, cast and the chosen take" data-testid="video-reproduce-open-storyboard"><Clapperboard className="h-3.5 w-3.5" /> Open 3D storyboard</button>}
           <button onClick={onClose} aria-label="Close video reproduce" className="p-1 rounded hover:bg-zinc-800 text-zinc-400 hover:text-white"><X className="h-4 w-4" /></button>
         </span>
       </div>
@@ -64,8 +66,17 @@ export function VideoReproducePanel({ analysis, job, onJob, onClose, onBuild3D }
 
       {job.stitched_path && (
         <div className="space-y-1" data-testid="video-reproduce-stitched">
-          <h3 className="text-[10px] uppercase tracking-wide text-zinc-500 font-semibold">Stitched result</h3>
-          <div className="max-w-xl aspect-video rounded overflow-hidden bg-black"><MediaVideo analysisId={analysis.id} path={job.stitched_path} label="Stitched result" /></div>
+          <h3 className="text-[10px] uppercase tracking-wide text-zinc-500 font-semibold">Whole video · original vs reproduction</h3>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+            <figure className="space-y-1">
+              <div className="relative aspect-video rounded overflow-hidden bg-black ring-2 ring-teal-500/70"><MediaBadge kind="original" /><MediaVideo analysisId={analysis.id} path="source" label="Original video" /></div>
+              <figcaption className="text-[10px] text-teal-300">{analysis.source.file_name}</figcaption>
+            </figure>
+            <figure className="space-y-1">
+              <div className="relative aspect-video rounded overflow-hidden bg-black ring-2 ring-violet-500/70"><MediaBadge kind="reproduction" /><MediaVideo analysisId={analysis.id} path={job.stitched_path} label="Stitched reproduction" /></div>
+              <figcaption className="text-[10px] text-violet-300">The chosen take of every shot, stitched</figcaption>
+            </figure>
+          </div>
         </div>
       )}
     </section>
@@ -75,26 +86,36 @@ export function VideoReproducePanel({ analysis, job, onJob, onClose, onBuild3D }
 function ShotRow({ analysis, job, shot, busy, onPick, onRedo }: { analysis: VideoAnalysis; job: VideoReproduceJob; shot: ReproduceShot; busy: boolean; onPick: (c: VideoCandidate) => void; onRedo: () => void }) {
   const chosen = chosenCandidate(shot)
   const source = analysis.shots.find(s => s.id === shot.shot_id)
-  const reference = shot.start_frame || source?.frames[0]?.path || ''
+  const frame = source?.frames[0]?.path || ''
   const [refUrl, setRefUrl] = useState('')
   useEffect(() => {
     let active = true
-    if (!reference) return
-    analysisFrameUrl(analysis.id, reference).then(u => { if (active) setRefUrl(u) }).catch(() => undefined)
+    if (!frame || shot.reference_clip) return
+    analysisFrameUrl(analysis.id, frame).then(u => { if (active) setRefUrl(u) }).catch(() => undefined)
     return () => { active = false }
-  }, [analysis.id, reference])
+  }, [analysis.id, frame, shot.reference_clip])
   return (
-    <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-2 flex gap-3" data-testid="video-reproduce-shot">
-      <div className="w-40 shrink-0 space-y-1">
-        <div className="aspect-video rounded overflow-hidden bg-black">{refUrl && <img src={refUrl} alt={`Shot ${shot.index + 1} reference frame`} className="w-full h-full object-cover" />}</div>
-        <p className="text-[10px] text-zinc-400">Shot {shot.index + 1} · {shot.start.toFixed(1)}–{shot.end.toFixed(1)}s → {shot.duration_seconds}s</p>
-        <p className="text-[10px] text-zinc-600 line-clamp-2" title={shot.prompt}>{shot.prompt_source} prompt</p>
-      </div>
-      <div className="w-56 shrink-0 space-y-1">
-        <div className="aspect-video rounded overflow-hidden bg-black">
-          {chosen?.status === 'complete' && chosen.path ? <MediaVideo analysisId={analysis.id} path={chosen.path} label={`Shot ${shot.index + 1} candidate`} /> : <div className="w-full h-full flex items-center justify-center text-[10px] text-zinc-600">{shot.candidates.length ? 'rendering…' : 'no candidate yet'}</div>}
-        </div>
-        {chosen && <Scores candidate={chosen} />}
+    <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-2 space-y-2" data-testid="video-reproduce-shot">
+      <p className="text-[11px] text-zinc-300 font-semibold">Shot {shot.index + 1} <span className="font-normal text-zinc-500">· original {shot.start.toFixed(2)}–{shot.end.toFixed(2)}s → rendered {shot.duration_seconds}s</span></p>
+      <div className="flex gap-3 flex-wrap">
+        <figure className="w-64 shrink-0 space-y-1" data-testid="video-reproduce-original">
+          <div className="relative aspect-video rounded overflow-hidden bg-black ring-2 ring-teal-500/70">
+            <MediaBadge kind="original" />
+            {shot.reference_clip
+              ? <MediaVideo analysisId={analysis.id} path={shot.reference_clip} label={`Shot ${shot.index + 1} original`} />
+              : refUrl && <img src={refUrl} alt={`Shot ${shot.index + 1} original frame`} className="w-full h-full object-cover" />}
+          </div>
+          <figcaption className="text-[10px] text-teal-300">Your video · {shot.reference_clip ? 'this shot' : 'a frame of this shot'}</figcaption>
+        </figure>
+        <figure className="w-64 shrink-0 space-y-1" data-testid="video-reproduce-result">
+          <div className="relative aspect-video rounded overflow-hidden bg-black ring-2 ring-violet-500/70">
+            <MediaBadge kind="reproduction" />
+            {chosen?.status === 'complete' && chosen.path ? <MediaVideo analysisId={analysis.id} path={chosen.path} label={`Shot ${shot.index + 1} reproduction`} /> : <div className="w-full h-full flex items-center justify-center text-[10px] text-zinc-600">{shot.candidates.length ? 'rendering…' : 'no candidate yet'}</div>}
+          </div>
+          <figcaption className="text-[10px] text-violet-300">{chosen ? `${chosen.id === shot.picked_candidate_id ? 'Chosen take' : 'Latest take'} · ${chosen.status === 'complete' ? `${(chosen.scores.composite * 100).toFixed(1)}% match` : chosen.status}` : 'Reproduction'}</figcaption>
+          {chosen && <Scores candidate={chosen} />}
+        </figure>
+        <div className="flex-1 min-w-[16rem]">{chosen ? <MadeWith candidate={chosen} /> : <p className="text-[10px] text-zinc-600">The model, prompt and settings of the take appear here.</p>}</div>
       </div>
       <div className="flex-1 min-w-0 space-y-1">
         <div className="flex items-center gap-1 text-[10px] text-zinc-500">
@@ -108,7 +129,7 @@ function ShotRow({ analysis, job, shot, busy, onPick, onRedo }: { analysis: Vide
               <Thumb analysisId={analysis.id} candidate={candidate} />
               <div className="flex items-center gap-1 text-[10px] text-zinc-400 mt-0.5">
                 <span className="font-semibold text-zinc-200">{candidate.status === 'complete' ? `${(candidate.scores.composite * 100).toFixed(0)}%` : candidate.status}</span>
-                <span title={candidate.strategy ? `${candidate.strategy}${candidate.control_strength != null ? ` @ ${candidate.control_strength.toFixed(2)}` : ''}` : undefined}>r{candidate.round}{candidate.seed !== null ? ` · ${candidate.seed}` : ''}</span>
+                <span title={`${modelName(candidate.model)}${candidate.strategy ? ` · ${strategyName(candidate.strategy)}` : ''}${candidate.control_strength != null ? ` @ ${candidate.control_strength.toFixed(2)}` : ''}`}>r{candidate.round}{candidate.seed !== null ? ` · ${candidate.seed}` : ''}</span>
                 {candidate.status === 'complete' && (
                   <button onClick={() => onPick(candidate)} disabled={busy} aria-label={`Pick ${candidate.id}`} aria-pressed={candidate.id === shot.picked_candidate_id} className={`ml-auto p-0.5 rounded ${candidate.id === shot.picked_candidate_id ? 'text-amber-300' : 'hover:text-white'}`}><Star className="h-3 w-3" /></button>
                 )}
@@ -119,6 +140,24 @@ function ShotRow({ analysis, job, shot, busy, onPick, onRedo }: { analysis: Vide
         </ul>
       </div>
     </div>
+  )
+}
+
+/** What made a take: the model that rendered it, how it was guided, the seed and the prompts. */
+function MadeWith({ candidate }: { candidate: VideoCandidate }) {
+  const [copied, setCopied] = useState(false)
+  const copy = async () => {
+    try { await navigator.clipboard.writeText(candidate.prompt); setCopied(true) } catch { /* clipboard unavailable */ }
+  }
+  return (
+    <dl className="rounded border border-zinc-800 bg-zinc-900/60 p-2 text-[10px] space-y-1" data-testid="video-reproduce-made-with" aria-label="How this take was made">
+      <div className="flex gap-2"><dt className="w-14 shrink-0 text-zinc-500">Model</dt><dd className="text-zinc-100 font-semibold" data-testid="made-with-model">{modelName(candidate.model)}</dd></div>
+      {candidate.strategy && <div className="flex gap-2"><dt className="w-14 shrink-0 text-zinc-500">Guided</dt><dd className="text-zinc-300">{strategyName(candidate.strategy)}{candidate.control_strength != null ? ` · strength ${candidate.control_strength.toFixed(2)}` : ''}</dd></div>}
+      <div className="flex gap-2"><dt className="w-14 shrink-0 text-zinc-500">Take</dt><dd className="text-zinc-300">round {candidate.round} · seed {candidate.seed ?? 'random'} · {candidate.duration_seconds}s</dd></div>
+      <div className="flex gap-2"><dt className="w-14 shrink-0 text-zinc-500">Prompt</dt><dd className="text-zinc-300 whitespace-pre-wrap break-words max-h-28 overflow-y-auto" data-testid="made-with-prompt">{candidate.prompt || '—'}</dd></div>
+      {candidate.negative_prompt && <div className="flex gap-2"><dt className="w-14 shrink-0 text-zinc-500">Negative</dt><dd className="text-zinc-400 break-words">{candidate.negative_prompt}</dd></div>}
+      <button onClick={() => void copy()} className="btn-chip"><Copy className="h-3 w-3" /> {copied ? 'Copied' : 'Copy prompt'}</button>
+    </dl>
   )
 }
 

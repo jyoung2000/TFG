@@ -192,6 +192,14 @@ export function AnalyzeVideo() {
       }
     }, [current, openProject, refresh, setCurrentProjectId])
 
+    // The storyboard a reproduce run builds as it goes (one shot per original
+    // shot, 3D composition, cast, chosen take).
+    const openStoryboard = useCallback(async (projectId: string) => {
+      setCurrentProjectId(projectId)
+      await refresh()
+      openProject(projectId, 'storyboard')
+    }, [openProject, refresh, setCurrentProjectId])
+
     const recreateVideo = useCallback(async () => {
       if (!current) return
       setRecreating(true)
@@ -384,7 +392,7 @@ export function AnalyzeVideo() {
                         )}
             
                         {reproduce && (
-                          <VideoReproducePanel analysis={current} job={reproduce} onJob={setReproduce} onClose={() => setReproduce(null)} onBuild3D={() => void buildStoryboard3d()} />
+                          <VideoReproducePanel analysis={current} job={reproduce} onJob={setReproduce} onClose={() => setReproduce(null)} onOpenStoryboard={id => void openStoryboard(id)} />
                         )}
                       </>
                     )}

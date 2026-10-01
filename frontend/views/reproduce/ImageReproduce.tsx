@@ -284,7 +284,7 @@ export function ImageReproduce() {
                     <button onClick={() => void copyPrompt()} className="btn-chip"><Copy className="h-3.5 w-3.5" /> Copy</button>
                     <button onClick={() => sendToQuick(best ?? undefined)} className="btn-chip"><Send className="h-3.5 w-3.5" /> Send to Quick video</button>
                     <button onClick={() => void sendToCreate(best ?? undefined)} className="btn-chip"><Send className="h-3.5 w-3.5" /> Send to Create</button>
-                    <button onClick={() => void sendToComposer()} disabled={!!busy || busyJob} className="btn-chip" title="A storyboard shot with this image, its prompt, cast assets and a 3D composition"><Send className="h-3.5 w-3.5" /> Send to Composer</button>
+                    <button onClick={() => void sendToComposer()} disabled={!!busy || busyJob} className="btn-chip" title="The storyboard shot every finished run makes: the chosen image, its prompt, cast assets and a 3D composition" data-testid="open-composition"><Send className="h-3.5 w-3.5" /> {job.storyboard_project_id ? 'Open composition' : 'Send to Composer'}</button>
                     <button onClick={() => void sendToTrain()} disabled={!!busy || busyJob} className="btn-chip" title="A training dataset from this job's reference and candidates"><Send className="h-3.5 w-3.5" /> Send to Train</button>
                   </div>
                   <div className="grid grid-cols-4 gap-2 text-[10px] text-zinc-500">
