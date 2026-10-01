@@ -679,6 +679,24 @@ class VideoReproduceHandler(StateHandlerBase):
 
     # ---- scoring -------------------------------------------------------------------
 
+    def _reference_frame_at(self, job: VideoReproduceJob, shot: ReproduceShot, analysis: VideoAnalysis, at: float, duration: float) -> Path | None:
+        """The source frame at the same relative moment of the shot as a
+        candidate's sample at `at` (the render may be snapped to a slightly
+        different length), extracted once and cached."""
+        source = analysis.source.path
+        if not source:
+            return None
+        span = max(0.05, (shot.end - shot.start) or duration)
+        moment = shot.start + at * span / max(duration, 0.05)
+        cached = self._folder(job.analysis_id) / f"ref-{shot.shot_id}-{int(round(moment * 1000))}.jpg"
+        if not cached.is_file():
+            try:
+                cached.write_bytes(self._probe.extract_jpeg(source, moment))
+            except OSError as exc:
+                logger.info("No source frame at %.2fs: %s", moment, exc)
+                return None
+        return cached
+
     def _score(self, job: VideoReproduceJob, shot: ReproduceShot, candidate: VideoCandidate) -> None:
         analysis = self._analysis.load(job.analysis_id)
         analysed = analysis.shot(shot.shot_id)
@@ -690,7 +708,10 @@ class VideoReproduceHandler(StateHandlerBase):
         duration = max(0.2, candidate.duration_seconds or shot.duration_seconds)
         breakdowns: list[ScoreBreakdown] = []
         for role, at in zip(_FRAME_ROLES, (0.05, duration / 2, max(0.05, duration - 0.1))):
-            reference = self._reference_frame(analysis_dir, analysed, role)
+            # The source at the same moment of the shot; the analysis's stored
+            # frame for the role only as a fallback (at the default depth it has
+            # no "end" frame and fell back to the first one).
+            reference = self._reference_frame_at(job, shot, analysis, at, duration) or self._reference_frame(analysis_dir, analysed, role)
             try:
                 data = self._probe.extract_jpeg(str(clip), at)
             except OSError as exc:

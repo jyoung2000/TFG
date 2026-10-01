@@ -120,7 +120,8 @@ class TestVaceTakesTheFramesAndTheGuide:
         assert params["frames_positions"] == f"1 {params['video_length']}"
         assert "FI" in params["video_prompt_type"]
         assert params["resolution"] == "832x480"
-        assert "sliding_window_size" not in params
+        # One window covers the whole clip (default windows truncated 161 -> 129 frames).
+        assert params["sliding_window_size"] == params["video_length"]
 
     def test_a_guide_video_renders_raw_with_vace(self, client, test_state, fake_services, tmp_path):
         self._enable(test_state, fake_services)

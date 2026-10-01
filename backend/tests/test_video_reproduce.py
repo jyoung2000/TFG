@@ -444,3 +444,26 @@ class TestWithVaceTheLoopStartsAtTheGuidedRung:
         first = job["shots"][0]["candidates"][0]
         assert first["strategy"] == "reference_video", first
         assert first["control_strength"] == 1.0
+
+
+class TestCandidatesAreScoredAgainstTheSameMoment:
+    """MEASURED (r17, the reference clip's 10 s shot): a VACE candidate scored
+    0.862 with motion 0.90 but CLIP 0.875 / DINO 0.78 - while the same mode
+    scored 0.971 on a 3 s segment. The analysis at the default depth keeps
+    only start + middle frames, and `_reference_frame` fell back to the first
+    frame for the "end" sample: a candidate's 9.9 s frame was judged against
+    the reference at 0.25 s. Each sample is now compared with the source at
+    the same moment of the shot."""
+
+    def test_the_end_sample_is_compared_with_the_source_at_the_end(self, client, video, fake_services, test_state, create_fake_model_files):
+        analysed = _analysed(client, video, test_state, create_fake_model_files)
+        shot = analysed["shots"][0]
+        probe = fake_services.media_probe
+        probe.extracted.clear()
+        client.post(f"/api/video-reproduce/{analysed['id']}/start", json={"candidates": 1, "rounds": 1, "shot_ids": [shot["id"]]})
+        job = client.get(f"/api/video-reproduce/{analysed['id']}").json()
+        duration = job["shots"][0]["duration_seconds"]
+        from_source = sorted(t for path, t in probe.extracted if Path(path) == Path(video))
+        span = shot["end"] - shot["start"]
+        expected_end = shot["start"] + (duration - 0.1) * span / duration
+        assert any(abs(t - expected_end) < 0.05 for t in from_source), (expected_end, from_source)

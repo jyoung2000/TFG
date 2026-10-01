@@ -503,6 +503,10 @@ class WanGPBridge:
             settings["frames_positions"] = " ".join(positions)
         settings["video_prompt_type"] = letters
         settings["resolution"] = "480x832" if aspect_ratio == "9:16" else "832x480"
+        # One window for the whole clip: WanGP's default windows stopped a
+        # 161-frame (10 s) render at 129 frames (MEASURED, r17), so the take
+        # covered 8 s of a 10 s shot. A 1.3B model renders 161 frames at once.
+        settings["sliding_window_size"] = video_length
 
     def _video_steps(self, model_type: str, requested: int) -> int:
         """An accelerated model (FastWan: 3 steps) renders with its own step
