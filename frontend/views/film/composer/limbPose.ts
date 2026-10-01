@@ -14,6 +14,7 @@
 
 import * as THREE from 'three'
 import type { FigureRig, JointName } from './figure'
+import { selfContacts } from './anatomy'
 
 const DOWN = new THREE.Vector3(0, -1, 0)
 const UP = new THREE.Vector3(0, 1, 0)
@@ -78,9 +79,10 @@ export function bendHinge(root: THREE.Object3D, mid: THREE.Object3D, direction: 
  * Two-bone IK: rotate `root` and `mid` so `end` reaches `target` (or points
  * at it from as far as the limb reaches). The middle joint keeps bending the
  * way it already bends; a straight limb bends toward `pole` (world direction).
- * With `flex` the middle joint is a hinge (see `bendHinge`).
+ * With `flex` the middle joint is a hinge (see `bendHinge`). `turn` swings
+ * the bend that many radians round the reach (the elbow rises out, or drops).
  */
-export function solveTwoBone(root: THREE.Object3D, mid: THREE.Object3D, end: THREE.Object3D, target: THREE.Vector3, pole: THREE.Vector3, flex?: THREE.Vector3): void {
+export function solveTwoBone(root: THREE.Object3D, mid: THREE.Object3D, end: THREE.Object3D, target: THREE.Vector3, pole: THREE.Vector3, flex?: THREE.Vector3, turn = 0): void {
   const shoulder = worldPosition(root)
   const elbow = worldPosition(mid)
   const wrist = worldPosition(end)
@@ -102,6 +104,7 @@ export function solveTwoBone(root: THREE.Object3D, mid: THREE.Object3D, end: THR
     // The bend direction lies along the reach: fall back to a sideways one.
     bend.copy(new THREE.Vector3(1, 0, 0)).sub(dir.clone().multiplyScalar(dir.x))
   }
+  if (turn) bend.applyAxisAngle(dir, turn)
   bend.normalize()
   const along = (upper * upper - lower * lower + reach * reach) / (2 * reach)
   const out = Math.sqrt(Math.max(0, upper * upper - along * along))
@@ -121,12 +124,12 @@ export function dragJoint(rig: FigureRig, joint: JointName, target: THREE.Vector
     // Elbows point down, back and a little out, so a raised hand comes up in
     // front and a hand brought to the chest keeps the forearm off the body.
     const outward = new THREE.Vector3(side === 'l' ? 1 : -1, 0, 0).applyQuaternion(rig.root.getWorldQuaternion(new THREE.Quaternion()))
-    const pole = new THREE.Vector3(0, -1, 0).add(forward.clone().multiplyScalar(-0.35)).add(outward.multiplyScalar(0.5))
-    solveTwoBone(j[`${side}_arm`], j[`${side}_elbow`], j[joint], target, pole, ELBOW_FLEX)
+    const pole = new THREE.Vector3(0, -1, 0).add(forward.clone().multiplyScalar(-0.5)).add(outward.multiplyScalar(0.15))
+    reachClear(rig, j[`${side}_arm`], j[`${side}_elbow`], j[joint], turn => solveTwoBone(j[`${side}_arm`], j[`${side}_elbow`], j[joint], target, pole, ELBOW_FLEX, turn))
   } else if (joint === 'l_ankle' || joint === 'r_ankle') {
     const side = joint[0] as 'l' | 'r'
     // Knees bend forward.
-    solveTwoBone(j[`${side}_leg`], j[`${side}_knee`], j[joint], target, forward, KNEE_FLEX)
+    reachClear(rig, j[`${side}_leg`], j[`${side}_knee`], j[joint], turn => solveTwoBone(j[`${side}_leg`], j[`${side}_knee`], j[joint], target, forward, KNEE_FLEX, turn))
   } else if (joint === 'l_elbow' || joint === 'r_elbow') {
     // A forearm swings by the upper arm turning and the elbow folding.
     bendHinge(j[`${joint[0] as 'l' | 'r'}_arm`], j[joint], target.clone().sub(worldPosition(j[joint])), ELBOW_FLEX)
@@ -136,6 +139,67 @@ export function dragJoint(rig: FigureRig, joint: JointName, target: THREE.Vector
     aimJoint(j[joint], target, UPRIGHT.has(joint) ? UP : DOWN)
   }
 }
+
+/** Bend-plane swings tried, nearest first, when the natural bend would clip (30° steps). */
+const TURNS = [1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6].map(k => (k * Math.PI) / 6)
+
+/**
+ * Reach with a limb as a body would: the natural bend first; if that pushes
+ * the limb into the body (a hand into the thigh as it rises, an upper arm
+ * into the ribs as the hand comes to the chest) the elbow or knee swings
+ * round the reach - out, up, down - to the nearest bend that stays clear
+ * (MEASURED r38: raising a hand from the side caught it on the thigh). The
+ * way there must be clear too, not just the end: past the shoulder a coarse
+ * drag flipped the bend through the chest and stuck there (MEASURED r39).
+ */
+function reachClear(rig: FigureRig, root: THREE.Object3D, mid: THREE.Object3D, end: THREE.Object3D, solve: (turn: number) => void): void {
+  const start = [root.quaternion.clone(), mid.quaternion.clone()]
+  const handBefore = worldPosition(end)
+  const place = (q0: THREE.Quaternion, q1: THREE.Quaternion) => {
+    root.quaternion.copy(q0)
+    mid.quaternion.copy(q1)
+    root.updateWorldMatrix(false, true)
+  }
+  const allowed = Math.max(selfContacts(rig).depth, CLEAR * rig.height)
+  /** Solve with `turn`; the worst overlap at the end and on the way there. Leaves the solution in place. */
+  const attempt = (turn: number): number => {
+    place(start[0], start[1])
+    solve(turn)
+    const solved = [root.quaternion.clone(), mid.quaternion.clone()]
+    let worst = selfContacts(rig).depth
+    for (let i = 1; i < PATH_SAMPLES && worst <= allowed; i++) {
+      const t = i / PATH_SAMPLES
+      place(start[0].clone().slerp(solved[0], t), start[1].clone().slerp(solved[1], t))
+      worst = Math.max(worst, selfContacts(rig).depth)
+    }
+    place(solved[0], solved[1])
+    return worst
+  }
+  let best = 0
+  let bestWorst = attempt(0)
+  if (bestWorst <= allowed) return
+  for (const turn of TURNS) {
+    const worst = attempt(turn)
+    // An alternative bend may not carry the hand round the body in one move
+    // (MEASURED: dragged through the chest, it hopped round to the back).
+    // The natural bend is exempt - it is where the hand goes.
+    if (worldPosition(end).distanceTo(handBefore) > MAX_HOP * rig.height) continue
+    if (worst < bestWorst - 1e-9) {
+      best = turn
+      bestWorst = worst
+      if (worst <= allowed) return
+    }
+  }
+  attempt(best)
+}
+
+/** Points checked on the way from the old pose to a new one (as in `constrainPose`). */
+const PATH_SAMPLES = 8
+/** The furthest (× height) an alternative bend may carry the hand or foot in one move. */
+const MAX_HOP = 0.12
+
+/** Overlap (× height) that counts as touching, not clipping - as in `anatomy.ts`. */
+const CLEAR = 0.002
 
 /** Where the dragged part is now (the point the cursor holds on to). */
 export function dragHandle(rig: FigureRig, joint: JointName): THREE.Vector3 {

@@ -45,15 +45,60 @@ describe('a body that does not pass through itself', () => {
   it.each(VARIANTS)('%s: natural poses are not mistaken for clipping', variant => {
     const poses: [Parameters<typeof dragJoint>[1], number, number, number][] = [
       ['l_wrist', 0.12, 1.05, 0.02], // hand raised over the head
-      ['r_wrist', -0.5, 0.78, 0], // arm out to the side
+      ['r_wrist', -0.42, 0.78, 0], // arm out to the side (within reach)
       ['l_ankle', 0.06, 0.3, 0.2], // knee raised
       ['r_wrist', -0.04, 0.68, 0.15], // hand held in front of the chest
     ]
     for (const [joint, x, y, z] of poses) {
       const rig = figure(variant)
-      dragJoint(rig, joint, local(rig, x, y, z))
+      // Reached the way the editor does it: a drag, in small moves.
+      const from = at(rig.joints[joint])
+      const to = local(rig, x, y, z)
+      for (let i = 1; i <= 16; i++) dragJoint(rig, joint, from.clone().lerp(to, i / 16))
+      expect(at(rig.joints[joint]).distanceTo(to), `${variant} ${joint}`).toBeLessThan(0.01)
       expect(selfContacts(rig).worst, `${variant} ${joint}`).toBeNull()
     }
+  })
+
+  // Live in r38: the green arrow raised a hand from the side; the hand caught
+  // on the thigh at once, stuck, then jumped.
+  it.each([
+    // up the front of the shoulder (through the shoulder itself would fold the elbow past 150°)
+    ['straight up', 0, 0.5, 0.2],
+    // (each path stays within the arm's reach, 0.32 x height from the shoulder)
+    ['out to the side', 0.25, 0.15, 0],
+    ['forward', 0, 0.22, 0.28],
+  ] as const)('a hand dragged %s from rest follows all the way, catching on nothing', (_, x, y, z) => {
+    for (const variant of VARIANTS) {
+      const rig = figure(variant)
+      const start = at(rig.joints.l_wrist)
+      const step = rig.root.localToWorld(new THREE.Vector3(x, y, z).multiplyScalar(rig.height)).sub(rig.root.localToWorld(new THREE.Vector3()))
+      for (let i = 1; i <= 30; i++) {
+        const target = start.clone().addScaledVector(step, i / 30)
+        const before = snapshotPose(rig)
+        dragJoint(rig, 'l_wrist', target)
+        const { blocked } = constrainPose(rig, before)
+        expect(blocked, `${variant} step ${i}`).toBeNull()
+        expect(at(rig.joints.l_wrist).distanceTo(target), `${variant} step ${i}`).toBeLessThan(0.01)
+      }
+    }
+  })
+
+  // Live in r39: the green arrow drags the hand straight up the line through
+  // the shoulder, ~5 cm per mouse move; at the shoulder the arm flipped its
+  // bend through the chest, was stopped, and stayed stuck.
+  it.each(VARIANTS)('%s: a hand dragged straight up past the shoulder in coarse steps keeps going', variant => {
+    const rig = figure(variant)
+    const start = at(rig.joints.l_wrist)
+    const up = rig.root.localToWorld(new THREE.Vector3(0, 0.6 * rig.height, 0)).sub(rig.root.localToWorld(new THREE.Vector3()))
+    let target = start
+    for (let i = 1; i <= 12; i++) {
+      target = start.clone().addScaledVector(up, i / 12)
+      const before = snapshotPose(rig)
+      dragJoint(rig, 'l_wrist', target)
+      expect(constrainPose(rig, before).blocked, `step ${i}`).toBeNull()
+    }
+    expect(at(rig.joints.l_wrist).distanceTo(target)).toBeLessThan(0.01)
   })
 
   it('a hand dragged through the chest stops at it', () => {

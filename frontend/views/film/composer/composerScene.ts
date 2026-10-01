@@ -454,6 +454,12 @@ export class ComposerScene {
     this.selectedId = id
     this.moveGizmo.detach()
     const posing = this.gizmoModeValue === 'pose' ? this.entities.get(id ?? '') : undefined
+    if (posing?.rig && !this.selectedJoint) {
+      // Entering pose mode starts on a hand (MEASURED r36: with no joint the
+      // gizmo fell back to spinning the whole figure).
+      this.selectedJoint = 'l_wrist'
+      this.onJointSelect('l_wrist')
+    }
     this.tintEdit(posing, posing?.rig ? this.selectedJoint : null)
     if (posing?.rig && this.selectedJoint && !posing.data.locked) {
       this.attachPoseGizmo(posing, this.selectedJoint)
