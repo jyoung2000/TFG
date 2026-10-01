@@ -165,3 +165,22 @@ class TestAnImageRunEndsComposed:
         client.post(f"/api/reproduce/{job['id']}/start", json={"budget": {"candidates_per_round": 1, "max_rounds": 2}})
         again = test_state.film.get_project(done["storyboard_project_id"]).find_shot(done["storyboard_shot_id"])[1]  # type: ignore[index]
         assert again.composition.duration_seconds == 7.75  # type: ignore[union-attr]
+
+
+class TestTheComposedImageTakesThePhotosPose:
+    """Asked 2026-10-01 (screenshot): the composer's mannequin stood at
+    attention while the woman in the photo has her hands on her hips."""
+
+    def test_the_storyboard_figure_is_posed_like_the_person(self, client, create_fake_model_files, tmp_path, test_state, fake_services):
+        from services.vision.protocol import PosePerson
+        from tests.test_pose import HANDS_ON_HIPS
+
+        fake_services.vision.pose_override = [PosePerson(bbox=[0.2, 0.05, 0.62, 0.88], score=0.9, keypoints=HANDS_ON_HIPS)]
+        fake_services.vision.regions_override = None
+        job = _image_job(client, create_fake_model_files, tmp_path)
+        client.post(f"/api/reproduce/{job['id']}/start", json={"budget": {"candidates_per_round": 1, "max_rounds": 1}})
+        done = client.get(f"/api/reproduce/{job['id']}").json()
+        assert done["spec"]["poses"], "the analysis kept no pose"
+        shot = test_state.film.get_project(done["storyboard_project_id"]).find_shot(done["storyboard_shot_id"])[1]  # type: ignore[index]
+        figures = [o for o in shot.composition.objects if o.type == "figure"]  # type: ignore[union-attr]
+        assert figures and figures[0].pose.get("l_elbow", (0, 0, 0))[2] < -60, figures[0].pose if figures else None

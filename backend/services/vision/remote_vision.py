@@ -10,6 +10,7 @@ from typing import Any, cast
 from services.http_client.http_client import HTTPClient, JSONValue
 from services.vision.deterministic import measure_path
 from services.vision.protocol import (
+    PoseResult,
     CaptionLevel,
     CaptionResult,
     DepthResult,
@@ -83,6 +84,9 @@ class RemoteVision:
 
     def embed(self, image_path: str, kind: EmbeddingKind = "clip") -> EmbeddingResult:
         return EmbeddingResult.model_validate(self._post("/embed", {"image_path": image_path, "kind": kind}))
+
+    def pose(self, image_path: str) -> PoseResult:
+        return PoseResult.model_validate(self._post("/pose", {"image_path": image_path}))
 
     def unload(self, keep: tuple[str, ...] = ()) -> list[str]:
         body = self._post("/unload", {"keep": list(keep)})

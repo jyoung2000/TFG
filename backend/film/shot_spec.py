@@ -19,12 +19,12 @@ from pydantic import BaseModel, Field
 SPEC_VERSION = 1
 
 SourceKind = Literal["image", "video_shot"]
-Provenance = Literal["measured", "florence", "clip", "depth", "flow", "vlm", "user", ""]
+Provenance = Literal["measured", "florence", "clip", "depth", "flow", "pose", "vlm", "user", ""]
 SECTIONS: tuple[str, ...] = ("measured", "subjects", "scene", "camera", "lighting", "style", "motion", "layout3d", "narrative")
 
 #: Precedence when two sources disagree on a *physical* property (lower wins).
 #: Measured beats a detector, a detector beats a tagger, a tagger beats the VLM.
-PROVENANCE_RANK: dict[str, int] = {"measured": 0, "depth": 0, "flow": 0, "florence": 1, "clip": 2, "vlm": 3, "user": -1, "": 9}
+PROVENANCE_RANK: dict[str, int] = {"measured": 0, "depth": 0, "flow": 0, "florence": 1, "pose": 1, "clip": 2, "vlm": 3, "user": -1, "": 9}
 
 
 class SpecSource(BaseModel):
@@ -53,6 +53,16 @@ class SpecMeasured(BaseModel):
     edge_density: float = 0.0
     sharpness: float = 0.0
     exif: dict[str, str] = Field(default_factory=dict[str, str])
+
+
+class SpecPose(BaseModel):
+    """One person's body as a pose detector (DWPose) saw it."""
+
+    #: Normalised [x, y, w, h] of the person.
+    bbox: list[float] = Field(default_factory=list[float])
+    score: float = 0.0
+    #: COCO-WholeBody body + feet points, normalised [x, y, score].
+    keypoints: list[list[float]] = Field(default_factory=list[list[float]])
 
 
 class SpecSubject(BaseModel):
@@ -138,6 +148,8 @@ class SpecLayoutObject(BaseModel):
     scale: list[float] = Field(default_factory=lambda: [1.0, 1.0, 1.0])
     pose: str = ""
     label: str = ""
+    #: A figure's joint rotations (Euler degrees) read from the photo's pose.
+    joints: dict[str, list[float]] = Field(default_factory=dict[str, list[float]])
 
 
 class SpecLayout3D(BaseModel):
@@ -157,6 +169,8 @@ class ShotSpec(BaseModel):
     source: SpecSource = Field(default_factory=SpecSource)
     measured: SpecMeasured = Field(default_factory=SpecMeasured)
     subjects: list[SpecSubject] = Field(default_factory=list[SpecSubject])
+    #: The people's body poses (DWPose), matched to figures by the 3D solver.
+    poses: list[SpecPose] = Field(default_factory=list[SpecPose])
     scene: SpecScene = Field(default_factory=SpecScene)
     camera: SpecCamera = Field(default_factory=SpecCamera)
     lighting: SpecLighting = Field(default_factory=SpecLighting)

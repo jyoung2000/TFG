@@ -13,6 +13,7 @@ from services.vision.clip_tagger import CLIP_ESTIMATED_MB, CLIP_VRAM_CLASS, DEFA
 from services.vision.depth import DEFAULT_DEPTH_MODEL, DEFAULT_DINO_MODEL, DepthEstimator, DinoEmbedder
 from services.vision.deterministic import measure_image
 from services.vision.florence2 import DEFAULT_FLORENCE_MODEL, FLORENCE_MODELS, Florence2
+from services.vision.pose import POSE_ESTIMATED_MB, POSE_MODEL, DwposeEstimator
 from services.vision.protocol import (
     CaptionLevel,
     CaptionResult,
@@ -23,6 +24,7 @@ from services.vision.protocol import (
     EmbeddingKind,
     EmbeddingResult,
     MeasuredStats,
+    PoseResult,
     TagResult,
     VisionStatus,
 )
@@ -46,6 +48,9 @@ class VisionConfig:
     dino_model: str = DEFAULT_DINO_MODEL
     cache_dir: Path | None = None
     device: str = "auto"
+    pose_enabled: bool = True
+    #: The WanGP checkout holding DWPose (code + ckpts/pose); None keeps the current one.
+    pose_root: Path | None = None
 
 
 def open_for_analysis(image_path: str) -> Image.Image:
@@ -64,6 +69,7 @@ class LocalVision:
         self._clip = ClipTagger(config.clip_model, cache_dir=config.cache_dir, device=config.device)
         self._depth = DepthEstimator(config.depth_model, cache_dir=config.cache_dir, device=config.device)
         self._dino = DinoEmbedder(config.dino_model, cache_dir=config.cache_dir, device=config.device)
+        self._pose = DwposeEstimator(config.pose_root, device=config.device)
 
     def configure(self, config: VisionConfig) -> None:
         """Apply new settings; models whose id changed are dropped and reload lazily."""
@@ -79,6 +85,11 @@ class LocalVision:
         if config.dino_model != self._config.dino_model:
             self._dino.unload()
             self._dino = DinoEmbedder(config.dino_model, cache_dir=config.cache_dir, device=config.device)
+        if config.pose_root is None:
+            config.pose_root = self._config.pose_root
+        elif config.pose_root != self._config.pose_root:
+            self._pose.unload()
+            self._pose = DwposeEstimator(config.pose_root, device=config.device)
         self._config = config
 
     # ---- registry glue ------------------------------------------------------
@@ -121,6 +132,14 @@ class LocalVision:
             self._register("dino", self._dino.vram_class, self._dino.estimated_mb, self._dino, 20)
         return self._dino
 
+    def _ensure_pose(self) -> DwposeEstimator:
+        if not self._config.pose_enabled:
+            raise RuntimeError("Pose estimation is disabled in Settings → Vision")
+        if not self._pose.loaded:
+            self._pose.load()
+            self._register("pose", "S", POSE_ESTIMATED_MB, self._pose, 25)
+        return self._pose
+
     # ---- Protocol -----------------------------------------------------------
 
     def status(self) -> VisionStatus:
@@ -134,6 +153,7 @@ class LocalVision:
                 ComponentStatus(name="clip", enabled=self._config.clip_enabled, available=True, loaded=self._clip.loaded, model=self._clip.model_id, vram_class=CLIP_VRAM_CLASS, estimated_mb=CLIP_ESTIMATED_MB),
                 ComponentStatus(name="depth", enabled=self._config.depth_enabled, available=True, loaded=self._depth.loaded, model=self._depth.model_id, vram_class=self._depth.vram_class, estimated_mb=self._depth.estimated_mb),
                 ComponentStatus(name="dino", enabled=self._config.dino_enabled, available=True, loaded=self._dino.loaded, model=self._dino.model_id, vram_class=self._dino.vram_class, estimated_mb=self._dino.estimated_mb),
+                ComponentStatus(name="pose", enabled=self._config.pose_enabled, available=self._pose.available, loaded=self._pose.loaded, model=POSE_MODEL, vram_class="S", estimated_mb=POSE_ESTIMATED_MB, note="" if self._pose.available else "DWPose weights not found in the WanGP checkout (ckpts/pose)"),
             ],
         )
 
@@ -166,9 +186,15 @@ class LocalVision:
             return self._ensure_dino().embed(image)
         return self._ensure_clip().image_embedding(image)
 
+    def pose(self, image_path: str) -> PoseResult:
+        # Full resolution: limbs are thin, and the detector resizes itself.
+        with Image.open(image_path) as raw:
+            image = (ImageOps.exif_transpose(raw) or raw).convert("RGB")
+        return self._ensure_pose().estimate(image)
+
     def unload(self, keep: tuple[str, ...] = ()) -> list[str]:
         unloaded: list[str] = []
-        for name, component in (("florence", self._florence), ("clip", self._clip), ("depth", self._depth), ("dino", self._dino)):
+        for name, component in (("florence", self._florence), ("clip", self._clip), ("depth", self._depth), ("dino", self._dino), ("pose", self._pose)):
             if name in keep or not component.loaded:
                 continue
             component.unload()

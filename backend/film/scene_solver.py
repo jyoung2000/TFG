@@ -26,6 +26,7 @@ from film.film_models import (
     CompositionTransform,
     ShotFraming,
 )
+from film.pose_from_keypoints import facing_camera, joints_from_keypoints, share_inside
 from film.shot_spec import ShotSpec, SpecLayout3D, SpecLayoutCamera, SpecLayoutObject, SpecMotion, SpecSubject
 from film.shot_vocabulary import describe_camera
 
@@ -291,6 +292,26 @@ def layout_from_spec(spec: ShotSpec, *, vfov_deg: float | None = None) -> SpecLa
     # The words can be wrong (MEASURED, r23: a head-to-toe portrait read as a
     # "medium shot"): legs in the frame or a whole-body box overrule them.
     legs_visible = any(s.label.strip().lower().split(" ")[-1] in LOWER_BODY_LABELS for s in subjects)
+    used_poses: set[int] = set()
+
+    def pose_figure(figure: SpecLayoutObject, box: list[float]) -> None:
+        """Give the figure the pose of the person whose keypoints sit in its box
+        (each detected person once); a person seen from behind turns it 180°."""
+        best, best_share = -1, 0.5
+        for i, person in enumerate(spec.poses):
+            if i in used_poses:
+                continue
+            share = share_inside(person.keypoints, box)
+            if share > best_share:
+                best, best_share = i, share
+        if best < 0:
+            return
+        used_poses.add(best)
+        points = spec.poses[best].keypoints
+        figure.joints = joints_from_keypoints(points, aspect)
+        if facing_camera(points) is False:
+            figure.rot = [0.0, round(math.pi, 5), 0.0]
+
     objects: list[SpecLayoutObject] = []
     for index, member, subject, box, person in _members(subjects):
         x, y, w, h = box
@@ -299,6 +320,7 @@ def layout_from_spec(spec: ShotSpec, *, vfov_deg: float | None = None) -> SpecLa
         whole_body = not part and (legs_visible or (h / max(w, 1e-4)) / aspect >= WHOLE_BODY_BOX_RATIO)
         if person and tight and not whole_body:
             objects.append(_tight_figure(camera, box, tight, _object_id(index, member, True), label))
+            pose_figure(objects[-1], box)
             continue
         # Grounded when the box's bottom ray reaches the floor in front of the
         # camera: the object then stands exactly where that ray lands, so its
@@ -338,6 +360,7 @@ def layout_from_spec(spec: ShotSpec, *, vfov_deg: float | None = None) -> SpecLa
                     label=label,
                 )
             )
+            pose_figure(objects[-1], box)
         else:
             objects.append(
                 SpecLayoutObject(
@@ -515,6 +538,7 @@ def composer_scene_from_layout(layout: SpecLayout3D, *, duration: float, move: C
                     type="figure",
                     transform=CompositionTransform(position=(pos[0], pos[1], pos[2]), rotation=(rot[0], rot[1], rot[2]), scale=(scale[1], scale[1], scale[1])),
                     figure_variant=figure_variant_for(height_m),  # type: ignore[arg-type]
+                    pose={name: (float(v[0]), float(v[1]), float(v[2])) for name, v in obj.joints.items() if len(v) == 3},
                 )
             )
         else:
@@ -563,7 +587,7 @@ def layout_from_composition(composition: CompositionScene, base: SpecLayout3D | 
             continue
         t = obj.transform
         if obj.type == "figure":
-            objects.append(SpecLayoutObject(id=obj.id, kind="figure", pos=[round(v, 4) for v in t.position], rot=[round(v, 5) for v in t.rotation], scale=[round(t.scale[1], 4)] * 3, pose="stand", label=obj.name.lower()))
+            objects.append(SpecLayoutObject(id=obj.id, kind="figure", pos=[round(v, 4) for v in t.position], rot=[round(v, 5) for v in t.rotation], scale=[round(t.scale[1], 4)] * 3, pose="stand", label=obj.name.lower(), joints={name: [float(c) for c in v] for name, v in obj.pose.items()}))
         else:
             objects.append(SpecLayoutObject(id=obj.id, kind="prop", pos=[round(v, 4) for v in t.position], rot=[round(v, 5) for v in t.rotation], scale=[round(v, 4) for v in t.scale], label=obj.name.lower()))
     camera = SpecLayoutCamera()

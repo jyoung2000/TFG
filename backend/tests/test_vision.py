@@ -179,7 +179,8 @@ class TestVisionApi:
         image = _png(tmp_path / "ref.png", (10, 200, 10))
         client.post("/api/vision/analyze", json={"path": str(image)})
         r = client.post("/api/vision/unload")
-        assert set(r.json()["unloaded"]) == {"clip", "depth", "florence"}
+        # An analysis also reads the people's poses now (DWPose).
+        assert set(r.json()["unloaded"]) == {"clip", "depth", "florence", "pose"}
 
     def test_settings_vision_section_round_trips(self, client):
         r = client.get("/api/settings").json()

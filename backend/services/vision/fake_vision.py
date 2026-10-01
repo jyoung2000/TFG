@@ -17,6 +17,8 @@ from PIL import Image, UnidentifiedImageError
 from services.vision.depth import write_depth_png
 from services.vision.deterministic import measure_image
 from services.vision.protocol import (
+    PosePerson,
+    PoseResult,
     CaptionLevel,
     CaptionResult,
     ComponentStatus,
@@ -42,6 +44,8 @@ class FakeVision:
         #: Regions returned by `detect` when set; otherwise derived from the image.
         self.regions_override: list[VisionRegion] | None = None
         self.caption_override: str = ""
+        #: People returned by `pose`; none unless a test sets them.
+        self.pose_override: list[PosePerson] | None = None
 
     def _use(self, component: str, image_path: str) -> None:
         if component in self.disabled:
@@ -50,7 +54,7 @@ class FakeVision:
         self.calls.append((component, image_path))
 
     def status(self) -> VisionStatus:
-        names = ("florence", "clip", "depth", "dino")
+        names = ("florence", "clip", "depth", "dino", "pose")
         return VisionStatus(
             mode="fake",
             components=[ComponentStatus(name="stats", enabled=True, available=True, loaded=True, model="deterministic")]
@@ -116,6 +120,10 @@ class FakeVision:
         vector = np.concatenate([small, rng.normal(size=16)])
         vector /= math.sqrt(float((vector**2).sum())) or 1.0
         return EmbeddingResult(kind=kind, model=f"fake-{kind}", vector=[float(v) for v in vector])
+
+    def pose(self, image_path: str) -> PoseResult:
+        self._use("pose", image_path)
+        return PoseResult(model="fake-pose", people=[p.model_copy(deep=True) for p in self.pose_override or []])
 
     def unload(self, keep: tuple[str, ...] = ()) -> list[str]:
         unloaded = sorted(name for name in self.loaded if name not in keep)

@@ -71,6 +71,19 @@ class EmbeddingResult(BaseModel):
     vector: list[float] = Field(default_factory=list[float])
 
 
+class PosePerson(BaseModel):
+    #: Normalised [x, y, w, h] of the detected person.
+    bbox: list[float] = Field(default_factory=list[float])
+    score: float = 0.0
+    #: COCO-WholeBody body (17) + feet (6) points, normalised [x, y, score].
+    keypoints: list[list[float]] = Field(default_factory=list[list[float]])
+
+
+class PoseResult(BaseModel):
+    model: str
+    people: list[PosePerson] = Field(default_factory=list[PosePerson])
+
+
 class PaletteEntry(BaseModel):
     hex: str
     share: float
@@ -126,6 +139,8 @@ class VisionService(Protocol):
     def depth(self, image_path: str, output_png: str) -> DepthResult: ...
 
     def embed(self, image_path: str, kind: EmbeddingKind = "clip") -> EmbeddingResult: ...
+
+    def pose(self, image_path: str) -> PoseResult: ...
 
     def unload(self, keep: tuple[str, ...] = ()) -> list[str]:
         """Free model memory; returns the component names that were unloaded."""

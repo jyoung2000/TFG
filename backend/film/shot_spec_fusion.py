@@ -25,6 +25,8 @@ from __future__ import annotations
 
 from typing import Any, cast
 
+from pydantic import BaseModel
+
 from film.shot_spec import (
     PROVENANCE_RANK,
     PaletteEntry,
@@ -49,7 +51,7 @@ from film.shot_vocabulary import (
 )
 from handlers.vision_handler import VisionAnalysis
 from services.similarity.metrics import box_iou
-from services.vision.protocol import VisionRegion
+from services.vision.protocol import PoseResult, VisionRegion
 
 _STOP_WORDS = frozenset({"the", "and", "with", "for", "from", "into", "style", "illustration", "art", "design", "image", "color", "colors", "a", "an", "of"})
 
@@ -226,6 +228,21 @@ def apply_depth(spec: ShotSpec, analysis: VisionAnalysis) -> None:
             spread = max(medians) - min(medians) if len(medians) > 1 else 0.0
             spec.camera.dof = "shallow" if spread < 0.15 and spec.measured.sharpness < 0.002 else "deep" if spread > 0.5 else "medium"
             spec.camera.dof = spec.camera.dof if spec.camera.dof in DOF_VOCAB else ""
+
+
+def apply_pose_result(spec: ShotSpec, result: PoseResult | None) -> None:
+    """The pose detector owns `poses`: each person's body keypoints. An empty
+    result is recorded too, so a photo without people is not asked again."""
+    if result is None or spec.is_locked("poses"):
+        return
+    from film.shot_spec import SpecPose
+
+    spec.poses = [SpecPose(bbox=list(p.bbox), score=p.score, keypoints=[list(k) for k in p.keypoints]) for p in result.people]
+    _write(spec, "poses", "pose", 0.8, force=True)
+
+
+def apply_pose(spec: ShotSpec, analysis: VisionAnalysis) -> None:
+    apply_pose_result(spec, analysis.pose)
 
 
 def apply_layout(spec: ShotSpec) -> None:
@@ -477,6 +494,7 @@ def spec_from_vision(analysis: VisionAnalysis, *, kind: str = "image", base: Sho
     apply_florence(spec, analysis)
     apply_clip(spec, analysis)
     apply_depth(spec, analysis)
+    apply_pose(spec, analysis)
     apply_layout(spec)
     if spec.style.medium == "" and not spec.is_locked("style"):
         medium, confidence = infer_medium(0.0, spec.measured.edge_density, spec.style.tags)
@@ -491,7 +509,7 @@ def merge_specs(base: ShotSpec, update: ShotSpec) -> ShotSpec:
     """Take every unlocked section from `update` whose provenance ranks at least
     as high as `base`'s; keep locked sections of `base` untouched."""
     merged = base.model_copy(deep=True)
-    for section in ("measured", "subjects", "scene", "camera", "lighting", "style", "motion", "layout3d", "narrative"):
+    for section in ("measured", "subjects", "poses", "scene", "camera", "lighting", "style", "motion", "layout3d", "narrative"):
         if merged.is_locked(section):
             continue
         incoming = update.provenance.get(section, "")
@@ -499,7 +517,12 @@ def merge_specs(base: ShotSpec, update: ShotSpec) -> ShotSpec:
             continue
         current = merged.provenance.get(section, "")
         if not current or PROVENANCE_RANK.get(incoming, 9) <= PROVENANCE_RANK.get(current, 9):
-            setattr(merged, section, getattr(update, section).model_copy(deep=True) if section != "subjects" else [s.model_copy() for s in update.subjects])
+            value: Any = getattr(update, section)
+            if isinstance(value, list):
+                items: list[BaseModel] = list(cast(Any, value))
+                setattr(merged, section, [item.model_copy(deep=True) for item in items])
+            else:
+                setattr(merged, section, cast(BaseModel, value).model_copy(deep=True))
             merged.set_section(section, incoming, update.confidence.get(section, 0.0))  # type: ignore[arg-type]
     if update.source.hash:
         merged.source = update.source.model_copy()

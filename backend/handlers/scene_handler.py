@@ -28,13 +28,14 @@ from film.scene_solver import (
     reprojection_error,
 )
 from film.shot_spec import ShotSpec, SpecLayout3D
-from film.shot_spec_fusion import apply_user
+from film.shot_spec_fusion import apply_pose_result, apply_user
 from film.shot_vocabulary import camera_sentence, describe_camera
-from film.video_analysis_models import VideoAnalysis
+from film.video_analysis_models import AnalyzedShot, VideoAnalysis
 from handlers.base import StateHandlerBase
 from handlers.film_handler import FilmHandler
 from handlers.jobs_handler import JobsHandler
 from handlers.video_analysis_handler import VideoAnalysisHandler
+from handlers.vision_handler import VisionHandler
 from state.app_state_types import AppState
 
 logger = logging.getLogger(__name__)
@@ -43,7 +44,8 @@ logger = logging.getLogger(__name__)
 #: Bumped when seeding improves, so untouched older seeds are re-seeded.
 #: 2: close-ups, groups and body parts (r21). 3: worn items, extra faces (r22).
 #: 4: whole-body boxes overrule the shot-size words; face figures are "person" (r23).
-SEED_VERSION = 4
+#: 5: figures take the people's poses (DWPose).
+SEED_VERSION = 5
 
 
 def seed_fingerprint(composition: CompositionScene) -> str:
@@ -71,11 +73,13 @@ class SceneHandler(StateHandlerBase):
         video_analysis: VideoAnalysisHandler,
         film: FilmHandler,
         jobs: JobsHandler | None = None,
+        vision: VisionHandler | None = None,
     ) -> None:
         super().__init__(state, lock)
         self._analysis = video_analysis
         self._film = film
         self._jobs = jobs
+        self._vision = vision
 
     # ---- pure builds ---------------------------------------------------------------
 
@@ -155,6 +159,7 @@ class SceneHandler(StateHandlerBase):
         Returns how many shots were seeded."""
         by_id = {s.id: s for s in analysis.shots}
         seeded = 0
+        posed = False
         with self.lock:
             project = self._film.store.load(project_id)
             for _, film_shot in _walk(project):
@@ -162,11 +167,29 @@ class SceneHandler(StateHandlerBase):
                 if (film_shot.composition is not None and not stale_seed(film_shot.composition)) or ref is None or ref.analysis_shot_id not in by_id:
                     continue
                 analysed = by_id[ref.analysis_shot_id]
+                posed = self._backfill_poses(analysis, analysed) or posed
                 self._seed_shot(project, film_shot, analysed.spec, analysed.duration)
                 seeded += 1
             if seeded:
                 self._film.store.save(project)
+        if posed:
+            self._analysis.store.save(analysis)
         return seeded
+
+    def _backfill_poses(self, analysis: VideoAnalysis, shot: AnalyzedShot) -> bool:
+        """Shots analysed before the pose component have no poses: read them
+        once from the frame the subjects came from (the middle one)."""
+        spec = shot.spec
+        if self._vision is None or spec.poses or "poses" in spec.provenance or not shot.frames:
+            return False
+        frame = self._analysis.store.directory(analysis.id) / shot.frames[len(shot.frames) // 2].path
+        if not frame.is_file():
+            return False
+        result = self._vision.pose(str(frame))
+        if result is None:
+            return False
+        apply_pose_result(spec, result)
+        return True
 
     def seed_shot(self, project: FilmProject, film_shot: FilmShot, spec: ShotSpec, duration: float) -> None:
         """Seed one shot's composer scene + blockout from a spec (image reproduce)

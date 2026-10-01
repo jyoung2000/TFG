@@ -27,6 +27,7 @@ from services.vision.protocol import (
     CaptionResult,
     DepthResult,
     MeasuredStats,
+    PoseResult,
     TagResult,
     VisionRegion,
     VisionService,
@@ -51,6 +52,8 @@ class VisionAnalysis(BaseModel):
     regions: list[VisionRegion] = Field(default_factory=list[VisionRegion])
     tags: TagResult | None = None
     depth: DepthResult | None = None
+    #: Each person's body keypoints (DWPose).
+    pose: PoseResult | None = None
     #: Component name → why it produced nothing (disabled, failed, unavailable).
     notes: dict[str, str] = Field(default_factory=dict[str, str])
 
@@ -203,6 +206,7 @@ class VisionHandler(StateHandlerBase):
         want_regions: bool = True,
         want_tags: bool = True,
         want_depth: bool = True,
+        want_pose: bool = True,
         depth_dir: Path | None = None,
         use_cache: bool = True,
     ) -> VisionAnalysis:
@@ -218,6 +222,10 @@ class VisionHandler(StateHandlerBase):
             try:
                 cached = VisionAnalysis.model_validate_json(cache_file.read_text(encoding="utf-8"))
                 if self._cache_satisfies(cached, want_caption, want_regions, want_tags, want_depth):
+                    if want_pose and cached.pose is None and "disabled" not in cached.notes.get("pose", "").lower():
+                        # Analyses cached before the pose component: add only the pose.
+                        self._add_pose(cached)
+                        self._write_cache(cache_file, cached)
                     return cached
             except Exception as exc:  # noqa: BLE001 - a bad cache entry is recomputed
                 logger.info("Ignoring unreadable vision cache %s: %s", cache_file, exc)
@@ -253,13 +261,36 @@ class VisionHandler(StateHandlerBase):
                         region.depth_median = depth_median_in_box(depth01, region.bbox)
             except Exception as exc:  # noqa: BLE001
                 result.notes["depth"] = str(exc)
+        if want_pose:
+            self._add_pose(result)
         if use_cache:
-            try:
-                cache_file.parent.mkdir(parents=True, exist_ok=True)
-                cache_file.write_text(result.model_dump_json(), encoding="utf-8")
-            except OSError as exc:
-                logger.info("Could not write vision cache: %s", exc)
+            self._write_cache(cache_file, result)
         return result
+
+    def _add_pose(self, result: VisionAnalysis) -> None:
+        try:
+            result.pose = self.vision.pose(result.image_path)
+            result.notes.pop("pose", None)
+        except Exception as exc:  # noqa: BLE001 - a missing pose model leaves a note
+            result.notes["pose"] = str(exc)
+
+    @staticmethod
+    def _write_cache(cache_file: Path, result: VisionAnalysis) -> None:
+        try:
+            cache_file.parent.mkdir(parents=True, exist_ok=True)
+            cache_file.write_text(result.model_dump_json(), encoding="utf-8")
+        except OSError as exc:
+            logger.info("Could not write vision cache: %s", exc)
+
+    def pose(self, image_path: str) -> PoseResult | None:
+        """The people's poses in one image, or None when the detector is unavailable."""
+        if not self.settings().enabled:
+            return None
+        try:
+            return self.vision.pose(image_path)
+        except Exception as exc:  # noqa: BLE001 - poses are advisory
+            logger.info("No pose for %s: %s", image_path, exc)
+            return None
 
     @staticmethod
     def _cache_satisfies(cached: VisionAnalysis, caption: bool, regions: bool, tags: bool, depth: bool) -> bool:

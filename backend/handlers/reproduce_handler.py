@@ -37,7 +37,7 @@ from film.reproduce_models import (
     migrate_document,
 )
 from film.shot_spec import ShotSpec
-from film.shot_spec_fusion import FILLABLE_FIELDS, apply_user, apply_vlm, apply_vlm_subjects, empty_fields, fill_empty_fields, spec_from_vision, subjects_are_derived
+from film.shot_spec_fusion import FILLABLE_FIELDS, apply_pose_result, apply_user, apply_vlm, apply_vlm_subjects, empty_fields, fill_empty_fields, spec_from_vision, subjects_are_derived
 from handlers.base import StateHandlerBase
 from handlers.image_generation_handler import ImageGenerationHandler
 from handlers.jobs_handler import JobsHandler
@@ -1003,6 +1003,7 @@ class ReproduceHandler(StateHandlerBase):
         store = self._film.store
         chosen = job.candidate(job.picked_candidate_id) or job.best()
         image_path = self._dir(job.id) / (chosen.path if chosen else job.source_path)
+        self._backfill_poses(job)
         with self.lock:
             wanted = project_id.strip() or job.storyboard_project_id
             project = store.load(wanted) if wanted and store.exists(wanted) else FilmProject(id=wanted or new_id("film"), name=f"Reproduce: {job.title}")
@@ -1033,6 +1034,13 @@ class ReproduceHandler(StateHandlerBase):
         job.storyboard_project_id, job.storyboard_shot_id = project.id, shot.id
         self._save(job)
         return {"project_id": project.id, "scene_id": scene.id, "shot_id": shot.id}
+
+    def _backfill_poses(self, job: ReproduceJob) -> None:
+        """Jobs analysed before the pose component have no poses: read them
+        once from the reference, where the subjects' boxes came from."""
+        if job.spec.poses or "poses" in job.spec.provenance:
+            return
+        apply_pose_result(job.spec, self._vision.pose(str(self._dir(job.id) / job.source_path)))
 
     def _cast_from_subjects(self, job: ReproduceJob, project_id: str) -> list[Any]:
         """A character asset per person in the image, its reference image the

@@ -223,7 +223,7 @@ class AppHandler:
         if vision is None:
             from services.vision.local_vision import LocalVision, VisionConfig
 
-            vision = LocalVision(VisionConfig(cache_dir=app_data / "vision-cache" / "models"), self.vram)
+            vision = LocalVision(VisionConfig(cache_dir=app_data / "vision-cache" / "models", pose_root=config.wangp_root), self.vram)
         self.vision = VisionHandler(
             state=self.state,
             lock=self._lock,
@@ -542,6 +542,7 @@ class AppHandler:
             video_analysis=self.video_analysis,
             film=self.film,
             jobs=self.jobs,
+            vision=self.vision,
         )
         # Reproduce feeds the storyboard: video shots are seeded with a 3D
         # composition, image jobs can be sent to the storyboard/composer.

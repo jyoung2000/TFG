@@ -58,6 +58,10 @@ class EmbedRequest(BaseModel):
     kind: EmbeddingKind = "clip"
 
 
+class PoseRequest(BaseModel):
+    image_path: str
+
+
 class UnloadRequest(BaseModel):
     keep: list[str] = []
 
@@ -76,7 +80,8 @@ class ConfigureRequest(BaseModel):
 
 def create_worker(cache_dir: Path) -> FastAPI:
     vram = VramManager(PynvmlProbe())
-    vision = LocalVision(VisionConfig(cache_dir=cache_dir), vram)
+    wangp_root = os.environ.get("WANGP_ROOT", "").strip()
+    vision = LocalVision(VisionConfig(cache_dir=cache_dir, pose_root=Path(wangp_root) if wangp_root else None), vram)
     app = FastAPI(title="TFG vision worker")
 
     def _check(path: str) -> None:
@@ -132,6 +137,11 @@ def create_worker(cache_dir: Path) -> FastAPI:
     def embed(req: EmbedRequest):  # pyright: ignore[reportUnusedFunction]
         _check(req.image_path)
         return vision.embed(req.image_path, req.kind)
+
+    @app.post("/pose")
+    def pose(req: PoseRequest):  # pyright: ignore[reportUnusedFunction]
+        _check(req.image_path)
+        return vision.pose(req.image_path)
 
     @app.post("/unload")
     def unload(req: UnloadRequest):  # pyright: ignore[reportUnusedFunction]
