@@ -6,7 +6,7 @@
  * (the composer's reference underlay) is the asset's first image.
  */
 
-import type { FilmAsset, FilmScene, FilmShot } from '../../../types/film'
+import type { CompositionScene, FilmAsset, FilmProject, FilmScene, FilmShot } from '../../../types/film'
 
 export const STUDIO_PREFIX = 'studio-'
 
@@ -23,7 +23,28 @@ export function studioScene(asset: FilmAsset): FilmScene {
   } as unknown as FilmScene
 }
 
-export function studioShot(asset: FilmAsset): FilmShot {
+/**
+ * Where the studio starts when the asset has no studio scene of its own: the
+ * character as posed in the storyboard (e.g. a reproduced photo's stance),
+ * alone, centre stage and facing the camera.
+ */
+export function storyboardPose(asset: FilmAsset, project: FilmProject | null | undefined): CompositionScene | null {
+  for (const scene of project?.scenes ?? []) {
+    for (const shot of scene.shots ?? []) {
+      const figure = shot.composition?.objects.find(o => o.type === 'figure' && o.asset_id === asset.id)
+      if (figure && shot.composition) {
+        return {
+          ...shot.composition,
+          objects: [{ ...figure, transform: { ...figure.transform, position: [0, 0, 0], rotation: [0, 0, 0] }, keyframes: [] }],
+          camera: null,
+        }
+      }
+    }
+  }
+  return null
+}
+
+export function studioShot(asset: FilmAsset, project?: FilmProject | null): FilmShot {
   const now = Date.now()
   return {
     id: `${STUDIO_PREFIX}${asset.id}`,
@@ -46,7 +67,7 @@ export function studioShot(asset: FilmAsset): FilmShot {
     negative_prompt: '',
     prompt_locked: false,
     source_ref: null,
-    composition: asset.composition ?? null,
+    composition: asset.composition ?? storyboardPose(asset, project),
     capture_path: asset.reference_images[0] ?? '',
     blockout_path: '',
     generation: {

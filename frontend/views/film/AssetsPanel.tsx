@@ -80,7 +80,7 @@ export function AssetsPanel() {
           <ShotComposer
             projectId={film.id}
             scene={studioScene(studioAsset)}
-            shot={studioShot(studioAsset)}
+            shot={studioShot(studioAsset, film)}
             onClose={() => { setStudioId(null); void refresh() }}
             studio={{
               title: studioAsset.name,
