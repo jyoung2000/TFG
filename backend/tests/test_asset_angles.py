@@ -105,6 +105,21 @@ class TestAngleSet:
         assert height / width >= 1.7, "a standing figure needs a tall frame"
         assert "head to feet" in params["prompt"] and "whole head" in params["prompt"]
 
+    def test_re_rendering_the_sheet_replaces_its_views(self, client, test_state, fake_services, create_fake_model_files):
+        # QA pass 2026-10-02: "Re-render 4 views" appended, so the superseded
+        # views stayed among the references - and in the LoRA dataset, which
+        # takes every reference. The identity photo is never replaced.
+        create_fake_model_files(include_zit=True)
+        asset = _character(client, test_state, fake_services)
+        url = f"/api/film/projects/{PROJECT}/assets/{asset['id']}/reference-sheet"
+        first = client.post(url, json={"views": ["front view", "back view"], "seed": 9}).json()
+        second = client.post(url, json={"views": ["front view", "back view"], "seed": 9}).json()
+        images = second["asset"]["reference_images"]
+        assert images[0] == asset["reference_images"][0], "the identity photo stays first"
+        assert len(images) == 3, images
+        assert set(second["reference_paths"]) <= set(images)
+        assert not set(first["reference_paths"]) & set(images), "the old views are gone"
+
 class TestAssetStudioAndDataset:
     def test_an_asset_keeps_its_3d_studio_scene(self, client, test_state, fake_services):
         asset = client.post(f"/api/film/projects/{PROJECT}/assets", json={"kind": "character", "name": "Mara"}).json()["asset"]

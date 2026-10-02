@@ -1349,6 +1349,10 @@ class FilmGenerationHandler(StateHandlerBase):
         # view keeps that person; text alone drifted between views.
         identity = self._identity_image(project_id, asset, "")
         reference_model = handler.reference_model() if identity is not None else None
+        # A re-render replaces each view it renders (QA 2026-10-02: they piled
+        # up among the references and in the LoRA dataset); never the identity.
+        before = list(asset.reference_images)
+        identity_ref = before[0] if before else ""
         prompts: list[str] = []
         paths: list[str] = []
         for view in views:
@@ -1366,8 +1370,12 @@ class FilmGenerationHandler(StateHandlerBase):
                 raise HTTPError(502, "The local image model did not return an image")
             image_bytes = Path(out_paths[0]).read_bytes()
             encoded = base64.b64encode(image_bytes).decode("ascii")
-            updated = self._film.add_asset_reference(project_id, asset_id, AddAssetReferenceRequest(image_base64=encoded, name_hint=f"{asset.name}-{view.replace(' ', '-')}"))
+            token = view.replace(" ", "-")
+            updated = self._film.add_asset_reference(project_id, asset_id, AddAssetReferenceRequest(image_base64=encoded, name_hint=f"{asset.name}-{token}"))
             paths.append(updated.reference_images[-1])
+            for stale in before:
+                if stale != identity_ref and Path(stale).stem.endswith(f"-{token}") and stale in updated.reference_images:
+                    updated = self._film.delete_asset_reference(project_id, asset_id, stale)
         asset = self._film.get_project(project_id).asset(asset_id)
         assert asset is not None
         if asset.seed_lock is None:
