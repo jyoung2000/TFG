@@ -131,6 +131,31 @@ class TestAngleSet:
         assert "45 degrees" in three_quarter
         assert "90 degrees" in profile and "from the side" in profile
 
+    def test_a_close_up_angle_is_not_told_to_show_the_full_body(self, client, test_state, fake_services, create_fake_model_files):
+        # QA pass 2026-10-02 (Raven's 17-angle LoRA set): every medium and
+        # close-up angle came back full body - the character prompt said
+        # "full body ... head to feet" over the angle's own framing, so the set
+        # had no face close-ups to learn the face from.
+        create_fake_model_files(include_zit=True)
+        asset = _character(client, test_state, fake_services)
+        shot = {"name": "closeup-front", "view": "seen from the front, close-up portrait of the head and shoulders", "guide_base64": _png((90, 90, 90))}
+        assert client.post(f"/api/film/projects/{PROJECT}/assets/{asset['id']}/angle-set", json={"shots": [shot], "seed": 5}).status_code == 200
+        prompt = _image_params(fake_services)[-1]["prompt"]
+        assert "close-up portrait" in prompt
+        assert "full body" not in prompt and "head to feet" not in prompt
+
+    def test_re_generating_an_angle_replaces_its_image(self, client, test_state, fake_services, create_fake_model_files):
+        create_fake_model_files(include_zit=True)
+        asset = _character(client, test_state, fake_services)
+        url = f"/api/film/projects/{PROJECT}/assets/{asset['id']}/angle-set"
+        shots = [{"name": "full-front", "view": "seen from the front"}, {"name": "full-back", "view": "seen from behind"}]
+        first = client.post(url, json={"shots": shots, "seed": 5}).json()
+        second = client.post(url, json={"shots": shots[:1], "seed": 5}).json()
+        images = second["asset"]["reference_images"]
+        assert images[0] == asset["reference_images"][0]
+        assert first["reference_paths"][0] not in images and first["reference_paths"][1] in images
+        assert len(images) == 3, images
+
 class TestAssetStudioAndDataset:
     def test_an_asset_keeps_its_3d_studio_scene(self, client, test_state, fake_services):
         asset = client.post(f"/api/film/projects/{PROJECT}/assets", json={"kind": "character", "name": "Mara"}).json()["asset"]

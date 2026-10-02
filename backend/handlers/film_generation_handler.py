@@ -826,7 +826,7 @@ class FilmGenerationHandler(StateHandlerBase):
     }
 
     @staticmethod
-    def _reference_prompt(asset: FilmAsset, style_prompt: str) -> str:
+    def _reference_prompt(asset: FilmAsset, style_prompt: str, framing: str = FULL_FIGURE) -> str:
         """Describe the asset the way the continuity fields already describe it,
         so a generated reference matches what the shot prompts will say."""
         parts: list[str] = []
@@ -835,7 +835,7 @@ class FilmGenerationHandler(StateHandlerBase):
             for value in (asset.appearance, asset.wardrobe, asset.accessories):
                 if value.strip():
                     parts.append(value.strip())
-            parts.append(f"neutral studio background, {FULL_FIGURE}, even lighting, photoreal")
+            parts.append(", ".join(p for p in ("neutral studio background", framing, "even lighting, photoreal") if p))
         elif asset.kind == "location":
             parts.append(f"Establishing view of {asset.name}")
             for value in (asset.environment, asset.lighting, asset.atmosphere, asset.time_of_day):
@@ -1429,7 +1429,11 @@ class FilmGenerationHandler(StateHandlerBase):
         seed = req.seed if req.seed is not None else asset.seed_lock
         if seed is None:
             seed = int(time.time()) % 2_000_000_000
-        base = self._reference_prompt(asset, project.settings.style_prompt).replace(f"Character reference sheet of {asset.name}", asset.name)
+        # Each angle says its own framing (full / medium / close-up); the sheet's
+        # "full body ... head to feet" made every close-up a full shot (QA 2026-10-02).
+        base = self._reference_prompt(asset, project.settings.style_prompt, framing="").replace(f"Character reference sheet of {asset.name}", asset.name)
+        before = list(asset.reference_images)
+        identity_ref = req.identity_path if req.identity_path in before else (before[0] if before else "")
         width, height = self._REFERENCE_SIZES.get(asset.kind, (1024, 1024))
         guides = self._film.store.captures_dir(project_id) / "angle-guides"
         prompts: list[str] = []
@@ -1458,6 +1462,10 @@ class FilmGenerationHandler(StateHandlerBase):
             name = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in shot.name.strip().lower()) or f"angle-{index + 1}"
             updated = self._film.add_asset_reference(project_id, asset_id, AddAssetReferenceRequest(image_base64=encoded, name_hint=f"{asset.name}-{name}"))
             paths.append(updated.reference_images[-1])
+            # A re-generated angle replaces its earlier image, as the sheet does.
+            for stale in before:
+                if stale != identity_ref and Path(stale).stem.endswith(f"-{asset.name}-{name}") and stale in updated.reference_images:
+                    updated = self._film.delete_asset_reference(project_id, asset_id, stale)
         asset = self._film.get_project(project_id).asset(asset_id)
         assert asset is not None
         if asset.seed_lock is None:
