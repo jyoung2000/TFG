@@ -42,7 +42,7 @@ type SetupState = 'loading' | { needsSetup: boolean; needsLicense: boolean }
 type RequiredModelsGateState = 'checking' | 'missing' | 'ready'
 
 function AppContent() {
-  const { currentView } = useProjects()
+  const { currentView, goHome } = useProjects()
   useGlobalShortcuts()
   const { status, processStatus, isLoading: backendLoading, error: backendError } = useBackend()
   const { settings, saveLtxApiKey, saveFalApiKey, forceApiGenerations, isLoaded, runtimePolicyLoaded, refreshSettings } = useAppSettings()
@@ -57,6 +57,15 @@ function AppContent() {
   const [firstRunFinalizeError, setFirstRunFinalizeError] = useState<string | null>(null)
   const [requiredModelsGate, setRequiredModelsGate] = useState<RequiredModelsGateState>('checking')
   const setupCompletionInFlightRef = useRef<Promise<void> | null>(null)
+
+  // The window menu's app-level items (see electron/menu-template.ts).
+  useEffect(() => {
+    return window.electronAPI?.onMenuAction?.(id => {
+      if (id === 'app/home') goHome()
+      else if (id === 'app/settings') setIsSettingsOpen(true)
+      else if (id === 'app/logs') void window.electronAPI.openLogFolder()
+    })
+  }, [goHome])
 
   type ApiGatewayRequest = {
     requiredKeys: Array<'ltx' | 'fal'>

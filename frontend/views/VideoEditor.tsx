@@ -23,6 +23,7 @@ import { logger } from '../lib/logger'
 import { Tooltip } from '../components/ui/tooltip'
 import { ExportModal } from '../components/ExportModal'
 import { MenuBar, type MenuDefinition } from '../components/MenuBar'
+import { hasNativeMenu, useNativeMenu } from '../lib/nativeMenu'
 import { ImportTimelineModal } from '../components/ImportTimelineModal'
 import { ClipWaveform } from '../components/AudioWaveform'
 // IC-LORA HIDDEN - import { ICLoraPanel } from '../components/ICLoraPanel'
@@ -82,6 +83,7 @@ export function VideoEditor() {
     setActiveTimeline, updateTimeline, getActiveTimeline,
     setCurrentTab, setGenSpaceEditImageUrl, setGenSpaceEditMode, setGenSpaceAudioUrl,
     setGenSpaceRetakeSource, pendingRetakeUpdate, setPendingRetakeUpdate,
+    currentTab,
   } = useProjects()
   const { focusShot } = useFilm()
 
@@ -1703,12 +1705,18 @@ export function VideoEditor() {
   }), [selectedClip, selectedClipIds, clips, tracks, subtitles, snapEnabled, showEffectsBrowser, showSourceMonitor, showPropertiesPanel, _showICLoraPanel, sourceAsset, activeTool, activeTimeline, timelines, handleInsertEdit, handleOverwriteEdit, kbLayout])
 
 
+  // The window's own menu bar carries the editor's menus while it is open
+  // (asked 2026-10-01: File / Edit were repeated - Electron's default menu
+  // above this one); in a plain browser the in-page menu bar stays.
+  const nativeMenu = hasNativeMenu()
+  useNativeMenu(menuDefinitions, currentTab === 'video-editor')
+
   // --- Render ---
   
   return (
     <div className="h-full flex flex-col overflow-hidden">
       {/* Menu Bar */}
-      <MenuBar menus={menuDefinitions} rightContent={
+      <MenuBar menus={nativeMenu ? [] : menuDefinitions} rightContent={
         <div ref={layoutMenuRef} className="relative">
           <button
             onClick={() => setShowLayoutMenu(v => !v)}

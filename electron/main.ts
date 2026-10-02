@@ -7,6 +7,7 @@ import { registerAppHandlers } from './ipc/app-handlers'
 import { registerFileHandlers } from './ipc/file-handlers'
 import { registerLogHandlers } from './ipc/log-handlers'
 import { registerVideoProcessingHandlers } from './ipc/video-processing-handlers'
+import { installAppMenu, registerMenuHandlers } from './menu'
 import { initSessionLog } from './logging-management'
 import { stopPythonBackend } from './python-backend'
 import { initAutoUpdater } from './updater'
@@ -25,6 +26,7 @@ if (!gotLock) {
   registerLogHandlers()
   registerExportHandlers()
   registerVideoProcessingHandlers()
+  registerMenuHandlers()
 
   app.on('second-instance', () => {
     const mainWindow = getMainWindow()
@@ -45,6 +47,9 @@ if (!gotLock) {
 
   app.whenReady().then(async () => {
     setupCSP()
+    // The app's own window menu, not Electron's default (the video editor
+    // swaps in its menus while it is open).
+    installAppMenu(null)
     createWindow()
     initAutoUpdater()
     // Python setup + backend start are now driven by the renderer via IPC

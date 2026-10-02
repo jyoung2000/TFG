@@ -66,6 +66,9 @@ interface Window {
     onPythonSetupProgress: (cb: (data: unknown) => void) => void
     removePythonSetupProgress: () => void
     onBackendHealthStatus: (cb: (data: BackendHealthStatus) => void) => (() => void)
+    /** The window menu: the menus to show (null = the app's own); clicks come back as item ids. */
+    setAppMenu?: (spec: unknown) => void
+    onMenuAction?: (cb: (id: string) => void) => (() => void)
     extractVideoFrame: (videoUrl: string, seekTime: number, width?: number, quality?: number) => Promise<{ path: string; url: string }>
     writeLog: (level: string, message: string) => Promise<void>
     getAnalyticsState: () => Promise<{ analyticsEnabled: boolean; installationId: string }>

@@ -101,6 +101,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   removePythonSetupProgress: () => {
     ipcRenderer.removeAllListeners('python-setup-progress')
   },
+  // The window menu: the page says which menus it wants (null = the app's own)
+  // and hears which item was clicked.
+  setAppMenu: (spec: unknown): void => ipcRenderer.send('set-app-menu', spec),
+  onMenuAction: (cb: (id: string) => void) => {
+    const listener = (_: unknown, id: string) => cb(id)
+    ipcRenderer.on('menu-action', listener)
+    return () => {
+      ipcRenderer.removeListener('menu-action', listener)
+    }
+  },
   onBackendHealthStatus: (cb: (data: BackendHealthStatus) => void) => {
     const listener = (_: unknown, data: BackendHealthStatus) => cb(data)
     ipcRenderer.on('backend-health-status', listener)
