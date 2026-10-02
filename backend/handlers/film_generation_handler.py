@@ -235,6 +235,14 @@ PREVIEW_KEEP = "same face, same hair, same body, same outfit and same lighting a
 PREVIEW_SEED = 7
 PREVIEW_MAX_EDGE = 1024
 FRAME_CAST = "the people from the reference images as the characters, same faces, same hair, same outfits"
+#: The sheet's named views, spelled out: named only, the three-quarter and
+#: profile views came back facing the camera (QA pass 2026-10-02).
+SHEET_VIEW_WORDS = {
+    "front view": "front view, facing the camera",
+    "three-quarter view": "three-quarter view, body and face turned 45 degrees to the side",
+    "profile view": "side profile view, body and face turned 90 degrees, seen exactly from the side",
+    "back view": "back view, seen from behind, facing away from the camera",
+}
 #: "full body" alone still cropped the head and the feet off character views.
 FULL_FIGURE = "full body from head to feet, the whole head and both feet in frame, centered with space above the head and below the feet"
 ANGLE_QUALITY = "photo, sharp focus, detailed face, natural skin texture, plain light grey studio background, soft even studio light"
@@ -1356,7 +1364,7 @@ class FilmGenerationHandler(StateHandlerBase):
         prompts: list[str] = []
         paths: list[str] = []
         for view in views:
-            prompt = ", ".join(p for p in (trigger, base, view, "consistent character sheet, same person, same outfit") if p)
+            prompt = ", ".join(p for p in (trigger, base, SHEET_VIEW_WORDS.get(view, view), "consistent character sheet, same person, same outfit") if p)
             prompts.append(prompt)
             if identity is not None and reference_model:
                 response = handler.generate(

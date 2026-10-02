@@ -204,14 +204,14 @@ function SheetTile({ view, path, onOpen }: { view: string; path: string | null; 
   return (
     <div>
       {path === null ? (
-        <div className="h-40 rounded-lg border border-dashed border-zinc-800 bg-zinc-950 flex items-center justify-center text-[10px] text-zinc-700">not rendered</div>
+        <div className="h-64 rounded-lg border border-dashed border-zinc-800 bg-zinc-950 flex items-center justify-center text-[10px] text-zinc-700">not rendered</div>
       ) : state.status === 'loading' ? (
-        <div className="h-40 rounded-lg bg-zinc-900 animate-pulse" />
+        <div className="h-64 rounded-lg bg-zinc-900 animate-pulse" />
       ) : state.status === 'error' ? (
-        <ThumbError className="h-40 w-full" message={state.message} />
+        <ThumbError className="h-64 w-full" message={state.message} />
       ) : (
         <button type="button" onClick={onOpen} className="block w-full cursor-zoom-in" aria-label={`Open reference image ${path.split('/').pop() ?? ''}`}>
-          <img src={state.url} alt="" loading="lazy" className="h-40 w-full object-cover rounded-lg border border-zinc-800" />
+          <img src={state.url} alt="" loading="lazy" className="h-64 w-full object-contain bg-zinc-950 rounded-lg border border-zinc-800" />
         </button>
       )}
       <span className="block text-center text-[10px] text-zinc-500 mt-1 capitalize">{view.replace(' view', '')}</span>

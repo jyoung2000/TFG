@@ -393,7 +393,7 @@ function KitTile({ label, testid, path, fallback = null, rendering = false, capt
     <div data-testid={testid}>
       <div className={`group relative aspect-[4/3] rounded-lg border ${border} bg-zinc-950 overflow-hidden`}>
         {path && state.status === 'ready' ? (
-          <img src={state.url} alt="" loading="lazy" className="w-full h-full object-cover" />
+          <img src={state.url} alt="" loading="lazy" className="w-full h-full object-contain" />
         ) : path && state.status === 'error' ? (
           <ThumbError className="w-full h-full" message={state.message} />
         ) : path ? (

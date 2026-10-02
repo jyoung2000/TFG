@@ -120,6 +120,17 @@ class TestAngleSet:
         assert set(second["reference_paths"]) <= set(images)
         assert not set(first["reference_paths"]) & set(images), "the old views are gone"
 
+    def test_each_sheet_view_spells_out_the_turn(self, client, test_state, fake_services, create_fake_model_files):
+        # QA pass 2026-10-02: named only ("profile view"), the three-quarter and
+        # profile views came back facing the camera like the front view.
+        create_fake_model_files(include_zit=True)
+        asset = _character(client, test_state, fake_services)
+        url = f"/api/film/projects/{PROJECT}/assets/{asset['id']}/reference-sheet"
+        client.post(url, json={"views": ["three-quarter view", "profile view"], "seed": 9})
+        three_quarter, profile = (p["prompt"] for p in _image_params(fake_services)[-2:])
+        assert "45 degrees" in three_quarter
+        assert "90 degrees" in profile and "from the side" in profile
+
 class TestAssetStudioAndDataset:
     def test_an_asset_keeps_its_3d_studio_scene(self, client, test_state, fake_services):
         asset = client.post(f"/api/film/projects/{PROJECT}/assets", json={"kind": "character", "name": "Mara"}).json()["asset"]
