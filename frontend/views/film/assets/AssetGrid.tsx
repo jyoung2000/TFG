@@ -4,7 +4,7 @@
  * cell. Filters are local state; assets come from the film store.
  */
 
-import { useMemo, useRef, useState } from 'react'
+import { useMemo, useRef, useState, useEffect } from 'react'
 import { Plus } from 'lucide-react'
 import type { FilmAsset, FilmAssetKind } from '../../../types/film'
 import { assetStatus, consistencyOf } from './consistency'
@@ -32,6 +32,15 @@ export function AssetGrid({ assets, onSelect, onRemove, onCreate, onOpenWizard }
   const [consistencyFilter, setConsistencyFilter] = useState<ConsistencyFilter | null>(null)
   const [newMenu, setNewMenu] = useState(false)
   const menuRef = useRef<HTMLDivElement | null>(null)
+  // The New menu closes on a click outside it, or Esc (QA 2026-10-01: it stayed open).
+  useEffect(() => {
+    if (!newMenu) return
+    const onDown = (e: MouseEvent) => { if (menuRef.current && !menuRef.current.contains(e.target as Node)) setNewMenu(false) }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setNewMenu(false) }
+    window.addEventListener('mousedown', onDown)
+    window.addEventListener('keydown', onKey)
+    return () => { window.removeEventListener('mousedown', onDown); window.removeEventListener('keydown', onKey) }
+  }, [newMenu])
 
   const locked = assets.filter(a => consistencyOf(a).locked && a.kind !== 'style').length
   const visible = useMemo(() => {

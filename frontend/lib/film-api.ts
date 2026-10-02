@@ -428,10 +428,11 @@ export const filmApi = {
         ).then(r => r.asset),
 
   /** Render a reference image for an asset with the project's image model. */
-  generateAssetReference: (projectId: string, assetId: string, prompt = '') =>
+  generateAssetReference: (projectId: string, assetId: string, prompt = '', view = '') =>
     request<{ asset: FilmAsset; prompt: string; provider: string; model: string; reference_path: string }>(
       `/api/film/projects/${enc(projectId)}/assets/${enc(assetId)}/generate-reference`,
-      { method: 'POST', body: JSON.stringify({ prompt }) },
+      // `view`: a sheet view this image replaces - the file is named after it so it shows in that tile.
+      { method: 'POST', body: JSON.stringify({ prompt, view }) },
     ),
 
   /** Model list from the configured OpenAI-compatible endpoint (LM Studio, vLLM, …). */

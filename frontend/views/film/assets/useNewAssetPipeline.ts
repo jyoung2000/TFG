@@ -72,7 +72,7 @@ export function useNewAssetPipeline() {
       await step('source', async () => {
         if (!id) {
           const count = film.assets.filter(a => a.kind === input.kind).length
-          const asset = await filmApi.createAsset(film.id, { kind: input.kind, name: input.name.trim() || `${input.kind} ${count + 1}` })
+          const asset = await filmApi.createAsset(film.id, { kind: input.kind, name: input.name.trim() || `${input.kind.charAt(0).toUpperCase()}${input.kind.slice(1)} ${count + 1}` })
           id = asset.id
           setAssetId(asset.id)
         }

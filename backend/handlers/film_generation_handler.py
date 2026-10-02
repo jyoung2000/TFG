@@ -899,7 +899,7 @@ class FilmGenerationHandler(StateHandlerBase):
 
         encoded = base64.b64encode(image_bytes).decode("ascii")
         updated = self._film.add_asset_reference(
-            project_id, asset_id, AddAssetReferenceRequest(image_base64=encoded, name_hint=f"{asset.name}-ai")
+            project_id, asset_id, AddAssetReferenceRequest(image_base64=encoded, name_hint=f"{asset.name}-{req.view.strip().replace(' ', '-') or 'ai'}")
         )
         return GenerateAssetReferenceResponse(
             asset=updated,

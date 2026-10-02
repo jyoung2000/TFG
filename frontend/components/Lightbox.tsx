@@ -7,6 +7,8 @@ export interface LightboxItem {
   label?: string
   /** Optional caption shown under the media (prompt, path, metrics). */
   caption?: string
+  /** The project file it shows, to open the lightbox on it by path. */
+  path?: string
 }
 
 interface LightboxProps {

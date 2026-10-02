@@ -32,6 +32,9 @@ export function NewAssetWizard({ onClose, onDone }: { onClose: () => void; onDon
   const [guideDraft, setGuideDraft] = useState<AssetStyleGuide>(EMPTY_GUIDE)
   const [guideSeeded, setGuideSeeded] = useState(false)
   const [busyTile, setBusyTile] = useState('')
+  // A failed tile action says so (QA 2026-10-01: failures were silent).
+  const [tileError, setTileError] = useState('')
+  const failed = (what: string) => (e: unknown) => setTileError(`${what} failed: ${e instanceof Error ? e.message : String(e)}`)
   const fileInput = useRef<HTMLInputElement | null>(null)
 
   const asset = film?.assets.find(a => a.id === pipeline.assetId) ?? null
@@ -87,36 +90,48 @@ export function NewAssetWizard({ onClose, onDone }: { onClose: () => void; onDon
     if (!film || !pipeline.assetId) return
     if (guideSeeded && asset?.style_guide && JSON.stringify(guideDraft) !== JSON.stringify(asset.style_guide)
       && !window.confirm('Re-extract the style guide? Your manual edits are overwritten.')) return
+    setTileError('')
     void filmApi.generateAssetStyleGuide(film.id, pipeline.assetId).then(async updated => {
       await refresh()
       if (updated.style_guide) setGuideDraft(updated.style_guide)
-    })
+    }).catch(failed('Re-extracting the style guide'))
   }
 
   const regenerateView = async (view: string) => {
     if (!film || !pipeline.assetId) return
     setBusyTile(view)
+    setTileError('')
     try {
       const prompt = [asset?.style_guide?.recommended_prompt ?? '', view, 'consistent character sheet, same person, same outfit'].filter(Boolean).join(', ')
-      await filmApi.generateAssetReference(film.id, pipeline.assetId, prompt)
+      // Named after its view, so the new image takes that tile (QA 2026-10-01: it became a loose extra).
+      await filmApi.generateAssetReference(film.id, pipeline.assetId, prompt, view)
       await refresh()
-    } finally { setBusyTile('') }
+    } catch (e) { failed(`Regenerating the ${view}`)(e) } finally { setBusyTile('') }
   }
 
   const deleteRef = async (path: string) => {
     if (!film || !pipeline.assetId) return
-    await filmApi.deleteAssetReference(film.id, pipeline.assetId, path)
-    await refresh()
+    setTileError('')
+    try {
+      await filmApi.deleteAssetReference(film.id, pipeline.assetId, path)
+      await refresh()
+    } catch (e) { failed('Removing the image')(e) }
   }
 
-  const replaceRef = (path: string) => {
+  const replaceRef = (path: string, view?: string) => {
     if (!film || !pipeline.assetId) return
     const input = document.createElement('input'); input.type = 'file'; input.accept = 'image/png,image/jpeg,image/webp'
     input.onchange = async () => {
       const file = input.files?.[0]; if (!file || !film || !pipeline.assetId) return
-      await filmApi.deleteAssetReference(film.id, pipeline.assetId, path)
-      await filmApi.addAssetReference(film.id, pipeline.assetId, await readFileAsDataUrl(file), file.name)
-      await refresh()
+      setTileError('')
+      try {
+        // A sheet view's replacement is named after the view, so it stays in that tile
+        // (QA 2026-10-01: it kept the upload's name and the tile went empty).
+        const nameHint = view ? `${asset?.name ?? 'asset'}-${view.replace(/ /g, '-')}` : file.name
+        await filmApi.addAssetReference(film.id, pipeline.assetId, await readFileAsDataUrl(file), nameHint)
+        await filmApi.deleteAssetReference(film.id, pipeline.assetId, path)
+        await refresh()
+      } catch (e) { failed('Replacing the image')(e) }
     }
     input.click()
   }
@@ -126,8 +141,11 @@ export function NewAssetWizard({ onClose, onDone }: { onClose: () => void; onDon
     const input = document.createElement('input'); input.type = 'file'; input.accept = 'image/png,image/jpeg,image/webp'
     input.onchange = async () => {
       const file = input.files?.[0]; if (!file || !film || !pipeline.assetId) return
-      await filmApi.addAssetReference(film.id, pipeline.assetId, await readFileAsDataUrl(file), file.name)
-      await refresh()
+      setTileError('')
+      try {
+        await filmApi.addAssetReference(film.id, pipeline.assetId, await readFileAsDataUrl(file), file.name)
+        await refresh()
+      } catch (e) { failed('Adding the image')(e) }
     }
     input.click()
   }
@@ -299,7 +317,7 @@ export function NewAssetWizard({ onClose, onDone }: { onClose: () => void; onDon
                         rendering={pipeline.steps[2].status === 'running' || busyTile === view} caption={local ? 'local · one seed' : `${provider} · one seed`}
                         actions={path ? {
                           regenerate: () => void regenerateView(view),
-                          replace: () => replaceRef(path),
+                          replace: () => replaceRef(path, view),
                           remove: () => void deleteRef(path),
                         } : undefined} />
                     )
@@ -309,6 +327,7 @@ export function NewAssetWizard({ onClose, onDone }: { onClose: () => void; onDon
                   <ImagePlus className="h-4 w-4" /><span className="text-[10px]">Add image</span>
                 </button>
               </div>
+              {tileError && <p className="text-[11px] text-red-300" role="alert" data-testid="wizard-tile-error">{tileError}</p>}
             </section>
           </div>
 

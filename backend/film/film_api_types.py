@@ -97,6 +97,9 @@ class GenerateAssetReferenceRequest(BaseModel):
     project's image model. An empty prompt is synthesized from the asset."""
 
     prompt: str = ""
+    #: A reference-sheet view this image replaces ("front view"...): the file is
+    #: named after it so the sheet shows it in that view's place.
+    view: str = ""
 
 
 class GenerateAssetReferenceResponse(BaseModel):

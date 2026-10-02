@@ -34,26 +34,40 @@ export function AssetsPanel() {
   const studioAsset = studioId ? (film?.assets.find(a => a.id === studioId) ?? null) : null
   const lightboxItems = useReferenceUrls(selected)
   useEffect(() => { setLightboxIndex(null) }, [selected?.id])
+  // By path: a reference that fails to load is left out of the lightbox, so an
+  // index into the asset's list pointed at the wrong image (QA 2026-10-01).
+  const openLightbox = useCallback((path: string) => {
+    const index = lightboxItems.findIndex(item => item.path === path)
+    if (index >= 0) setLightboxIndex(index)
+  }, [lightboxItems])
+  const [note, setNote] = useState('')
 
   const create = useCallback(async (kind: FilmAssetKind) => {
     if (!film) return
     const count = film.assets.filter(a => a.kind === kind).length
-    const asset = await filmApi.createAsset(film.id, { kind, name: KIND_META[kind].label + ' ' + (count + 1) })
-    await refresh()
-    setView({ kind: 'detail', id: asset.id })
+    setNote('')
+    try {
+      const asset = await filmApi.createAsset(film.id, { kind, name: KIND_META[kind].label + ' ' + (count + 1) })
+      await refresh()
+      setView({ kind: 'detail', id: asset.id })
+    } catch (e) { setNote('Could not create the asset: ' + (e instanceof Error ? e.message : String(e))) }
   }, [film, refresh])
 
   const remove = useCallback(async (asset: FilmAsset) => {
     if (!film || !window.confirm('Delete ' + asset.name + '?')) return
-    await filmApi.deleteAsset(film.id, asset.id)
-    setView(current => (current.kind === 'detail' && current.id === asset.id ? { kind: 'grid' } : current))
-    await refresh()
+    setNote('')
+    try {
+      await filmApi.deleteAsset(film.id, asset.id)
+      setView(current => (current.kind === 'detail' && current.id === asset.id ? { kind: 'grid' } : current))
+      await refresh()
+    } catch (e) { setNote('Could not delete ' + asset.name + ': ' + (e instanceof Error ? e.message : String(e))) }
   }, [film, refresh])
 
   if (!film) return null
 
   return (
     <div className="h-full min-h-0 relative">
+      {note && <p className="absolute top-2 right-3 z-20 rounded bg-red-950/90 border border-red-800 px-2 py-1 text-[11px] text-red-200" role="alert">{note}</p>}
       {view.kind === 'grid' && (
         <AssetGrid assets={film.assets}
           onSelect={id => setView({ kind: 'detail', id })}
@@ -62,7 +76,7 @@ export function AssetsPanel() {
           onOpenWizard={() => setView({ kind: 'wizard' })} />
       )}
       {view.kind === 'detail' && selected && (
-        <AssetDetail asset={selected} onBack={() => setView({ kind: 'grid' })} onOpenLightbox={setLightboxIndex} onOpenStudio={() => setStudioId(selected.id)} />
+        <AssetDetail asset={selected} onBack={() => setView({ kind: 'grid' })} onOpenLightbox={openLightbox} onOpenStudio={() => setStudioId(selected.id)} />
       )}
       {view.kind === 'detail' && !selected && (
         // The asset vanished under us (deleted elsewhere) — fall back home.

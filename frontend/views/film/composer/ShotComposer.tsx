@@ -791,6 +791,9 @@ export function ShotComposer({ projectId, scene, shot, onClose, studio }: ShotCo
   // Multi-angle shots of a character for consistency / LoRA training: the
   // posed figure is rendered from every chosen angle (pose, camera, framing)
   // and each render guides an image of the asset's person from that angle.
+  // A multi-angle set needs a figure linked to a character asset (QA 2026-10-01:
+  // a prop's studio offered it, and it could only ever fail).
+  const hasAngleFigure = objects.some(o => o.type === 'figure' && !!o.asset_id)
   const generateAngles = useCallback(async () => {
     const composer = sceneRef.current
     const figure = objects.find(o => o.type === 'figure' && o.id === selectedId && o.asset_id) ?? objects.find(o => o.type === 'figure' && o.asset_id)
@@ -1554,8 +1557,13 @@ export function ShotComposer({ projectId, scene, shot, onClose, studio }: ShotCo
             )}
           </Section>
 
-          <Section title="Multi-angle set" badge="LoRA" defaultOpen={Boolean(studio)}>
+          <Section title="Multi-angle set" badge="LoRA" defaultOpen={Boolean(studio) && hasAngleFigure}>
             <div className="space-y-2" data-testid="composer-angle-set">
+              {!hasAngleFigure && (
+                <p className="text-[11px] text-amber-300" data-testid="angle-set-needs-figure">
+                  A multi-angle set is rendered of a character: add a figure linked to a character asset (props and locations have none).
+                </p>
+              )}
               <p className="text-[11px] text-zinc-400">
                 Pose the figure, pick angles, and each angle is rendered from the 3D camera and turned into an image of the character’s asset — consistent shots to train a LoRA.
               </p>
@@ -1582,7 +1590,7 @@ export function ShotComposer({ projectId, scene, shot, onClose, studio }: ShotCo
                   </label>
                 ))}
               </div>
-              <Button size="sm" disabled={anyBusy || angleChoice.size === 0} onClick={() => void generateAngles()} className="w-full gap-1.5" data-testid="composer-generate-angles">
+              <Button size="sm" disabled={anyBusy || angleChoice.size === 0 || !hasAngleFigure} onClick={() => void generateAngles()} className="w-full gap-1.5" data-testid="composer-generate-angles">
                 {busy === 'angles' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Camera className="h-3.5 w-3.5" />}
                 {busy === 'angles' ? 'Rendering angles…' : `Generate ${angleChoice.size} angle shots`}
               </Button>

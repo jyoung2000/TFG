@@ -5,6 +5,7 @@
  * the asset is used. All handlers are the pre-redesign ones.
  */
 
+import { commitNumber } from '../settingsNumber'
 import { assetUpdates, type AssetEdits, type AssetTextField } from './assetEdits'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ArrowLeft, Box, Check, Copy, GraduationCap, ImagePlus, Layers, Loader2, Lock, Plus, Sparkles, Wand2, X } from 'lucide-react'
@@ -21,7 +22,7 @@ import { GalleryThumb, KIND_FIELDS, KIND_META, ThumbError, inputClass, readFileA
 export function AssetDetail({ asset, onBack, onOpenLightbox, onOpenStudio }: {
   asset: FilmAsset
   onBack: () => void
-  onOpenLightbox: (index: number) => void
+  onOpenLightbox: (path: string) => void
   /** Open the 3D composer on this asset (pose it, multi-angle shots for a LoRA). */
   onOpenStudio?: () => void
 }) {
@@ -107,7 +108,7 @@ export function AssetDetail({ asset, onBack, onOpenLightbox, onOpenStudio }: {
   }, [film, asset.id, refresh])
 
   if (!film) return null
-  const openPath = (path: string) => onOpenLightbox(Math.max(0, asset.reference_images.indexOf(path)))
+  const openPath = (path: string) => onOpenLightbox(path)
 
   return (
     <div className="flex flex-col h-full min-h-0" data-testid="asset-detail">
@@ -255,7 +256,7 @@ function InheritedPromptCard({ asset, film }: { asset: FilmAsset; film: FilmProj
         <span className="flex-1" />
         {asset.reference_images.length > 0 && <span className="px-1.5 py-0.5 rounded bg-zinc-900 text-zinc-400">LTX-2 · image_refs ✓</span>}
         <span className="px-1.5 py-0.5 rounded bg-zinc-900 text-zinc-400">Wan 2.2 VACE · guide video ✓</span>
-        {loraFile && <span className="px-1.5 py-0.5 rounded bg-zinc-900 text-zinc-400">{asset.lora_trigger || 'LoRA'} @ {asset.lora_multiplier}</span>}
+        {loraFile && <span className="px-1.5 py-0.5 rounded bg-zinc-900 text-zinc-400">{asset.lora_trigger || 'LoRA'} @ {asset.lora_multiplier ?? 1}</span>}
       </div>
     </section>
   )
@@ -322,10 +323,11 @@ function ConsistencyKit({ film, asset, refresh, setNote }: { film: FilmProject; 
   const [loras, setLoras] = useState<LoraEntry[]>([])
   const [busy, setBusy] = useState(false)
   const [seedDraft, setSeedDraft] = useState(asset.seed_lock === null ? '' : String(asset.seed_lock))
-  const [multiplier, setMultiplier] = useState(asset.lora_multiplier || 1)
+  // Text, committed on leaving the field: clearing it saved 0 but showed 1 (QA 2026-10-01).
+  const [multiplier, setMultiplier] = useState(String(asset.lora_multiplier ?? 1))
   const [trigger, setTrigger] = useState(asset.lora_trigger)
   useEffect(() => { trainingApi.listLoras().then(setLoras).catch(() => setLoras([])) }, [])
-  useEffect(() => { setSeedDraft(asset.seed_lock === null ? '' : String(asset.seed_lock)); setMultiplier(asset.lora_multiplier || 1); setTrigger(asset.lora_trigger) }, [asset.id, asset.seed_lock, asset.lora_multiplier, asset.lora_trigger])
+  useEffect(() => { setSeedDraft(asset.seed_lock === null ? '' : String(asset.seed_lock)); setMultiplier(String(asset.lora_multiplier ?? 1)); setTrigger(asset.lora_trigger) }, [asset.id, asset.seed_lock, asset.lora_multiplier, asset.lora_trigger])
   const c = consistencyOf(asset)
 
   const update = async (data: Record<string, unknown>, note: string) => {
@@ -369,7 +371,7 @@ function ConsistencyKit({ film, asset, refresh, setNote }: { film: FilmProject; 
           {asset.lora_id && (
             <>
               <input value={trigger} disabled={busy} onChange={e => setTrigger(e.target.value)} onBlur={() => { if (trigger !== asset.lora_trigger) void update({ lora_trigger: trigger }, 'Trigger saved') }} aria-label="LoRA trigger word" placeholder="trigger" className="w-24 bg-violet-950/40 border border-violet-800 rounded-full px-2 py-0.5 text-[11px] text-violet-200" />
-              <input type="number" step="0.05" min="0" max="2" value={multiplier} disabled={busy} onChange={e => setMultiplier(Number(e.target.value))} onBlur={() => { if (multiplier !== asset.lora_multiplier) void update({ lora_multiplier: multiplier }, 'Strength saved') }} aria-label="LoRA strength" className="w-14 bg-zinc-900 border border-zinc-700 rounded px-1.5 py-0.5 text-[11px] text-zinc-200" />
+              <input type="number" step="0.05" min="0" max="2" value={multiplier} disabled={busy} onChange={e => setMultiplier(e.target.value)} onBlur={() => { const next = commitNumber(multiplier, asset.lora_multiplier ?? 1, { min: 0, max: 2 }); if (next === null) setMultiplier(String(asset.lora_multiplier ?? 1)); else void update({ lora_multiplier: next }, 'Strength saved') }} aria-label="LoRA strength" className="w-14 bg-zinc-900 border border-zinc-700 rounded px-1.5 py-0.5 text-[11px] text-zinc-200" />
             </>
           )}
         </div>

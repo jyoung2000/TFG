@@ -110,7 +110,7 @@ export function useReferenceUrls(asset: FilmAsset | null): LightboxItem[] {
     let cancelled = false
     if (!filmId || !paths.length) { setItems([]); return }
     void Promise.all(paths.map(async (p): Promise<LightboxItem | null> => {
-      try { return { url: await filmMediaUrl(filmId, p), kind: 'image', label: p.split('/').pop() ?? p } }
+      try { return { url: await filmMediaUrl(filmId, p), kind: 'image', label: p.split('/').pop() ?? p, path: p } }
       catch { return null }
     })).then(resolved => { if (!cancelled) setItems(resolved.filter((x): x is LightboxItem => x !== null)) })
     return () => { cancelled = true }
