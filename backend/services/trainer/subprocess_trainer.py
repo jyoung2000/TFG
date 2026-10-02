@@ -58,6 +58,19 @@ def parse_progress_line(line: str) -> tuple[int, int, float | None, float | None
     return step_total[0], step_total[1], loss, eta
 
 
+def training_step(line: str, total: int) -> tuple[int, int, float | None, float | None] | None:
+    """The run's own progress: a bar counting to the run's step total. Other
+    bars (loading shards, denoising a sample) also read "N/M [" - one froze
+    Raven's run at 521 of 1100, since the step only goes up (2026-10-02)."""
+    parsed = parse_progress_line(line)
+    return parsed if parsed is not None and parsed[1] == total else None
+
+
+def sample_images(work_dir: Path) -> list[Path]:
+    """Sample renders: musubi writes them to `sample/`, ai-toolkit's config to `samples/`."""
+    return sorted(p for folder in ("samples", "sample") for p in (work_dir / folder).glob("*.png"))
+
+
 TRAINER_ROOT_ENV = "TFG_TRAINER_ROOT"
 
 
@@ -182,14 +195,14 @@ class SubprocessTrainer:
                     return TrainingOutcome(status="cancelled", steps_done=steps_done, final_loss=last_loss, log_tail="\n".join(tail))
                 if phase != "training":
                     continue
-                parsed = parse_progress_line(line)
+                parsed = training_step(line, request.steps)
                 if parsed is None:
                     continue
                 step, total, loss, eta = parsed
                 steps_done = max(steps_done, step)
                 if loss is not None:
                     last_loss = loss
-                fresh = sorted(p for p in samples_dir.glob("*.png") if str(p) not in seen_samples)
+                fresh = [p for p in sample_images(work_dir) if str(p) not in seen_samples]
                 seen_samples.update(str(p) for p in fresh)
                 on_progress(TrainingProgress(step=step, total=total or request.steps, loss=loss, eta_seconds=eta, phase="training", samples=[str(p) for p in fresh]))
             code = self._process.wait()
@@ -199,6 +212,8 @@ class SubprocessTrainer:
         lora = self._find_lora(request)
         if lora is None:
             return TrainingOutcome(status="failed", steps_done=steps_done, final_loss=last_loss, log_tail="\n".join(tail) + "\nNo .safetensors was written.")
+        # A last sweep: musubi samples at the final step, after the last progress line.
+        seen_samples.update(str(p) for p in sample_images(work_dir))
         return TrainingOutcome(status="complete", lora_path=str(lora), steps_done=max(steps_done, request.steps), final_loss=last_loss, samples=sorted(seen_samples), log_tail="\n".join(tail))
 
     def _find_lora(self, request: TrainingRequest) -> Path | None:

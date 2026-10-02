@@ -17,7 +17,7 @@ from PIL import Image
 from film.training_models import LORA_TARGETS
 from film.training_presets import default_config, fits_machine
 from services.trainer.catalog import MACHINE_VRAM_MB, trainer_for, trainers_for_target
-from services.trainer.subprocess_trainer import AiToolkitTrainer, MusubiTrainer, parse_progress_line
+from services.trainer.subprocess_trainer import AiToolkitTrainer, MusubiTrainer, parse_progress_line, sample_images, training_step
 from services.trainer.trainer import TrainerUnavailable, TrainingRequest
 from services.wangp_bridge import WanGPBridge
 
@@ -587,3 +587,21 @@ class TestSubprocessTrainers:
         parsed = parse_progress_line("mara:  10%|█ | 100/1000 [00:30<04:30,  3.33it/s, lr: 1.0e-04 loss: 3.210e-01]")
         assert parsed is not None and parsed[:3] == (100, 1000, 0.321)
         assert parse_progress_line("loading model") is None
+
+    def test_samples_are_found_where_musubi_writes_them(self, tmp_path: Path):
+        """musubi saves sample renders to <output>/sample/; the app looked only in
+        samples/, so a run's samples never showed (MEASURED 2026-10-02)."""
+        (tmp_path / "sample").mkdir()
+        (tmp_path / "samples").mkdir()
+        (tmp_path / "sample" / "raven_e000000_00.png").write_bytes(b"x")
+        (tmp_path / "samples" / "toolkit.png").write_bytes(b"x")
+        assert {p.name for p in sample_images(tmp_path)} == {"raven_e000000_00.png", "toolkit.png"}
+
+    def test_only_the_training_bar_moves_the_step(self):
+        """MEASURED 2026-10-02 (Raven's run): the step froze at 521 of 1100 while the
+        GPU trained - another progress bar ("N/M [") matched, and the step only
+        ever goes up. Only a bar counting to the run's own total is the run."""
+        assert training_step("Loading checkpoint shards: 100%|##########| 521/521 [00:03<00:00]", 1100) is None
+        assert training_step("100%|##########| 20/20 [00:09<00:00,  2.1it/s]", 1100) is None
+        parsed = training_step("steps:  10%|#         | 110/1100 [01:00<09:00,  1.83it/s, avr_loss=0.12]", 1100)
+        assert parsed is not None and parsed[:3] == (110, 1100, 0.12)
