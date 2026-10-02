@@ -542,6 +542,27 @@ class TestSubprocessTrainers:
         assert (work / "dataset.toml").read_text().count("[[datasets]]") == 1
         assert (work / "sample_prompts.txt").read_text().startswith("mara_v1")
 
+    def test_musubi_z_image_commands_use_only_flags_its_scripts_accept(self, tmp_path: Path):
+        """MEASURED 2026-10-02, Raven's LoRA on musubi-tuner: "zimage_cache_latents.py:
+        error: unrecognized arguments: --vae_cache_cpu" - only the Wan scripts have it.
+        Every other flag was checked against each script's --help."""
+        weights = {}
+        for name in ("dit", "vae", "text_encoder"):
+            path = tmp_path / f"{name}.safetensors"
+            path.write_bytes(b"w")
+            weights[name] = str(path)
+        work = tmp_path / "work"
+        work.mkdir()
+        cache_latents = MusubiTrainer(tmp_path).build_command(self._request(tmp_path, weights=weights), work)[0]
+        assert "--vae_cache_cpu" not in cache_latents
+
+    def test_the_trainer_speaks_utf8_to_the_app(self, tmp_path: Path):
+        """On Windows a piped child writes cp1252, and musubi's non-ASCII output
+        (its --help crashed with UnicodeEncodeError, MEASURED) would kill a run;
+        the app reads the pipe as UTF-8."""
+        env = MusubiTrainer(tmp_path).child_env()
+        assert env["PYTHONIOENCODING"] == "utf-8" and env["PYTHONUTF8"] == "1" and env["PYTHONUNBUFFERED"] == "1"
+
     def test_musubi_refuses_wan22_and_missing_weights(self, tmp_path: Path):
         trainer = MusubiTrainer(tmp_path)
         with pytest.raises(TrainerUnavailable, match="24 GB"):

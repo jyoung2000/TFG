@@ -112,6 +112,12 @@ class SubprocessTrainer:
     def upstream_dir(self) -> Path:
         return self._backend_root / f".trainer-{self.spec.id}"
 
+    def child_env(self) -> dict[str, str]:
+        """The trainer's environment: unbuffered, and UTF-8 on the pipe - on
+        Windows a piped child writes cp1252, and non-ASCII output (musubi's
+        --help crashed with UnicodeEncodeError, 2026-10-02) would kill a run."""
+        return {**os.environ, "PYTHONUNBUFFERED": "1", "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"}
+
     def available(self) -> tuple[bool, str]:
         if not self.spec.fits_12gb:
             return False, f"{self.spec.name} needs ~{self.spec.image_vram_mb // 1024} GB of VRAM; this machine has 12 GB. {self.spec.notes}"
@@ -159,7 +165,7 @@ class SubprocessTrainer:
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                env={**os.environ, "PYTHONUNBUFFERED": "1"},
+                env=self.child_env(),
             )
             assert self._process.stdout is not None
             for raw in self._process.stdout:
@@ -263,7 +269,8 @@ class MusubiTrainer(SubprocessTrainer):
         src = self.upstream_dir / "src" / "musubi_tuner"
         py = str(self.python)
         common = ["--dataset_config", str(toml), "--vae", vae]
-        cache_latents = [py, str(src / scripts["cache_latents"]), *common, "--vae_cache_cpu"]
+        # Only the Wan latent cacher has --vae_cache_cpu; Z-Image's refused it (2026-10-02).
+        cache_latents = [py, str(src / scripts["cache_latents"]), *common, *(["--vae_cache_cpu"] if request.target == "wan22" else [])]
         cache_text = [py, str(src / scripts["cache_text"]), "--dataset_config", str(toml), "--text_encoder", text_encoder, scripts["te_flag"], "--batch_size", "4"]
         train = [
             py, "-m", "accelerate.commands.launch", "--num_cpu_threads_per_process", "1", "--mixed_precision", "bf16",
