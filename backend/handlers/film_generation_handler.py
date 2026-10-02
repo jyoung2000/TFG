@@ -1526,18 +1526,25 @@ class FilmGenerationHandler(StateHandlerBase):
         model = handler.reference_model()
         if model is None:
             raise HTTPError(400, "Live previews need FLUX.2 Klein installed (Settings → AI Models)")
-        try:
-            photo = self._film.store.resolve_media_path(project_id, req.reference_path)
-        except HTTPError:
-            raise
-        except Exception as exc:  # noqa: BLE001 - an escaping or malformed path
-            raise HTTPError(400, f"The photo is not part of this project: {exc}") from exc
-        if not photo.is_file():
-            raise HTTPError(404, "The original photo is no longer on disk")
+        folder = self._film.store.captures_dir(project_id) / "previews"
+        if req.reference_path:
+            try:
+                photo = self._film.store.resolve_media_path(project_id, req.reference_path)
+            except HTTPError:
+                raise
+            except Exception as exc:  # noqa: BLE001 - an escaping or malformed path
+                raise HTTPError(400, f"The photo is not part of this project: {exc}") from exc
+            if not photo.is_file():
+                raise HTTPError(404, "The original photo is no longer on disk")
+        elif req.reference_base64:
+            folder.mkdir(parents=True, exist_ok=True)
+            photo = folder / "pose-original.png"
+            photo.write_bytes(_decode_image(req.reference_base64))
+        else:
+            raise HTTPError(400, "A preview needs the original photo or frame to keep")
         scale = min(1.0, PREVIEW_MAX_EDGE / max(1, req.width, req.height))
         width = max(256, int(req.width * scale) // 16 * 16)
         height = max(256, int(req.height * scale) // 16 * 16)
-        folder = self._film.store.captures_dir(project_id) / "previews"
         folder.mkdir(parents=True, exist_ok=True)
         guide = folder / "pose-guide.png"
         guide.write_bytes(_decode_image(req.guide_base64))

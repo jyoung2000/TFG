@@ -219,6 +219,17 @@ class TestDirectorCompositionTools:
         assert "locked" in refused["error"]
         assert _get_shot(client, shot_id)["composition"]["objects"][0]["transform"]["position"][0] == 1
 
+    def test_the_camera_move_intensity_is_kept_with_the_composition(self, client):
+        # QA pass 2026-10-01 (composer): the Motion intensity slider reset to 1x
+        # every time the shot was reopened.
+        scene_id, shot_id, _, _ = self._two_character_shot(client)
+        _command(client, "position_object", shot_id=shot_id, target="Mara", x=1)
+        composition = _get_shot(client, shot_id)["composition"]
+        assert composition["move_intensity"] == 1.0
+        composition["move_intensity"] = 1.8
+        _update(client, scene_id, shot_id, composition=composition)
+        assert _get_shot(client, shot_id)["composition"]["move_intensity"] == 1.8
+
     def test_unknown_target_and_bad_hint(self, client):
         _, shot_id, _, _ = self._two_character_shot(client)
         missing = _command(client, "position_object", shot_id=shot_id, target="Nobody", x=1)

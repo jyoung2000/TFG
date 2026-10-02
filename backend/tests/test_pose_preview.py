@@ -92,3 +92,19 @@ class TestPosePreview:
         photo = _photo(client)
         response = client.post(f"/api/film/projects/{PROJECT}/preview-render", json={"guide_base64": _png((1, 2, 3)), "reference_path": photo})
         assert response.status_code == 400 and "FLUX.2" in response.text
+
+    def test_a_video_frame_with_no_cast_photo_is_sent_as_pixels(self, client, test_state, fake_services, create_fake_model_files):
+        # QA pass 2026-10-01 (composer): a shot seeded from a video analysis,
+        # with no cast image, had no project file to keep - the preview never ran.
+        create_fake_model_files(include_zit=True)
+        _wangp(test_state, fake_services)
+        response = client.post(f"/api/film/projects/{PROJECT}/preview-render", json={"guide_base64": _png((200, 90, 40)), "reference_base64": _png((10, 120, 60))})
+        assert response.status_code == 200, response.text
+        params = [m[0]["params"] for m in fake_services.wangp_bridge.manifests if "image_mode" in m[0]["params"]][-1]
+        assert len(params["image_refs"]) == 2
+
+    def test_a_preview_needs_an_original(self, client, test_state, fake_services, create_fake_model_files):
+        create_fake_model_files(include_zit=True)
+        _wangp(test_state, fake_services)
+        response = client.post(f"/api/film/projects/{PROJECT}/preview-render", json={"guide_base64": _png((1, 2, 3))})
+        assert response.status_code == 400 and "original" in response.text

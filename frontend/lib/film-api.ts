@@ -167,7 +167,7 @@ export const filmApi = {
   /** A throwaway preview of the photo as the 3D model is now posed. */
   previewRender: (
     projectId: string,
-    data: { guide_base64: string; reference_path: string; prompt: string; pose?: string; width: number; height: number; seed?: number },
+    data: { guide_base64: string; reference_path?: string; reference_base64?: string; prompt: string; pose?: string; width: number; height: number; seed?: number },
   ) =>
     request<{ image: string; seconds: number; model: string }>(`/api/film/projects/${enc(projectId)}/preview-render`, {
       method: 'POST',

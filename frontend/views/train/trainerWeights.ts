@@ -30,3 +30,22 @@ export function weightStatus(weights: Record<string, Record<string, string>> | u
     blocker: needed.length ? `Set the model files for this target (Trainer settings): ${needed.map(r => r.label).join(', ')}.` : '',
   }
 }
+
+/**
+ * A trainer's header chip (QA pass 2026-10-01): it said "ready" for an
+ * installed trainer whose model files were never set, while Start stayed off.
+ * Ready means installed and at least one target has every file it needs.
+ */
+export function trainerChip(
+  trainer: { installed: boolean; fits_12gb: boolean; reason: string; notes: string; targets: string[] },
+  weights: Record<string, Record<string, string>> | undefined,
+): { text: string; tone: 'ready' | 'idle' | 'warn'; title: string } {
+  if (!trainer.installed) {
+    return trainer.fits_12gb
+      ? { text: 'not installed', tone: 'idle', title: trainer.reason || trainer.notes }
+      : { text: 'needs more than 12 GB', tone: 'warn', title: trainer.reason || trainer.notes }
+  }
+  const statuses = trainer.targets.map(target => weightStatus(weights, target))
+  if (statuses.length === 0 || statuses.some(status => status.ready)) return { text: 'ready', tone: 'ready', title: trainer.notes }
+  return { text: 'needs model files', tone: 'warn', title: statuses[0].blocker }
+}

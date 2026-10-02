@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { weightStatus } from './trainerWeights'
+import { trainerChip, weightStatus } from './trainerWeights'
 
 /* QA pass 2026-10-01 (LoRA trainer). Nothing in the app set the trainer's
  * model files: Start was enabled and a musubi run failed minutes in with
@@ -30,5 +30,22 @@ describe('weightStatus', () => {
   it('a target that loads by model name (FLUX via ai-toolkit) needs no file', () => {
     expect(weightStatus({ flux: { name_or_path: '' } }, 'flux').ready).toBe(true)
     expect(weightStatus({}, 'flux').ready).toBe(true)
+  })
+})
+
+describe('trainerChip', () => {
+  const musubi = { installed: true, fits_12gb: true, reason: '', notes: '', targets: ['wan', 'ltx'] }
+  it('is not "ready" while no target has its model files', () => {
+    const chip = trainerChip(musubi, { wan: { dit: '', vae: '' }, ltx: { dit: 'missing: D:/x.safetensors' } })
+    expect(chip.text).toBe('needs model files')
+    expect(chip.tone).toBe('warn')
+  })
+  it('is ready once one target has every file, or needs none', () => {
+    expect(trainerChip(musubi, { wan: { dit: 'D:/dit.safetensors', vae: 'D:/vae.safetensors' }, ltx: { dit: '' } }).text).toBe('ready')
+    expect(trainerChip({ ...musubi, targets: ['flux'] }, {}).text).toBe('ready')
+  })
+  it('says why a trainer is unavailable', () => {
+    expect(trainerChip({ ...musubi, installed: false }, {}).text).toBe('not installed')
+    expect(trainerChip({ ...musubi, installed: false, fits_12gb: false }, {}).text).toBe('needs more than 12 GB')
   })
 })

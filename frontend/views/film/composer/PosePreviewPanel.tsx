@@ -17,6 +17,17 @@ import type { ComposerScene } from './composerScene'
 /** Long side of a preview render: quick enough to feel live (~5 s on a 4070). */
 const PREVIEW_EDGE = 768
 
+/** An image URL's pixels as a data URL. */
+async function imageAsDataUrl(url: string): Promise<string> {
+  const blob = await (await fetch(url)).blob()
+  return await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(String(reader.result))
+    reader.onerror = () => reject(reader.error ?? new Error('Could not read the original frame'))
+    reader.readAsDataURL(blob)
+  })
+}
+
 interface Props {
   projectId: string
   shot: FilmShot
@@ -33,6 +44,9 @@ export function PosePreviewPanel({ projectId, shot, film, getComposer, editTick,
   const [originalUrl, setOriginalUrl] = useState('')
   const [originalAspect, setOriginalAspect] = useState(9 / 16)
   const [photoPath, setPhotoPath] = useState('')
+  // A video frame with no cast photo is not a project file: its pixels are
+  // sent instead (QA 2026-10-01: the preview never ran for such shots).
+  const hasOriginal = !!(photoPath || originalUrl)
   const [preview, setPreview] = useState('')
   const [status, setStatus] = useState('')
   const [rendering, setRendering] = useState(false)
@@ -76,7 +90,7 @@ export function PosePreviewPanel({ projectId, shot, film, getComposer, editTick,
 
   const renderPreview = useCallback(async () => {
     const composer = getComposer()
-    if (!composer || !photoPath) return
+    if (!composer || !hasOriginal) return
     const width = originalAspect >= 1 ? PREVIEW_EDGE : Math.round(PREVIEW_EDGE * originalAspect)
     const height = originalAspect >= 1 ? Math.round(PREVIEW_EDGE / originalAspect) : PREVIEW_EDGE
     setRendering(true)
@@ -85,7 +99,8 @@ export function PosePreviewPanel({ projectId, shot, film, getComposer, editTick,
       // The viewfinder at the photo's shape: the same framing the photo has.
       const guide = composer.capture(width, height)
       const pose = composer.describePose(baseline)
-      const result = await filmApi.previewRender(projectId, { guide_base64: guide, reference_path: photoPath, prompt, pose, width, height })
+      const original = photoPath ? { reference_path: photoPath } : { reference_base64: await imageAsDataUrl(originalUrl) }
+      const result = await filmApi.previewRender(projectId, { guide_base64: guide, ...original, prompt, pose, width, height })
       setPreview(result.image)
       setStatus(`Updated in ${result.seconds.toFixed(1)} s`)
     } catch (e) {
@@ -93,7 +108,7 @@ export function PosePreviewPanel({ projectId, shot, film, getComposer, editTick,
     } finally {
       setRendering(false)
     }
-  }, [getComposer, photoPath, originalAspect, projectId, prompt, baseline])
+  }, [getComposer, hasOriginal, photoPath, originalUrl, originalAspect, projectId, prompt, baseline])
 
   const renderRef = useRef(renderPreview)
   renderRef.current = renderPreview
@@ -103,8 +118,8 @@ export function PosePreviewPanel({ projectId, shot, film, getComposer, editTick,
 
   // Live: every edit re-renders once the edits pause.
   useEffect(() => {
-    if (editTick > 0 && live && open && photoPath) schedulerRef.current?.edited()
-  }, [editTick, live, open, photoPath])
+    if (editTick > 0 && live && open && hasOriginal) schedulerRef.current?.edited()
+  }, [editTick, live, open, hasOriginal])
 
   return (
     <div className="absolute bottom-3 left-3 z-10 rounded-lg border border-zinc-700 bg-zinc-900/90 shadow-lg" data-testid="pose-preview">
@@ -115,7 +130,7 @@ export function PosePreviewPanel({ projectId, shot, film, getComposer, editTick,
         <label className="flex items-center gap-1 text-zinc-400" title="Re-render the preview after every edit">
           <input type="checkbox" checked={live} onChange={e => setLive(e.target.checked)} data-testid="pose-preview-live" /> Live
         </label>
-        <button onClick={() => void schedulerRef.current?.now()} disabled={!photoPath} className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40" data-testid="pose-preview-render">
+        <button onClick={() => void schedulerRef.current?.now()} disabled={!hasOriginal} className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40" data-testid="pose-preview-render">
           {rendering ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />} Render now
         </button>
         <button onClick={() => { setOpen(true); setLarge(l => !l) }} title={large ? 'Smaller pictures' : 'Bigger pictures'} aria-label={large ? 'Smaller pictures' : 'Bigger pictures'} className="ml-auto p-1 rounded hover:bg-zinc-800" data-testid="pose-preview-expand">
@@ -143,7 +158,7 @@ export function PosePreviewPanel({ projectId, shot, film, getComposer, editTick,
                 <img src={preview} alt="Edited preview" className={`w-full h-full object-cover ${rendering ? 'opacity-60' : ''}`} data-testid="pose-preview-image" />
               ) : (
                 <div className="w-full h-full flex items-center justify-center p-2 text-center text-[10px] text-zinc-500">
-                  {photoPath ? 'Edit the pose — the photo re-renders here' : 'No original photo for this shot'}
+                  {hasOriginal ? 'Edit the pose — the photo re-renders here' : 'No original photo for this shot'}
                 </div>
               )}
               {rendering && <Loader2 className="absolute right-1 top-1 h-3.5 w-3.5 animate-spin text-violet-200" />}

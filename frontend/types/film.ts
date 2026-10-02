@@ -202,6 +202,8 @@ export interface CompositionScene {
   camera: CompositionObject | null
   framing: ShotFraming
   camera_move: CameraMove
+  /** The Motion intensity (x the preset move); absent on older saves = 1. */
+  move_intensity?: number
   duration_seconds: number
 }
 

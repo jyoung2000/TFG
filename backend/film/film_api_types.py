@@ -123,7 +123,10 @@ class PreviewRenderRequest(BaseModel):
 
     guide_base64: str
     #: Project-relative path of the original photo (a capture or an asset image).
-    reference_path: str
+    reference_path: str = ""
+    #: Or the original's pixels, when it is not a project file (a video
+    #: analysis frame on a shot with no cast image).
+    reference_base64: str = ""
     prompt: str = ""
     #: The edit in words ("the person's left arm ... raised straight up above
     #: the head"): the image model follows words, not the mannequin alone.

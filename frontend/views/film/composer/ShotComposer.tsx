@@ -329,7 +329,7 @@ export function ShotComposer({ projectId, scene, shot, onClose, studio }: ShotCo
       if (!history) return
       if (dragging) history.begin()
       else {
-        history.end(composer.serialize(framingRef.current, cameraMoveRef.current, shot.duration_seconds))
+        history.end(composer.serialize(framingRef.current, cameraMoveRef.current, shot.duration_seconds, moveIntensityRef.current))
         setHistoryTick(t => t + 1)
       }
     }
@@ -339,6 +339,7 @@ export function ShotComposer({ projectId, scene, shot, onClose, studio }: ShotCo
       composer.hydrate(shot.composition)
       framingTracker.current.loaded(shot.composition.framing)
       setCameraMove(shot.composition.camera_move)
+      setMoveIntensity(shot.composition.move_intensity ?? 1)
       setFraming(shot.composition.framing)
     } else {
       shot.characters.forEach((shotCharacter, index) => {
@@ -355,7 +356,7 @@ export function ShotComposer({ projectId, scene, shot, onClose, studio }: ShotCo
     setObjects(composer.snapshotObjects())
     dirtyRef.current = false
     setDirty(false)
-    historyRef.current = new CompositionHistory<CompositionScene>(composer.serialize(shot.framing, shot.camera_move, shot.duration_seconds), 100)
+    historyRef.current = new CompositionHistory<CompositionScene>(composer.serialize(shot.framing, shot.camera_move, shot.duration_seconds, shot.composition?.move_intensity ?? 1), 100)
     setHistoryTick(t => t + 1)
 
     const resize = () => {
@@ -452,7 +453,7 @@ export function ShotComposer({ projectId, scene, shot, onClose, studio }: ShotCo
     const composer = sceneRef.current
     if (!composer) return
     const timer = window.setTimeout(() => {
-      const layout = layoutFromComposition(composer.serialize(framing, cameraMove, shot.duration_seconds))
+      const layout = layoutFromComposition(composer.serialize(framing, cameraMove, shot.duration_seconds, moveIntensityRef.current))
       sceneApi.describe(layout).then(r => setCameraWords(r.camera_sentence)).catch(() => undefined)
     }, 350)
     return () => window.clearTimeout(timer)
@@ -468,7 +469,7 @@ export function ShotComposer({ projectId, scene, shot, onClose, studio }: ShotCo
       restoringRef.current = false
       return
     }
-    history.commit(composer.serialize(framing, cameraMove, shot.duration_seconds))
+    history.commit(composer.serialize(framing, cameraMove, shot.duration_seconds, moveIntensityRef.current))
     setHistoryTick(t => t + 1)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [transformTick])
@@ -484,6 +485,7 @@ export function ShotComposer({ projectId, scene, shot, onClose, studio }: ShotCo
       else composer.select(selectedId)
     }
     setCameraMove(snapshot.camera_move)
+    setMoveIntensity(snapshot.move_intensity ?? 1)
     framingTracker.current.loaded(snapshot.framing)
     setFraming(snapshot.framing)
     syncObjects()
@@ -675,7 +677,7 @@ export function ShotComposer({ projectId, scene, shot, onClose, studio }: ShotCo
     const composer = sceneRef.current
     const history = historyRef.current
     if (!composer || !history) return
-    history.end(composer.serialize(framing, cameraMove, shot.duration_seconds))
+    history.end(composer.serialize(framing, cameraMove, shot.duration_seconds, moveIntensityRef.current))
     setHistoryTick(t => t + 1)
   }, [framing, cameraMove, shot.duration_seconds])
 
@@ -759,7 +761,7 @@ export function ShotComposer({ projectId, scene, shot, onClose, studio }: ShotCo
     if (cameraMove !== 'static' && composer.cameraKeyframes.length < 2) {
       composer.applyCameraMove(cameraMove, shot.duration_seconds, moveIntensity)
     }
-    return composer.serialize(framing, cameraMove, shot.duration_seconds)
+    return composer.serialize(framing, cameraMove, shot.duration_seconds, moveIntensity)
   }, [framing, cameraMove, moveIntensity, shot.duration_seconds])
 
   const saveComposition = useCallback(async (): Promise<boolean> => {
@@ -1304,7 +1306,8 @@ export function ShotComposer({ projectId, scene, shot, onClose, studio }: ShotCo
             </div>
           )}
           {queueInfo.active && (
-            <div className="absolute bottom-3 left-3 flex items-center gap-2 bg-zinc-900/90 rounded-lg px-3 py-2 border border-violet-800 text-[11px] text-violet-200">
+            // Bottom-right: the pose preview owns bottom-left (QA 2026-10-01: they overlapped).
+            <div className="absolute bottom-3 right-3 z-20 flex items-center gap-2 bg-zinc-900/90 rounded-lg px-3 py-2 border border-violet-800 text-[11px] text-violet-200" data-testid="composer-rendering">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
               Rendering this shot{queueInfo.progress != null ? ` · ${Math.round(queueInfo.progress)}%` : ''}
               {queueInfo.phase ? ` · ${queueInfo.phase}` : ''}

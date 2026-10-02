@@ -266,6 +266,8 @@ class CompositionScene(BaseModel):
     camera: CompositionObject | None = None
     framing: ShotFraming = Field(default_factory=ShotFraming)
     camera_move: CameraMove = "static"
+    #: The Motion intensity slider (x the preset move) the keyframes were built with.
+    move_intensity: float = Field(default=1.0, ge=0.1, le=5.0)
     duration_seconds: float = 3.0
     #: "v<seed version>:<fingerprint>" when the app seeded this scene from an
     #: analysis; the fingerprint stops matching once anyone edits it, so only

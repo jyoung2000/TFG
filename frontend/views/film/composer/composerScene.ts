@@ -1228,7 +1228,7 @@ export class ComposerScene {
     return [...this.entities.values()].map(e => this.snapshotObject(e))
   }
 
-  serialize(framing: ShotFraming, cameraMove: CameraMove, durationSeconds: number): CompositionScene {
+  serialize(framing: ShotFraming, cameraMove: CameraMove, durationSeconds: number, moveIntensity = 1): CompositionScene {
     this.endPreview()
     const objects = this.snapshotObjects()
     const state = this.getCameraState()
@@ -1251,6 +1251,7 @@ export class ComposerScene {
       camera,
       framing: { ...framing, fov_deg: state.fov },
       camera_move: cameraMove,
+      move_intensity: moveIntensity,
       duration_seconds: durationSeconds,
     }
   }

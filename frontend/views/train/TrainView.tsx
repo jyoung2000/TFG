@@ -1,5 +1,5 @@
 import { nextDatasetName } from './datasetName'
-import { WEIGHT_LABELS, weightStatus, type WeightRow } from './trainerWeights'
+import { WEIGHT_LABELS, trainerChip, weightStatus, type WeightRow } from './trainerWeights'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ArrowLeft, Ban, FolderOpen, Images, Layers, Loader2, Play, Plus, RefreshCw, Sparkles, Trash2, Video, Wand2 } from 'lucide-react'
 import { useProjects } from '../../contexts/ProjectContext'
@@ -119,11 +119,14 @@ export function TrainView() {
         <button onClick={goHome} aria-label="Back to home" className="p-1 rounded hover:bg-zinc-800 text-zinc-400"><ArrowLeft className="h-4 w-4" /></button>
         <h1 className="text-sm font-semibold text-white flex items-center gap-2"><Layers className="h-4 w-4 text-fuchsia-300" /> Train</h1>
         <div className="flex items-center gap-1.5 flex-wrap ml-2" data-testid="trainer-status">
-          {status?.trainers.map(t => (
-            <span key={t.id} title={t.reason || t.notes} className={`text-[10px] px-1.5 py-0.5 rounded border ${t.installed ? 'border-emerald-800 text-emerald-300' : t.fits_12gb ? 'border-zinc-700 text-zinc-400' : 'border-amber-900 text-amber-400'}`}>
-              {t.name} · {t.installed ? 'ready' : t.fits_12gb ? 'not installed' : 'needs more than 12 GB'}
-            </span>
-          ))}
+          {status?.trainers.map(t => {
+            const chip = trainerChip(t, status.weights)
+            return (
+              <span key={t.id} title={chip.title} className={`text-[10px] px-1.5 py-0.5 rounded border ${chip.tone === 'ready' ? 'border-emerald-800 text-emerald-300' : chip.tone === 'idle' ? 'border-zinc-700 text-zinc-400' : 'border-amber-900 text-amber-400'}`}>
+                {t.name} · {chip.text}
+              </span>
+            )
+          })}
           {status && <span className="text-[10px] text-zinc-500">{Math.round(status.machine_vram_mb / 1024)} GB card</span>}
         </div>
         <div className="ml-auto flex items-center gap-2">
