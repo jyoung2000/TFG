@@ -51,6 +51,7 @@ from film.film_api_types import (
     UpdateAssetRequest,
 )
 from film.identity_dataset import rare_trigger, source_crops
+from services.face_match import SAME_PERSON, FaceMatcher, similarity
 from film.training_api_types import ImportDatasetItemsRequest
 from film.training_models import Dataset
 from film.film_continuity import check_shot_continuity
@@ -231,6 +232,8 @@ class _QueuedShotJob:
 #: Angle-set prompt pieces. With a composer guide ("KI") the first image is
 #: the posed mannequin at the angle, the second the person to put there.
 ANGLE_SUBJECT = "the same person as in the reference image, same face, same hair, same body, same outfit"
+#: The face crop of the identity photo, named by its place among the references.
+FACE_FROM = "with exactly the face of the {nth} image, a close-up of the same person"
 ANGLE_SUBJECT_POSED = "the person from the second image, in exactly the pose, camera angle and framing of the figure in the first image, same face, same hair, same body, same outfit"
 #: Live pose preview: the viewfinder (posed mannequin) is the scene, the photo the person.
 PREVIEW_SUBJECT = "the person from the second image, in exactly the pose, camera angle and framing of the figure in the first image"
@@ -248,6 +251,10 @@ SHEET_VIEW_WORDS = {
 }
 #: "full body" alone still cropped the head and the feet off character views.
 FULL_FIGURE = "full body from head to feet, the whole head and both feet in frame, centered with space above the head and below the feet"
+#: How many renders compete for each view when a face matcher is installed.
+FACE_CANDIDATES = 3
+#: A candidate this close to the photo's face ends the search early.
+FACE_GOOD_ENOUGH = 0.7
 ANGLE_QUALITY = "photo, sharp focus, detailed face, natural skin texture, plain light grey studio background, soft even studio light"
 #: A LoRA dataset wants 15-30 varied images; more angles per call is a queue.
 ANGLE_SET_MAX = 24
@@ -293,6 +300,7 @@ class FilmGenerationHandler(StateHandlerBase):
         #: Registry lookups for asset-bound LoRAs (phase 7); optional like knowledge.
         self._training: TrainingHandler | None = None
         self._vision: VisionHandler | None = None
+        self._face_matcher_service: FaceMatcher | None = None
         # Set while a hosted job runs, so the queue can report and cancel it.
         self._hosted_cancel = False
         self._hosted_progress: tuple[int, str] | None = None
@@ -1364,23 +1372,27 @@ class FilmGenerationHandler(StateHandlerBase):
         # up among the references and in the LoRA dataset); never the identity.
         before = list(asset.reference_images)
         identity_ref = before[0] if before else ""
+        face = self._identity_face(project_id, asset, identity) if identity is not None and reference_model else None
+        identity_vector = self._face_vector(identity) if identity is not None else None
         prompts: list[str] = []
         paths: list[str] = []
+        scores: list[float | None] = []
         for view in views:
             prompt = ", ".join(p for p in (trigger, base, SHEET_VIEW_WORDS.get(view, view), "consistent character sheet, same person, same outfit") if p)
             prompts.append(prompt)
             if identity is not None and reference_model:
-                response = handler.generate(
-                    GenerateImageRequest(prompt=f"{ANGLE_SUBJECT}, {prompt}", width=width, height=height, numImages=1, model=reference_model),
-                    seed=seed, reference_images=[str(identity)], reference_mode="I",
+                lead = f"{ANGLE_SUBJECT}, {FACE_FROM.format(nth='second')}" if face else ANGLE_SUBJECT
+                chosen, score = self._best_render(
+                    handler, GenerateImageRequest(prompt=f"{lead}, {prompt}", width=width, height=height, numImages=1, model=reference_model),
+                    seed=seed, references=[str(identity), *([str(face)] if face else [])], mode="I", identity_vector=identity_vector,
                 )
             else:
-                response = handler.generate(GenerateImageRequest(prompt=prompt, width=width, height=height, numImages=1, loras=loras), seed=seed)
-            out_paths = response.image_paths or []
-            if response.status != "complete" or not out_paths:
-                raise HTTPError(502, "The local image model did not return an image")
-            image_bytes = Path(out_paths[0]).read_bytes()
-            encoded = base64.b64encode(image_bytes).decode("ascii")
+                chosen, score = self._best_render(
+                    handler, GenerateImageRequest(prompt=prompt, width=width, height=height, numImages=1, loras=loras),
+                    seed=seed, references=None, mode="", identity_vector=identity_vector,
+                )
+            scores.append(score)
+            encoded = base64.b64encode(chosen.read_bytes()).decode("ascii")
             token = view.replace(" ", "-")
             updated = self._film.add_asset_reference(project_id, asset_id, AddAssetReferenceRequest(image_base64=encoded, name_hint=f"{asset.name}-{token}"))
             paths.append(updated.reference_images[-1])
@@ -1391,7 +1403,71 @@ class FilmGenerationHandler(StateHandlerBase):
         assert asset is not None
         if asset.seed_lock is None:
             asset = self._film.update_asset(project_id, asset_id, UpdateAssetRequest(seed_lock=seed))
-        return ReferenceSheetResponse(asset=asset, prompts=prompts, seed=seed, reference_paths=paths)
+        return ReferenceSheetResponse(asset=asset, prompts=prompts, seed=seed, reference_paths=paths, face_scores=scores)
+
+    def _face_vector(self, image: Path) -> list[float] | None:
+        matcher = self._faces()
+        if matcher is None:
+            return None
+        return matcher.embedding(str(image)) or None
+
+    def _identity_face(self, project_id: str, asset: FilmAsset, identity: Path) -> Path | None:
+        """A close-up of the identity photo's face, cached beside the captures:
+        in a full-length photo the face is ~200 px, too little for FLUX.2 to keep
+        it across angles (MEASURED 2026-10-02, SFace ~0.34 -> ~0.47 with the crop)."""
+        if self._vision is None:
+            return None
+        folder = self._film.store.captures_dir(project_id) / "identity-faces"
+        target = folder / f"{asset.id}-{identity.stem[:40]}-face.png"
+        if target.is_file() and target.stat().st_mtime >= identity.stat().st_mtime:
+            return target
+        try:
+            found = self._vision.vision.detect(str(identity), "caption_to_phrase_grounding", "face")
+        except Exception as exc:  # noqa: BLE001 - the photo alone still works
+            logger.info("No face found in %s: %s", identity.name, exc)
+            return None
+        if not found.regions:
+            return None
+        region = max(found.regions, key=lambda r: r.score)
+        with Image.open(identity) as image:
+            crops = dict(source_crops(image.convert("RGB"), region.bbox))
+        crop = crops.get("source-face")
+        if crop is None:
+            return None
+        folder.mkdir(parents=True, exist_ok=True)
+        crop.save(target)
+        return target
+
+    def _best_render(
+        self, handler: ImageGenerationHandler, request: GenerateImageRequest, *, seed: int,
+        references: list[str] | None, mode: str, identity_vector: list[float] | None,
+    ) -> tuple[Path, float | None]:
+        """Render a view; with a face matcher, up to FACE_CANDIDATES seeds and keep
+        the one whose face is closest to the identity photo (one close enough ends
+        the search). A view with no face (a back view) keeps the first render."""
+        matcher = self._faces()
+        count = FACE_CANDIDATES if matcher is not None and identity_vector else 1
+        best: Path | None = None
+        best_score: float | None = None
+        for attempt in range(count):
+            if references is None:
+                response = handler.generate(request, seed=seed + attempt * 1009)
+            else:
+                response = handler.generate(request, seed=seed + attempt * 1009, reference_images=references, reference_mode=mode)
+            out_paths = response.image_paths or []
+            if response.status != "complete" or not out_paths:
+                raise HTTPError(502, "The image model did not return an image")
+            path = Path(out_paths[0])
+            if matcher is None or not identity_vector:
+                return path, None
+            vector = matcher.embedding(str(path))
+            score = round(similarity(identity_vector, vector), 4) if vector else None
+            if best is None or (score is not None and (best_score is None or score > best_score)):
+                best, best_score = path, score
+            if best_score is not None and best_score >= FACE_GOOD_ENOUGH:
+                break
+        assert best is not None
+        return best, best_score
 
     def _identity_image(self, project_id: str, asset: FilmAsset, chosen: str) -> Path | None:
         """The asset's image every angle is composed from: `chosen` when it is
@@ -1439,29 +1515,31 @@ class FilmGenerationHandler(StateHandlerBase):
         identity_ref = req.identity_path if req.identity_path in before else (before[0] if before else "")
         width, height = self._REFERENCE_SIZES.get(asset.kind, (1024, 1024))
         guides = self._film.store.captures_dir(project_id) / "angle-guides"
+        face = self._identity_face(project_id, asset, identity)
+        identity_vector = self._face_vector(identity)
+        people = [str(identity), *([str(face)] if face else [])]
         prompts: list[str] = []
         paths: list[str] = []
+        scores: list[float | None] = []
         for index, shot in enumerate(shots):
-            references = [str(identity)]
+            references = people
             mode = "I"
-            lead = ANGLE_SUBJECT
+            lead = f"{ANGLE_SUBJECT}, {FACE_FROM.format(nth='second')}" if face else ANGLE_SUBJECT
             if shot.guide_base64.strip():
                 guides.mkdir(parents=True, exist_ok=True)
                 guide = guides / f"{asset.id}-{index:02d}.png"
                 guide.write_bytes(_decode_image(shot.guide_base64))
-                references = [str(guide), str(identity)]
+                references = [str(guide), *people]
                 mode = "KI"
-                lead = ANGLE_SUBJECT_POSED
+                lead = f"{ANGLE_SUBJECT_POSED}, {FACE_FROM.format(nth='third')}" if face else ANGLE_SUBJECT_POSED
             prompt = ", ".join(p for p in (lead, shot.view.strip(), base, ANGLE_QUALITY) if p)
             prompts.append(prompt)
-            response = handler.generate(
-                GenerateImageRequest(prompt=prompt, width=width, height=height, numImages=1, model=model),
-                seed=seed, reference_images=references, reference_mode=mode,
+            chosen, score = self._best_render(
+                handler, GenerateImageRequest(prompt=prompt, width=width, height=height, numImages=1, model=model),
+                seed=seed, references=references, mode=mode, identity_vector=identity_vector,
             )
-            out_paths = response.image_paths or []
-            if response.status != "complete" or not out_paths:
-                raise HTTPError(502, "The image model did not return an image")
-            encoded = base64.b64encode(Path(out_paths[0]).read_bytes()).decode("ascii")
+            scores.append(score)
+            encoded = base64.b64encode(chosen.read_bytes()).decode("ascii")
             name = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in shot.name.strip().lower()) or f"angle-{index + 1}"
             updated = self._film.add_asset_reference(project_id, asset_id, AddAssetReferenceRequest(image_base64=encoded, name_hint=f"{asset.name}-{name}"))
             paths.append(updated.reference_images[-1])
@@ -1473,7 +1551,7 @@ class FilmGenerationHandler(StateHandlerBase):
         assert asset is not None
         if asset.seed_lock is None:
             asset = self._film.update_asset(project_id, asset_id, UpdateAssetRequest(seed_lock=seed))
-        return ReferenceSheetResponse(asset=asset, prompts=prompts, seed=seed, reference_paths=paths)
+        return ReferenceSheetResponse(asset=asset, prompts=prompts, seed=seed, reference_paths=paths, face_scores=scores)
 
     def _cast_references(self, project: FilmProject, shot: FilmShot) -> list[str]:
         """The first image of each character in the shot (at most two)."""
@@ -1623,6 +1701,16 @@ class FilmGenerationHandler(StateHandlerBase):
         dataset = self._training.create_dataset(name=f"{asset.name} (asset)", preset=preset, trigger=trigger)  # type: ignore[arg-type]
         if preset != "character":
             return self._training.import_items(dataset.id, ImportDatasetItemsRequest(image_paths=images))
+        # Generated images whose face is not the photo's person are left out: they
+        # taught Raven's LoRA a blend of strangers (SFace 0.25-0.43, 2026-10-02).
+        reference = self._face_vector(Path(images[0]))
+        if reference is not None:
+            kept = [images[0]]
+            for image in images[1:]:
+                vector = self._face_vector(Path(image))
+                if vector is None or similarity(reference, vector) >= SAME_PERSON:
+                    kept.append(image)
+            images = kept
         # The real photo, weighted up: twice, plus head and upper-body crops of it.
         with tempfile.TemporaryDirectory(prefix="lora-source-") as folder:
             extra = [images[0], *self._source_crops(Path(images[0]), Path(folder), asset.name)]
@@ -1648,9 +1736,15 @@ class FilmGenerationHandler(StateHandlerBase):
                 out.append(str(path))
         return out
 
-    def attach_training(self, training: TrainingHandler, vision: VisionHandler | None = None) -> None:
+    def attach_training(self, training: TrainingHandler, vision: VisionHandler | None = None, face_matcher: FaceMatcher | None = None) -> None:
         self._training = training
         self._vision = vision
+        self._face_matcher_service = face_matcher
+
+    def _faces(self) -> FaceMatcher | None:
+        """The face matcher when it can run (its model files present)."""
+        matcher = self._face_matcher_service
+        return matcher if matcher is not None and matcher.available() else None
 
     def asset_loras(self, project: FilmProject, shot: FilmShot) -> list[LoraUse]:
         """Every LoRA bound to an asset the shot references, deduplicated."""

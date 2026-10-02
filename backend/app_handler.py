@@ -40,6 +40,7 @@ from handlers.video_reproduce_handler import VideoReproduceHandler
 from handlers.scene_handler import SceneHandler
 from handlers.training_handler import TrainingHandler
 from handlers.wangp_server_handler import WanGPServerHandler
+from services.face_match import FaceMatcher
 from services.lora_fetcher import LoraFetcher
 from services.trainer.trainer import LoraTrainer
 from services.vision.protocol import VisionService
@@ -102,6 +103,7 @@ class AppHandler:
         trainers: dict[str, LoraTrainer] | None = None,
         wangp_bridge: WanGPBridge | None = None,
         lora_fetcher: LoraFetcher | None = None,
+        face_matcher: FaceMatcher | None = None,
     ) -> None:
         self.config = config
 
@@ -262,6 +264,11 @@ class AppHandler:
 
             lora_fetcher = RequestsLoraFetcher()
         self._lora_fetcher = lora_fetcher
+        if face_matcher is None:
+            from services.face_match.sface import SFaceMatcher
+
+            face_matcher = SFaceMatcher(config.models_dir / "face")
+        self._face_matcher = face_matcher
 
         # The unified job store: every handler below that does work reports
         # to it, and the History tab reads nothing else.
@@ -526,7 +533,7 @@ class AppHandler:
             reproduce_root=config.outputs_dir / "image_analyses",
             analysis_root=config.outputs_dir / "video_analyses",
         )
-        self.film_generation.attach_training(self.training, self.vision)
+        self.film_generation.attach_training(self.training, self.vision, self._face_matcher)
         self.wangp_server = WanGPServerHandler(
             self.state,
             self._lock,
@@ -666,6 +673,8 @@ class ServiceBundle:
     wangp_bridge: WanGPBridge | None = None
     #: None → requests-based Hugging Face/Civitai fetcher; tests inject FakeLoraFetcher.
     lora_fetcher: LoraFetcher | None = None
+    #: None → OpenCV SFace from <models>/face (unavailable without its files); tests inject FakeFaceMatcher.
+    face_matcher: FaceMatcher | None = None
 
 
 def _default_nvml() -> NvmlProbe:
@@ -772,4 +781,5 @@ def build_initial_state(
         trainers=bundle.trainers,
         wangp_bridge=bundle.wangp_bridge,
         lora_fetcher=bundle.lora_fetcher,
+        face_matcher=bundle.face_matcher,
     )

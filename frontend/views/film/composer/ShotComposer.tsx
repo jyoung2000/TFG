@@ -69,6 +69,7 @@ import { layoutFromComposition, underlaySource } from './sceneFromAnalysis'
 import { LORA_ANGLES } from './angleViews'
 import { PosePreviewPanel } from './PosePreviewPanel'
 import { FramingTracker } from './framingTracker'
+import { faceSummary } from '../assets/faceMatch'
 
 /** One generated angle, through the authenticated film media route. */
 function AngleThumb({ projectId, path }: { projectId: string; path: string }) {
@@ -812,7 +813,7 @@ export function ShotComposer({ projectId, scene, shot, onClose, studio }: ShotCo
       const result = await filmApi.angleSet(projectId, figure.asset_id, { shots })
       setAngleResults(result.reference_paths)
       await refresh()
-      setStatusNote(`Added ${result.reference_paths.length} angles to ${result.asset.name}'s references`)
+      setStatusNote(`Added ${result.reference_paths.length} angles to ${result.asset.name}'s references${faceSummary(result.face_scores)}`)
     } catch (e) {
       setStatusNote(`Multi-angle set failed: ${e instanceof Error ? e.message : e}`)
     } finally {

@@ -180,6 +180,9 @@ class ReferenceSheetResponse(BaseModel):
     prompts: list[str]
     seed: int | None
     reference_paths: list[str]
+    #: Face match of each kept image to the identity photo (OpenCV SFace cosine;
+    #: 0.363 = same person), None when no face was seen or no matcher is installed.
+    face_scores: list[float | None] = Field(default_factory=list[float | None])
 
 
 class AddAssetReferenceRequest(BaseModel):

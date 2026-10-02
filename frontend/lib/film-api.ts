@@ -141,14 +141,14 @@ export const filmApi = {
 
   /** Consistency Kit: the same asset from several angles with one seed and its bound LoRA. */
   referenceSheet: (projectId: string, assetId: string, data: { views?: string[]; seed?: number | null } = {}) =>
-    request<{ asset: FilmAsset; prompts: string[]; seed: number | null; reference_paths: string[] }>(
+    request<{ asset: FilmAsset; prompts: string[]; seed: number | null; reference_paths: string[]; face_scores?: (number | null)[] }>(
       `/api/film/projects/${enc(projectId)}/assets/${enc(assetId)}/reference-sheet`,
       { method: 'POST', body: JSON.stringify(data) },
     ),
 
   /** Multi-angle shots of an asset (LoRA-ready), each composed from its image and, optionally, a composer guide. */
   angleSet: (projectId: string, assetId: string, data: { shots: { name: string; view: string; guide_base64?: string }[]; seed?: number | null; identity_path?: string }) =>
-    request<{ asset: FilmAsset; prompts: string[]; seed: number | null; reference_paths: string[] }>(
+    request<{ asset: FilmAsset; prompts: string[]; seed: number | null; reference_paths: string[]; face_scores?: (number | null)[] }>(
       `/api/film/projects/${enc(projectId)}/assets/${enc(assetId)}/angle-set`,
       { method: 'POST', body: JSON.stringify(data) },
     ),

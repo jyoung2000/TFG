@@ -753,6 +753,30 @@ class FakeTextEncoder:
 
 
 @dataclass
+class FakeFaceMatcher:
+    """Face vectors for tests: `queue` is consumed one per call (None = no face);
+    then `vectors` by file-name fragment; then `default`."""
+
+    queue: list[list[float] | None] = field(default_factory=list[list[float] | None])
+    vectors: dict[str, list[float]] = field(default_factory=dict[str, list[float]])
+    default: list[float] = field(default_factory=lambda: [1.0, 0.0])
+    enabled: bool = True
+    calls: list[str] = field(default_factory=list[str])
+
+    def available(self) -> bool:
+        return self.enabled
+
+    def embedding(self, image_path: str) -> list[float] | None:
+        self.calls.append(image_path)
+        if self.queue:
+            return self.queue.pop(0)
+        for fragment, vector in self.vectors.items():
+            if fragment in image_path:
+                return vector
+        return self.default
+
+
+@dataclass
 class FakeServices:
     http: FakeHTTPClient = field(default_factory=FakeHTTPClient)
     gpu_cleaner: FakeGpuCleaner = field(default_factory=FakeGpuCleaner)
@@ -776,6 +800,8 @@ class FakeServices:
     stitcher: FakeStitcher = field(default_factory=FakeStitcher)
     trainer: FakeTrainer = field(default_factory=FakeTrainer)
     lora_fetcher: FakeLoraFetcher = field(default_factory=FakeLoraFetcher)
+    #: Off by default: tests that exercise face matching turn it on.
+    face_matcher: FakeFaceMatcher = field(default_factory=lambda: FakeFaceMatcher(enabled=False))
     #: Injected into the bundle by conftest (needs the outputs dir); None until then.
     wangp_bridge: FakeWanGPBridge | None = None
 

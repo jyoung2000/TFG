@@ -18,6 +18,7 @@ import type { AssetStyleGuide, FilmAsset, FilmProject } from '../../../types/fil
 import { consistencyOf, inheritedPrompt, looseReferences, sheetImages } from './consistency'
 import { EMPTY_GUIDE, StyleGuideEditor } from './StyleGuideEditor'
 import { GalleryThumb, KIND_FIELDS, KIND_META, ThumbError, inputClass, readFileAsDataUrl, useFilmMediaUrl } from './shared'
+import { faceSummary } from './faceMatch'
 
 export function AssetDetail({ asset, onBack, onOpenLightbox, onOpenStudio }: {
   asset: FilmAsset
@@ -84,7 +85,7 @@ export function AssetDetail({ asset, onBack, onOpenLightbox, onOpenStudio }: {
     setBusySheet(true); setNote('')
     try {
       const result = await filmApi.referenceSheet(film.id, asset.id)
-      await refresh(); setNote(`Reference sheet: ${result.reference_paths.length} views at seed ${result.seed ?? '?'}`)
+      await refresh(); setNote(`Reference sheet: ${result.reference_paths.length} views at seed ${result.seed ?? '?'}${faceSummary(result.face_scores)}`)
     } catch (e) { setNote('Failed: ' + (e instanceof Error ? e.message : String(e))) }
     finally { setBusySheet(false) }
   }, [film, asset.id, refresh])
