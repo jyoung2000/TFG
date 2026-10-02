@@ -181,3 +181,24 @@ def test_backend_runtime_data_files_are_packaged() -> None:
     assert runtime_data, "expected the backend's runtime data files"
     missing = [f for f in runtime_data if not any(fnmatch(f, p) or fnmatch(f, p.replace("**/", "")) for p in includes)]
     assert missing == [], f"not packaged into the installed app: {missing}"
+
+
+def test_the_installer_never_bundles_a_lora_trainer() -> None:
+    """The backend filter takes every `**/*.py`, so the trainer clone and its
+    virtual environment beside the backend (scripts/ensure-trainer.ps1) went
+    into the installer: MEASURED in r48, 271 MB -> 311 MB, with musubi-tuner's
+    site-packages under resources/backend (2026-10-02)."""
+    from fnmatch import fnmatch
+
+    lines = (REPO_ROOT / "electron-builder.yml").read_text(encoding="utf-8").splitlines()
+    start = next(i for i, line in enumerate(lines) if line.strip() == "- from: backend")
+    excludes: list[str] = []
+    for line in lines[start + 1:]:
+        text = line.strip()
+        if text.startswith("- from:"):
+            break
+        if text.startswith('- "!'):
+            excludes.append(text[3:].strip().strip('"')[1:])
+    for path in (".venv-trainer-musubi/Lib/site-packages/torch/__init__.py", ".trainer-musubi/src/musubi_tuner/zimage_train_network.py",
+                 ".venv-trainer-aitoolkit/Lib/site-packages/x.py", ".trainer-ai-toolkit/run.py"):
+        assert any(fnmatch(path, pattern) for pattern in excludes), f"{path} would ship in the installer"

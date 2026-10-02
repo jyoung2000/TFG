@@ -30,6 +30,9 @@ extraResources:
       - "!**/__pycache__/**"
       - "!**/*.pyc"
       - "!.venv/**"
+      # LoRA trainers (scripts/ensure-trainer.ps1): a clone and its own venv.
+      - "!.venv-trainer-*/**"
+      - "!.trainer-*/**"
       - "!outputs/**"
       - "!models/**"
       - "!tests/**"

@@ -35,6 +35,9 @@ SKIP_DIRS = {
     "python-embed",
     "Wan2GP",
 }
+# Also local build/runtime folders, by prefix: LoRA trainer clones and their
+# venvs (scripts/ensure-trainer.ps1) and per-build output (release-wangp-rN).
+SKIP_PREFIXES = (".venv-", ".trainer-", "release-")
 
 AGPL_PATTERNS = (
     re.compile(r"GNU\s+AFFERO\s+GENERAL\s+PUBLIC\s+LICENSE", re.IGNORECASE),
@@ -58,7 +61,7 @@ ALLOWLIST = {
 def _scan_files() -> list[Path]:
     files: list[Path] = []
     for path in REPO_ROOT.rglob("*"):
-        if any(part in SKIP_DIRS for part in path.parts):
+        if any(part in SKIP_DIRS or part.startswith(SKIP_PREFIXES) for part in path.parts):
             continue
         if path.is_file() and path.suffix in SCANNED_SUFFIXES:
             files.append(path)
