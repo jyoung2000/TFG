@@ -16,6 +16,10 @@ describe('estimateVramMb', () => {
     expect(estimateMinutes({ target: 'z_image', steps: 1100, resolution: 768 })).toBe(99)
     expect(estimateMinutes({ target: 'flux', steps: 800, resolution: 768 })).toBeNull()
   })
+  it('adds the batch to the VRAM estimate (measured: 7.7 GB at batch 1, 9.3 GB at batch 2)', () => {
+    const one = estimateVramMb({ target: 'z_image', blocks_to_swap: 8, estimated_vram_mb: 8600 })
+    expect(estimateVramMb({ target: 'z_image', blocks_to_swap: 8, estimated_vram_mb: 8600, batch_size: 2 }) - one).toBe(1650)
+  })
   it('keeps other targets at their fixed estimate', () => {
     expect(estimateVramMb({ target: 'wan22', blocks_to_swap: 40, estimated_vram_mb: 24000 })).toBe(24000)
     expect(maxBlocksToSwap('wan22')).toBeNull()

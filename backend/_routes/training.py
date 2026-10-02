@@ -98,7 +98,7 @@ def route_run_media(run_id: str, path: str = Query(min_length=1), handler: AppHa
 
 @router.post("/suggest", response_model=TrainingConfig)
 def route_suggest(req: SuggestConfigRequest, handler: AppHandler = Depends(get_state_service)) -> TrainingConfig:
-    return handler.training.suggest_config(req.dataset_id, req.target)
+    return handler.training.suggest_config(req.dataset_id, req.target, speed=req.speed)
 
 
 @router.get("/runs", response_model=RunListResponse)

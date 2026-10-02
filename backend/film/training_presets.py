@@ -9,6 +9,7 @@ subprocess starts, so no default can OOM the card.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 from film.training_models import DatasetPreset, TrainingConfig
 from services.trainer.catalog import MACHINE_VRAM_MB, trainers_for_target
@@ -59,6 +60,25 @@ _SWAP: dict[str, _Swap] = {
     "z_image": _Swap(170, 28),
 }
 
+TrainingSpeed = Literal["standard", "fast"]
+
+#: The fast character run (user, 2026-10-02: "an accurate LoRA in around 10
+#: minutes"). MEASURED on Raven's face-matched set, same 6 prompts and seeds,
+#: SFace vs. her photo: 840 steps / batch 1 / LR 1e-4 -> 0.421 in 35 min;
+#: 200 steps / batch 1 / LR 3e-4 -> 0.259; 200 steps / batch 2 / LR 3e-4 ->
+#: 0.380; 150 steps / batch 2 / LR 3e-4 -> 0.355 in 10.0 min; 150 steps /
+#: batch 2 / LR 4e-4 -> 0.436 in 9.9 min. A bigger batch lets the learning
+#: rate rise; the rate alone does not (batch 1 at 3e-4 gave 0.259). Only
+#: Z-Image is measured; other targets train at standard speed.
+_FAST: dict[str, tuple[int, int, float]] = {
+    # target: (batch_size, steps, learning_rate)
+    "z_image": (2, 150, 4e-4),
+}
+
+#: VRAM each extra image in a batch costs (MEASURED: batch 1 peaked at 7.7 GB,
+#: batch 2 at 9.3 GB of GPU use at 512 px).
+_PER_EXTRA_BATCH_MB: dict[str, int] = {"z_image": 1650}
+
 _PRESET_TWEAKS: dict[DatasetPreset, _Tweak] = {
     "character": _Tweak(0, 1.0, 1e-4),
     "style": _Tweak(8, 1.5, 8e-5),
@@ -66,10 +86,19 @@ _PRESET_TWEAKS: dict[DatasetPreset, _Tweak] = {
 }
 
 
-def default_config(target: str, preset: DatasetPreset, *, image_count: int = 12) -> TrainingConfig:
+def default_config(target: str, preset: DatasetPreset, *, image_count: int = 12, speed: TrainingSpeed = "standard") -> TrainingConfig:
     base = _BASE.get(target, _BASE["z_image"])
     tweak = _PRESET_TWEAKS[preset]
     rank = max(4, base.rank + tweak.rank_delta)
+    fast = _FAST.get(target) if speed == "fast" else None
+    if fast is not None:
+        batch_size, fast_steps, learning_rate = fast
+        config = TrainingConfig(
+            target=target, trainer=base.trainer, rank=rank, steps=fast_steps, learning_rate=learning_rate, batch_size=batch_size,
+            resolution=base.resolution, buckets=list(base.buckets), blocks_to_swap=base.blocks_to_swap, fp8=True,
+            save_every=max(50, fast_steps // 2), sample_every=max(50, fast_steps // 2), estimated_vram_mb=base.estimated_vram_mb,
+        )
+        return config.model_copy(update={"estimated_vram_mb": estimate_vram_mb(config)})
     steps = int(base.steps * tweak.steps_scale)
     # More images need more steps to see each a sensible number of times.
     # A character's look is learned in a few hundred steps once the captions leave it
@@ -104,11 +133,12 @@ def estimate_vram_mb(config: TrainingConfig) -> int:
     open could never start a Z-Image run).
     """
     base = _BASE.get(config.target, _BASE["z_image"])
+    extra_batch = max(0, config.batch_size - 1) * _PER_EXTRA_BATCH_MB.get(config.target, 0)
     swap = _SWAP.get(config.target)
     if swap is None:
-        return base.estimated_vram_mb
+        return base.estimated_vram_mb + extra_batch
     blocks = min(max(config.blocks_to_swap, 0), swap.max_blocks)
-    return base.estimated_vram_mb - (blocks - base.blocks_to_swap) * swap.per_block_mb
+    return base.estimated_vram_mb - (blocks - base.blocks_to_swap) * swap.per_block_mb + extra_batch
 
 
 def max_blocks_to_swap(target: str) -> int | None:

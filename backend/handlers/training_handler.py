@@ -30,7 +30,7 @@ from film.training_api_types import (
 )
 from film.training_models import LORA_TARGETS, Dataset, DatasetItem, DatasetPreset, ItemSource, LoraEntry, TrainingConfig, TrainingRun, TrainingSample, now_ms
 from film.identity_dataset import character_caption
-from film.training_presets import default_config, estimate_vram_mb, fits_machine, max_blocks_to_swap
+from film.training_presets import TrainingSpeed, default_config, estimate_vram_mb, fits_machine, max_blocks_to_swap
 from handlers.base import StateHandlerBase
 from handlers.jobs_handler import Job, JobsHandler
 from handlers.vision_handler import VisionHandler
@@ -436,11 +436,11 @@ class TrainingHandler(StateHandlerBase):
 
     # ---- training runs -------------------------------------------------------------------
 
-    def suggest_config(self, dataset_id: str, target: str) -> TrainingConfig:
+    def suggest_config(self, dataset_id: str, target: str, *, speed: TrainingSpeed = "standard") -> TrainingConfig:
         dataset = self._load_dataset(dataset_id)
         if target not in LORA_TARGETS:
             raise HTTPError(400, f"Unknown target {target}")
-        return default_config(target, dataset.preset, image_count=max(1, len(dataset.items)))
+        return default_config(target, dataset.preset, image_count=max(1, len(dataset.items)), speed=speed)
 
     def list_runs(self) -> list[TrainingRun]:
         root = self._root / "runs"

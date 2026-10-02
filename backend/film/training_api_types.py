@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 from film.training_models import Dataset, DatasetPreset, LoraEntry, TrainingConfig, TrainingRun
@@ -73,6 +75,8 @@ class TrainingStatusResponse(BaseModel):
 class SuggestConfigRequest(BaseModel):
     dataset_id: str
     target: str = "z_image"
+    #: "fast": about ten minutes on a 12 GB card (film.training_presets); "standard": the best run.
+    speed: Literal["standard", "fast"] = "standard"
 
 
 class StartTrainingRequest(BaseModel):

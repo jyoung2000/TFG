@@ -69,3 +69,35 @@ def test_the_estimate_matches_what_training_used() -> None:
     The old 10.5 GB figure refused runs that fit beside a browser."""
     base = default_config("z_image", "character")
     assert 8000 <= estimate_vram_mb(base) <= 9000
+
+
+def test_the_fast_preset_trains_a_character_in_about_ten_minutes() -> None:
+    """User, 2026-10-02: "generate an accurate Lora in around 10 minutes with
+    similar quality". MEASURED on Raven's face-matched set (same 6 prompts and
+    seeds, SFace vs. her photo): 840 steps at batch 1, LR 1e-4 -> 0.421 in 35
+    min; 200 steps at batch 1, LR 3e-4 -> 0.259; 200 steps at batch 2, LR 3e-4
+    -> 0.380; 150 steps at batch 2, LR 4e-4 -> 0.436 in 9.9 min. The batch lets
+    the learning rate rise; the rate alone does not."""
+    fast = default_config("z_image", "character", image_count=23, speed="fast")
+    standard = default_config("z_image", "character", image_count=23)
+    assert fast.batch_size == 2 and fast.steps == 150 and fast.learning_rate == 4e-4
+    assert fast.resolution == 512
+    assert standard.batch_size == 1 and standard.steps > fast.steps
+    assert default_config("z_image", "character", image_count=23, speed="standard") == standard
+
+
+def test_the_estimate_counts_the_batch() -> None:
+    """MEASURED: batch 1 peaked at 7.7 GB of GPU use, batch 2 at 9.3 GB."""
+    one = default_config("z_image", "character")
+    two = one.model_copy(update={"batch_size": 2})
+    assert 1200 <= estimate_vram_mb(two) - estimate_vram_mb(one) <= 2000
+    assert fits_machine(two)[0]
+
+
+def test_suggest_offers_the_fast_preset(client, tmp_path: Path, fake_services) -> None:
+    from tests.test_training import _dataset
+
+    dataset = _dataset(client, tmp_path, count=4)
+    fast = client.post("/api/training/suggest", json={"dataset_id": dataset["id"], "target": "z_image", "speed": "fast"}).json()
+    standard = client.post("/api/training/suggest", json={"dataset_id": dataset["id"], "target": "z_image"}).json()
+    assert fast["batch_size"] >= 2 and fast["steps"] < standard["steps"]
