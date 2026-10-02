@@ -27,9 +27,14 @@ class FakeTrainer:
         self.cancel_after: int | None = None
         #: Steps reported per run (progress is reported every step).
         self.step_stride = 1
+        #: Model files a test makes this trainer require (none by default).
+        self.required_weights: tuple[str, ...] = ()
 
     def available(self) -> tuple[bool, str]:
         return (True, "fake trainer ready") if self.installed else (False, "fake trainer not installed: run scripts/ensure-trainer.sh fake")
+
+    def missing_weights(self, target: str, weights: dict[str, str]) -> list[str]:
+        return [key for key in self.required_weights if not weights.get(key)]
 
     def train(self, request: TrainingRequest, on_progress: ProgressCallback, is_cancelled: CancelledCallback) -> TrainingOutcome:
         if not self.installed:

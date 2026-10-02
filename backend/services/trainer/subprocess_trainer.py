@@ -106,6 +106,10 @@ class SubprocessTrainer:
 
     # ---- run -------------------------------------------------------------------------
 
+    def missing_weights(self, target: str, weights: dict[str, str]) -> list[str]:
+        """Model files the trainer lacks for `target`; a model name / repo id needs no file."""
+        return []
+
     def train(self, request: TrainingRequest, on_progress: ProgressCallback, is_cancelled: CancelledCallback) -> TrainingOutcome:
         ok, reason = self.available()
         if not ok:
@@ -214,6 +218,12 @@ class MusubiTrainer(SubprocessTrainer):
         path = work_dir / "dataset.toml"
         path.write_text("\n".join(lines), encoding="utf-8")
         return path
+
+    def missing_weights(self, target: str, weights: dict[str, str]) -> list[str]:
+        """musubi needs the DiT, the VAE and the text encoder as files on disk."""
+        if target not in self._SCRIPTS:
+            return []
+        return [key for key in ("dit", "vae", "text_encoder") if not weights.get(key) or not Path(weights[key]).exists()]
 
     def build_command(self, request: TrainingRequest, work_dir: Path) -> list[list[str]]:
         scripts = self._SCRIPTS.get(request.target)

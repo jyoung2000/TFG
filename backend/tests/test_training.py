@@ -163,6 +163,27 @@ class TestPresetsAndVramGuard:
         assert fake_services.trainer.requests == []
         assert client.get("/api/training/runs").json()["runs"] == []
 
+    def test_a_run_without_its_model_files_is_refused_before_any_work(self, client, tmp_path: Path, fake_services):
+        """QA 2026-10-01: nothing in the app set the trainer's model files, so a
+        musubi run started and then failed ("Weights missing ... Set them in
+        Train -> Trainer settings", a panel that did not exist). The trainer
+        says which files it lacks; the run is refused up front."""
+        fake_services.trainer.required_weights = ("dit", "vae", "text_encoder")
+        dataset = _dataset(client, tmp_path, count=4)
+        config = default_config("z_image", "character").model_dump()
+        response = client.post("/api/training/runs", json={"dataset_id": dataset["id"], "config": config})
+        assert response.status_code == 400
+        assert "Trainer settings" in response.json()["error"] and "dit" in response.json()["error"]
+        assert fake_services.trainer.requests == []
+        files = {}
+        for key in ("dit", "vae", "text_encoder"):
+            path = tmp_path / f"{key}.safetensors"
+            path.write_bytes(b"x")
+            files[key] = str(path)
+        assert client.put("/api/training/weights/z_image", json=files).status_code == 200
+        started = client.post("/api/training/runs", json={"dataset_id": dataset["id"], "config": config})
+        assert started.status_code == 200, started.text
+
     def test_a_client_cannot_understate_the_vram_estimate_to_unlock_a_video_target(
         self, client, tmp_path: Path, fake_services
     ):

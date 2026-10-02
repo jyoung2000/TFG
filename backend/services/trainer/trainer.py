@@ -76,6 +76,10 @@ class LoraTrainer(Protocol):
 
     def train(self, request: TrainingRequest, on_progress: ProgressCallback, is_cancelled: CancelledCallback) -> TrainingOutcome: ...
 
+    def missing_weights(self, target: str, weights: dict[str, str]) -> list[str]:
+        """The model files `target` needs that `weights` lacks (keys of WEIGHT_KEYS); [] when ready."""
+        ...
+
 
 def existing_dir(path: str) -> Path | None:
     candidate = Path(path)

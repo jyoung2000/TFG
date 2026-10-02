@@ -466,6 +466,10 @@ class TrainingHandler(StateHandlerBase):
         installed, reason = trainer.available()
         if not installed:
             raise HTTPError(400, reason)
+        # Refused up front, not minutes into a run (QA 2026-10-01).
+        missing = trainer.missing_weights(config.target, self.weights().get(config.target, {}))
+        if missing:
+            raise HTTPError(400, f"Set the model files for {config.target} in Train → Trainer settings first: {', '.join(missing)}")
         with self.lock:
             if self._active:
                 raise HTTPError(409, "A training run is already in progress")

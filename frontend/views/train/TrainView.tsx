@@ -1,3 +1,4 @@
+import { WEIGHT_LABELS, weightStatus, type WeightRow } from './trainerWeights'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ArrowLeft, Ban, FolderOpen, Images, Layers, Loader2, Play, Plus, RefreshCw, Sparkles, Trash2, Video, Wand2 } from 'lucide-react'
 import { useProjects } from '../../contexts/ProjectContext'
@@ -225,8 +226,10 @@ function DatasetBuilder({ dataset, status, onChanged, onStarted, onDeleted, onEr
   const machine = status?.machine_vram_mb ?? 12288
   const fits = config ? config.estimated_vram_mb <= machine : true
   const trainer = status?.trainers.find(t => t.id === config?.trainer)
-  const canTrain = dataset.items.length >= 4 && config !== null && fits && (trainer?.installed ?? false)
-  const blocker = dataset.items.length < 4 ? 'Add at least 4 images (12 or more is the sweet spot).' : !fits ? `Estimated ${(config!.estimated_vram_mb / 1024).toFixed(1)} GB does not fit this ${Math.round(machine / 1024)} GB card.` : trainer && !trainer.installed ? trainer.reason : ''
+  // The target's model files (QA 2026-10-01: nothing set them, so runs failed minutes in).
+  const weights = weightStatus(status?.weights, target)
+  const canTrain = dataset.items.length >= 4 && config !== null && fits && (trainer?.installed ?? false) && weights.ready
+  const blocker = dataset.items.length < 4 ? 'Add at least 4 images (12 or more is the sweet spot).' : !fits ? `Estimated ${(config!.estimated_vram_mb / 1024).toFixed(1)} GB does not fit this ${Math.round(machine / 1024)} GB card.` : trainer && !trainer.installed ? trainer.reason : weights.blocker
 
   return (
     <div className="max-w-5xl space-y-4" data-testid="dataset-builder">
@@ -297,11 +300,57 @@ function DatasetBuilder({ dataset, status, onChanged, onStarted, onDeleted, onEr
             </div>
           </div>
         )}
+        {weights.rows.length > 0 && <TrainerWeights key={target} target={target} rows={weights.rows} ready={weights.ready} onSaved={onChanged} onError={onError} />}
         <div className="flex items-center gap-2">
           <button onClick={() => run('Starting', async () => { const started = await trainingApi.start({ dataset_id: dataset.id, name: runName, config }); onStarted(started) })} disabled={!canTrain || !!busy} className="btn-chip bg-fuchsia-700 hover:bg-fuchsia-600 text-white disabled:opacity-40" data-testid="start-training"><Play className="h-3.5 w-3.5" /> Start training</button>
           {blocker && <span className="text-[11px] text-amber-300" data-testid="train-blocker">{blocker}</span>}
         </div>
       </section>
+    </div>
+  )
+}
+
+/** Trainer settings: the model files the trainer needs for `target`, each with its state. */
+function TrainerWeights({ target, rows, ready, onSaved, onError }: { target: string; rows: WeightRow[]; ready: boolean; onSaved: () => Promise<void>; onError: (message: string) => void }) {
+  const [open, setOpen] = useState(!ready)
+  const [values, setValues] = useState<Record<string, string>>(() => Object.fromEntries(rows.map(r => [r.key, r.path])))
+  const [saving, setSaving] = useState(false)
+  const browse = async (key: string) => {
+    const paths = await window.electronAPI.showOpenFileDialog({ title: `Choose the ${WEIGHT_LABELS[key] ?? key} file`, filters: [{ name: 'Model weights', extensions: ['safetensors', 'pt', 'pth', 'ckpt', 'bin', 'gguf'] }], properties: ['openFile'] })
+    if (paths?.[0]) setValues(v => ({ ...v, [key]: paths[0] }))
+  }
+  const save = async () => {
+    setSaving(true)
+    try { await trainingApi.setWeights(target, values); await onSaved() }
+    catch (e) { onError(e instanceof Error ? e.message : String(e)) }
+    finally { setSaving(false) }
+  }
+  const badge = (state: WeightRow['state'], key: string) =>
+    key === 'name_or_path' && state === 'unset' ? <span className="text-zinc-500">default</span>
+      : state === 'ok' ? <span className="text-emerald-300">found</span>
+      : state === 'missing' ? <span className="text-red-300">file missing</span>
+      : <span className="text-amber-300">not set</span>
+  return (
+    <div className="rounded border border-zinc-800 p-2 space-y-1.5" data-testid="trainer-settings">
+      <button onClick={() => setOpen(o => !o)} className="flex items-center gap-1 text-[10px] uppercase tracking-wide text-zinc-500 font-semibold" aria-expanded={open}>
+        Trainer settings · model files {ready ? <span className="normal-case text-emerald-300">ready</span> : <span className="normal-case text-amber-300">needed</span>}
+      </button>
+      {open && (
+        <>
+          {rows.map(row => (
+            <div key={row.key} className="flex items-center gap-2 text-[11px]">
+              <span className="w-32 text-zinc-400">{row.label}</span>
+              <input className={inputClass + ' flex-1'} value={values[row.key] ?? ''} onChange={e => setValues(v => ({ ...v, [row.key]: e.target.value }))} placeholder={row.key === 'name_or_path' ? 'model name or folder (optional)' : 'path to the .safetensors file'} aria-label={row.label} />
+              {row.key !== 'name_or_path' && <button onClick={() => void browse(row.key)} className="btn-chip" aria-label={`Browse for ${row.label}`}><FolderOpen className="h-3 w-3" /> Browse</button>}
+              <span className="w-20 text-right">{badge(row.state, row.key)}</span>
+            </div>
+          ))}
+          <div className="flex items-center gap-2">
+            <button onClick={() => void save()} disabled={saving} className="btn-chip" data-testid="save-trainer-weights">{saving ? <Loader2 className="h-3 w-3 animate-spin" /> : null} Save model files</button>
+            <span className="text-[10px] text-zinc-500">The trainer reads these files; the musubi-tuner docs list which to use for each model.</span>
+          </div>
+        </>
+      )}
     </div>
   )
 }
