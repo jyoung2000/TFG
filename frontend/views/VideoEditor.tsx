@@ -24,6 +24,7 @@ import { Tooltip } from '../components/ui/tooltip'
 import { ExportModal } from '../components/ExportModal'
 import { MenuBar, type MenuDefinition } from '../components/MenuBar'
 import { hasNativeMenu, useNativeMenu } from '../lib/nativeMenu'
+import { mergeExternalClips } from './editor/timelineSync'
 import { ImportTimelineModal } from '../components/ImportTimelineModal'
 import { ClipWaveform } from '../components/AudioWaveform'
 // IC-LORA HIDDEN - import { ICLoraPanel } from '../components/ICLoraPanel'
@@ -360,6 +361,8 @@ export function VideoEditor() {
   
   // Track which timeline is loaded locally so we can detect switches
   const loadedTimelineIdRef = useRef<string | null>(null)
+  /** The clips array this editor last loaded from or saved to the timeline (see timelineSync). */
+  const lastSyncedClipsRef = useRef<TimelineClip[]>([])
   
   // --- Resizable panel drag handlers ---
   const handleResizeDragStart = useCallback((type: 'left' | 'right' | 'timeline' | 'assets', e: React.MouseEvent) => {
@@ -783,6 +786,7 @@ export function VideoEditor() {
     }
     
     // Load new timeline (migrate old clips without new effect fields)
+    lastSyncedClipsRef.current = activeTimeline.clips || []
     setClips((activeTimeline.clips || []).map(migrateClip))
     setTracks(migrateTracks(activeTimeline.tracks?.length > 0 ? activeTimeline.tracks : DEFAULT_TRACKS.map(t => ({ ...t }))))
     setSubtitles(activeTimeline.subtitles || [])
@@ -796,12 +800,27 @@ export function VideoEditor() {
     loadedTimelineIdRef.current = activeTimeline.id
   }, [activeTimeline?.id])
   
+  // Clips another part of the app put on this timeline (the storyboard's Send
+  // to Timeline / Replace timeline clip) come into the editor, merged with any
+  // edits not saved yet (MEASURED r44: a sent clip never showed here, and the
+  // next auto-save would have written the stale clips back over it).
+  useEffect(() => {
+    if (!activeTimeline || loadedTimelineIdRef.current !== activeTimeline.id) return
+    const external = activeTimeline.clips || []
+    const merged = mergeExternalClips(clips, external, lastSyncedClipsRef.current)
+    if (!merged) return
+    lastSyncedClipsRef.current = external
+    setClips(merged.map(migrateClip))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTimeline?.clips])
+
   // Debounced auto-save: when clips, tracks, or subtitles change, schedule a save
   useEffect(() => {
     if (!currentProjectId || !loadedTimelineIdRef.current) return
     
     if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current)
     autoSaveTimerRef.current = setTimeout(() => {
+      lastSyncedClipsRef.current = clips
       updateTimeline(currentProjectId, loadedTimelineIdRef.current!, { clips, tracks, subtitles })
     }, AUTOSAVE_DELAY)
     
