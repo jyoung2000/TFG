@@ -160,7 +160,9 @@ export function useShotWorkflow(scene: FilmScene, shot: FilmShot) {
    */
   const sendToTimeline = useCallback(
     async (version: ShotVersion | undefined = currentVersion, options: { replace?: boolean } = {}) => {
-      if (!currentProjectId || !version || version.status !== 'complete') return false
+      if (!version || version.status !== 'complete') { setNote('Render this shot first - only a finished take can go to the timeline'); return false }
+      if (!currentProjectId) { setNote('Open this film in a project to use its Video Editor timeline'); return false }
+      if (!getActiveTimeline(currentProjectId)) { setNote('No timeline yet - open the Video Editor tab to create one, then send again'); return false }
       setBusy('timeline')
       try {
         const copied = await copyToAssetFolder(version.output_path, currentProjectId)

@@ -396,9 +396,18 @@ class QueueShotResponse(BaseModel):
     warnings: list[ContinuityWarning] = Field(default_factory=list[ContinuityWarning])
 
 
+class SkippedShot(BaseModel):
+    """A shot a batch did not queue, and why (already rendering, strict continuity)."""
+
+    shot_id: str
+    reason: str
+
+
 class BatchGenerateResponse(BaseModel):
     status: str
     queued: list[QueuedJob]
+    #: Shots refused (QA 2026-10-01: they were dropped without a word).
+    skipped: list[SkippedShot] = Field(default_factory=list[SkippedShot])
 
 
 class DeleteVersionResponse(BaseModel):

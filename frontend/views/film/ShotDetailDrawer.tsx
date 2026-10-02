@@ -82,6 +82,8 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
     visual_prompt: shot.visual_prompt,
     camera_move: shot.camera_move,
     gap_before: shot.gap_before_seconds == null ? '' : String(shot.gap_before_seconds),
+    emotion: shot.emotion,
+    negative_prompt: shot.negative_prompt,
   })
   const [warnings, setWarnings] = useState<ContinuityWarning[]>([])
   const [continuityLevel, setContinuityLevel] = useState<ContinuityLevel>('good')
@@ -115,12 +117,14 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
       visual_prompt: shot.visual_prompt,
       camera_move: shot.camera_move,
       gap_before: shot.gap_before_seconds == null ? '' : String(shot.gap_before_seconds),
+      emotion: shot.emotion,
+      negative_prompt: shot.negative_prompt,
     }
     const previous = serverDraftRef.current
     serverDraftRef.current = { id: shot.id, values }
     if (!previous || previous.id !== shot.id) setDraft(values)
     else setDraft(d => syncDraft(d, previous.values, values))
-  }, [shot.id, shot.title, shot.description, shot.action, shot.dialogue, shot.duration_seconds, shot.visual_prompt, shot.camera_move, shot.gap_before_seconds])
+  }, [shot.id, shot.title, shot.description, shot.action, shot.dialogue, shot.duration_seconds, shot.visual_prompt, shot.camera_move, shot.gap_before_seconds, shot.emotion, shot.negative_prompt])
 
   useEffect(() => {
     if (!projectId) return
@@ -181,6 +185,8 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
         dialogue: draft.dialogue,
         duration_seconds: Math.max(0.5, draft.duration_seconds),
         camera_move: draft.camera_move,
+        emotion: draft.emotion,
+        negative_prompt: draft.negative_prompt,
         ...(draft.gap_before.trim() === ''
           ? { clear_gap: true }
           : { gap_before_seconds: Math.max(0, Number(draft.gap_before) || 0) }),
@@ -549,6 +555,13 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
               onChange={e => setDraft(d => ({ ...d, visual_prompt: e.target.value }))}
             />
           </Row>
+          {/* Editable here too (QA 2026-10-01: nowhere in the storyboard edited them). */}
+          <Row label="Emotion / mood">
+            <input className={inputClass} value={draft.emotion} onChange={e => setDraft(d => ({ ...d, emotion: e.target.value }))} placeholder="e.g. tense, hopeful" aria-label="Emotion" />
+          </Row>
+          <Row label="Negative prompt">
+            <textarea className={`${inputClass} resize-none h-12 text-[10px]`} value={draft.negative_prompt} onChange={e => setDraft(d => ({ ...d, negative_prompt: e.target.value }))} placeholder="what to keep out of the shot" aria-label="Negative prompt" />
+          </Row>
           <div className="flex items-center gap-1.5">
             <button
               onClick={() => void refinePrompt()}
@@ -799,6 +812,7 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
                 size="sm"
                 variant={shot.status === 'approved' ? 'default' : 'secondary'}
                 onClick={() => void setStatus('approved')}
+                disabled={anyBusy}
                 className="gap-1.5"
               >
                 <ThumbsUp className="h-3.5 w-3.5" /> Approve
@@ -807,11 +821,18 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
                 size="sm"
                 variant="secondary"
                 onClick={() => void setStatus('rejected')}
+                disabled={anyBusy}
                 className="gap-1.5"
               >
                 <ThumbsDown className="h-3.5 w-3.5" /> Reject
               </Button>
             </div>
+            {/* The way back (QA 2026-10-01: Delete's tooltip said to set the shot back to review, and nothing did). */}
+            {(shot.status === 'approved' || shot.status === 'rejected') && (
+              <button onClick={() => void setStatus('review')} disabled={anyBusy} className="w-full text-[10px] text-zinc-400 hover:text-zinc-200 disabled:opacity-40" data-testid="back-to-review">
+                Back to review
+              </button>
+            )}
             <Button
               size="sm"
               onClick={() => void sendToTimeline(currentVersion, { replace: linkedClip !== null })}

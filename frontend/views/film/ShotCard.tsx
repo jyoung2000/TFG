@@ -142,7 +142,7 @@ export function ShotCard({
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault()
           onOpen()
-        } else if (event.key.toLowerCase() === 'c' && !event.metaKey && !event.ctrlKey) {
+        } else if (event.key.toLowerCase() === 'c' && !event.metaKey && !event.ctrlKey && event.target === event.currentTarget) {
           onCompose()
         }
       }}

@@ -28,6 +28,7 @@ from film.film_api_types import (
     AddAssetReferenceRequest,
     BatchGenerateRequest,
     BatchGenerateResponse,
+    SkippedShot,
     FilmCapabilitiesResponse,
     FilmModelCapability,
     FilmQualityProfile,
@@ -413,6 +414,7 @@ class FilmGenerationHandler(StateHandlerBase):
                     )
 
         queued: list[QueuedJob] = []
+        skipped: list[SkippedShot] = []
         for scene_id, shot_id in targets:
             try:
                 response = self.queue_shot(
@@ -420,7 +422,9 @@ class FilmGenerationHandler(StateHandlerBase):
                 )
             except HTTPError as exc:
                 if exc.status_code == 409:
-                    continue  # already queued/generating, or strict continuity
+                    # Already queued / generating, or strict continuity: say so.
+                    skipped.append(SkippedShot(shot_id=shot_id, reason=str(exc.detail)))
+                    continue
                 raise
             queued.append(
                 QueuedJob(
@@ -433,7 +437,7 @@ class FilmGenerationHandler(StateHandlerBase):
                     status="queued",
                 )
             )
-        return BatchGenerateResponse(status="queued", queued=queued)
+        return BatchGenerateResponse(status="queued", queued=queued, skipped=skipped)
 
     def replace_project(self, project_id: str, req: ReplaceProjectRequest) -> FilmProject:
         """Undo/redo snapshot restore, guarded by the queue: a shot that is

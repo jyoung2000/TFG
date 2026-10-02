@@ -291,7 +291,7 @@ export const filmApi = {
     projectId: string,
     data: { kind: VersionKind; scene_id?: string; shot_ids?: string[] },
   ) =>
-    request<{ status: string; queued: QueuedJob[] }>(
+    request<{ status: string; queued: QueuedJob[]; skipped: { shot_id: string; reason: string }[] }>(
       `/api/film/projects/${enc(projectId)}/generate/batch`,
       { method: 'POST', body: JSON.stringify(data) },
     ),

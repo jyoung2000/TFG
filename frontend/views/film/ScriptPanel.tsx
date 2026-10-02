@@ -97,8 +97,13 @@ export function ScriptPanel({ onStoryboardCreated }: { onStoryboardCreated: () =
       loadedProjectRef.current = film.id
       setContent(film.script.content)
       setSavedContent(film.script.content)
+    } else if (film && film.script.content !== savedContent && content === savedContent) {
+      // Changed elsewhere (the Director, an import) with no unsaved edits here:
+      // show it (QA 2026-10-01: the tab kept the old text).
+      setContent(film.script.content)
+      setSavedContent(film.script.content)
     }
-  }, [film])
+  }, [film, content, savedContent])
 
   const save = useCallback(async () => {
     if (!film) return
