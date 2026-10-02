@@ -1,3 +1,4 @@
+import { audioPartner, clipTargets, deleteClips } from './timelineOps'
 import { APP_NAME } from "../../lib/brand";
 import { type MenuDefinition } from '../../components/MenuBar'
 import type { TimelineClip } from '../../types/project'
@@ -43,6 +44,9 @@ export interface MenuDepsParams {
   setClips: React.Dispatch<React.SetStateAction<TimelineClip[]>>
   updateClip: (id: string, patch: Partial<TimelineClip>) => void
   setTracks: React.Dispatch<React.SetStateAction<any[]>>
+  addTrack: (kind?: 'video' | 'audio') => void
+  pushTrackUndo: () => void
+  minZoom: number
   addTextClip: (style?: any) => void
   addSubtitleTrack: () => void
   createAdjustmentLayerAsset: () => void
@@ -62,6 +66,16 @@ export interface MenuDepsParams {
 }
 
 export function buildMenuDefinitions(p: MenuDepsParams): MenuDefinition[] {
+  // Clip commands act on every selected clip (QA 2026-10-01: they acted on one).
+  const targets = clipTargets(p.selectedClip, p.selectedClipIds, p.clips)
+  const none = targets.length === 0
+  const allMuted = !none && targets.every(c => c.muted)
+  const apply = (patch: (clip: TimelineClip) => Partial<TimelineClip>) => {
+    const ids = new Set(targets.map(c => c.id))
+    p.pushUndo()
+    p.setClips(prev => prev.map(c => (ids.has(c.id) ? { ...c, ...patch(c) } : c)))
+  }
+  const partner = p.selectedClip ? audioPartner(p.selectedClip, p.clips, p.tracks) : null
   return [
     // ── File ──
     // Import/export, timeline management, project settings
@@ -112,34 +126,39 @@ export function buildMenuDefinitions(p: MenuDepsParams): MenuDefinition[] {
       id: 'clip',
       label: 'Clip',
       items: [
-        { id: 'split', label: 'Split at Playhead', shortcut: getShortcutLabel(p.kbLayout, 'tool.blade'), action: () => { if (p.selectedClip) p.splitClipAtPlayhead(p.selectedClip.id) }, disabled: !p.selectedClip },
+        { id: 'split', label: 'Split at Playhead', action: () => { if (targets.length) p.splitClipAtPlayhead(targets[0].id, undefined, targets.map(c => c.id)) }, disabled: none },
         { id: 'duplicate', label: 'Duplicate Clip', action: () => { if (p.selectedClip) p.duplicateClip(p.selectedClip.id) }, disabled: !p.selectedClip },
-        { id: 'delete', label: 'Delete', shortcut: getShortcutLabel(p.kbLayout, 'edit.delete'), action: () => { if (p.selectedClipIds.size > 0) { p.pushUndo(); p.setClips(prev => prev.filter(c => !p.selectedClipIds.has(c.id))); p.setSelectedClipIds(new Set()) } }, disabled: p.selectedClipIds.size === 0 },
+        // The Delete key's rules: locked tracks keep their clips; links are cleaned up.
+        { id: 'delete', label: 'Delete', shortcut: getShortcutLabel(p.kbLayout, 'edit.delete'), action: () => { const ids = new Set(targets.map(c => c.id)); p.pushUndo(); p.setClips(prev => deleteClips(prev, p.tracks, ids)); p.setSelectedClipIds(new Set()) }, disabled: none },
         { id: 'sep-1', label: '', separator: true },
-        { id: 'flip-h', label: 'Flip Horizontal', action: () => { if (p.selectedClip) p.updateClip(p.selectedClip.id, { flipH: !p.selectedClip.flipH }) }, disabled: !p.selectedClip },
-        { id: 'flip-v', label: 'Flip Vertical', action: () => { if (p.selectedClip) p.updateClip(p.selectedClip.id, { flipV: !p.selectedClip.flipV }) }, disabled: !p.selectedClip },
-        { id: 'reverse', label: 'Reverse', action: () => { if (p.selectedClip) p.updateClip(p.selectedClip.id, { reversed: !p.selectedClip.reversed }) }, disabled: !p.selectedClip },
+        { id: 'flip-h', label: 'Flip Horizontal', action: () => apply(c => ({ flipH: !c.flipH })), disabled: none },
+        { id: 'flip-v', label: 'Flip Vertical', action: () => apply(c => ({ flipV: !c.flipV })), disabled: none },
+        { id: 'reverse', label: 'Reverse', action: () => apply(c => ({ reversed: !c.reversed })), disabled: none },
         { id: 'sep-2', label: '', separator: true },
-        { id: 'mute', label: p.selectedClip?.muted ? 'Unmute Clip' : 'Mute Clip', action: () => { if (p.selectedClip) p.updateClip(p.selectedClip.id, { muted: !p.selectedClip.muted }) }, disabled: !p.selectedClip },
+        { id: 'mute', label: allMuted ? 'Unmute Clip' : 'Mute Clip', action: () => apply(() => ({ muted: !allMuted })), disabled: none },
         { id: 'link-audio', label: p.selectedClip?.linkedClipIds?.length ? 'Unlink Audio' : 'Link Audio', action: () => {
-          if (!p.selectedClip) return
+          const clip = p.selectedClip
+          if (!clip) return
           p.pushUndo()
-          if (p.selectedClip.linkedClipIds?.length) {
-            const linkedIds = p.selectedClip.linkedClipIds
+          if (clip.linkedClipIds?.length) {
+            const linkedIds = clip.linkedClipIds
             p.setClips(prev => prev.map(c => {
-              if (c.id === p.selectedClip!.id) return { ...c, linkedClipIds: undefined }
-              if (linkedIds.includes(c.id)) return { ...c, linkedClipIds: c.linkedClipIds?.filter(lid => lid !== p.selectedClip!.id) }
+              if (c.id === clip.id) return { ...c, linkedClipIds: undefined }
+              if (linkedIds.includes(c.id)) return { ...c, linkedClipIds: c.linkedClipIds?.filter(lid => lid !== clip.id) }
               return c
             }))
+          } else if (partner) {
+            // Pair it with the same media at the same time on a track of the other kind.
+            p.setClips(prev => prev.map(c => c.id === clip.id ? { ...c, linkedClipIds: [partner.id] } : c.id === partner.id ? { ...c, linkedClipIds: [clip.id] } : c))
           }
-        }, disabled: !p.selectedClip },
+        }, disabled: !p.selectedClip || (!p.selectedClip.linkedClipIds?.length && !partner) },
         { id: 'sep-3', label: '', separator: true },
-        { id: 'speed-025', label: 'Speed: 0.25x', action: () => { if (p.selectedClip) p.updateClip(p.selectedClip.id, { speed: 0.25 }) }, disabled: !p.selectedClip },
-        { id: 'speed-050', label: 'Speed: 0.5x', action: () => { if (p.selectedClip) p.updateClip(p.selectedClip.id, { speed: 0.5 }) }, disabled: !p.selectedClip },
-        { id: 'speed-100', label: 'Speed: 1x (Normal)', action: () => { if (p.selectedClip) p.updateClip(p.selectedClip.id, { speed: 1 }) }, disabled: !p.selectedClip },
-        { id: 'speed-150', label: 'Speed: 1.5x', action: () => { if (p.selectedClip) p.updateClip(p.selectedClip.id, { speed: 1.5 }) }, disabled: !p.selectedClip },
-        { id: 'speed-200', label: 'Speed: 2x', action: () => { if (p.selectedClip) p.updateClip(p.selectedClip.id, { speed: 2 }) }, disabled: !p.selectedClip },
-        { id: 'speed-400', label: 'Speed: 4x', action: () => { if (p.selectedClip) p.updateClip(p.selectedClip.id, { speed: 4 }) }, disabled: !p.selectedClip },
+        ...([0.25, 0.5, 1, 1.5, 2, 4] as const).map(speed => ({
+          id: `speed-${Math.round(speed * 100).toString().padStart(3, '0')}`,
+          label: speed === 1 ? 'Speed: 1x (Normal)' : `Speed: ${speed}x`,
+          action: () => apply(() => ({ speed })),
+          disabled: none,
+        })),
       ],
     },
 
@@ -149,9 +168,10 @@ export function buildMenuDefinitions(p: MenuDepsParams): MenuDefinition[] {
       id: 'sequence',
       label: 'Sequence',
       items: [
-        { id: 'add-video-track', label: 'Add Video Track', action: () => { p.pushUndo(); p.setTracks(prev => { const vTracks = prev.filter((t: any) => t.kind === 'video'); const name = `V${vTracks.length + 1}`; return [...prev, { id: `track-${Date.now()}`, name, muted: false, locked: false, kind: 'video' as const }] }) } },
-        { id: 'add-audio-track', label: 'Add Audio Track', action: () => { p.pushUndo(); p.setTracks(prev => { const aTracks = prev.filter((t: any) => t.kind === 'audio'); const name = `A${aTracks.length + 1}`; return [...prev, { id: `track-${Date.now()}`, name, muted: false, locked: false, kind: 'audio' as const }] }) } },
-        { id: 'add-subtitle-track', label: 'Add Subtitle Track', action: () => p.addSubtitleTrack() },
+        // The track header's own add (undoable as a track change).
+        { id: 'add-video-track', label: 'Add Video Track', action: () => p.addTrack('video') },
+        { id: 'add-audio-track', label: 'Add Audio Track', action: () => p.addTrack('audio') },
+        { id: 'add-subtitle-track', label: 'Add Subtitle Track', action: () => { p.pushTrackUndo(); p.addSubtitleTrack() } },
         { id: 'sep-1', label: '', separator: true },
         { id: 'add-adjustment', label: 'Add Adjustment Layer', action: () => p.createAdjustmentLayerAsset() },
         { id: 'sep-2', label: '', separator: true },
@@ -199,8 +219,9 @@ export function buildMenuDefinitions(p: MenuDepsParams): MenuDefinition[] {
         // { id: 'ic-lora-panel', label: p.showICLoraPanel ? 'Hide IC-LoRA Panel' : 'Show IC-LoRA Panel', action: () => p.setShowICLoraPanel(!p.showICLoraPanel) },
         { id: 'sep-1', label: '', separator: true },
         { id: 'fit-to-view', label: 'Zoom to Fit', shortcut: getShortcutLabel(p.kbLayout, 'timeline.fitToView'), action: () => p.fitToViewRef.current!() },
-        { id: 'zoom-in', label: 'Zoom In', shortcut: getShortcutLabel(p.kbLayout, 'timeline.zoomIn'), action: () => p.setZoom(z => Math.min(z * 1.25, 10)) },
-        { id: 'zoom-out', label: 'Zoom Out', shortcut: getShortcutLabel(p.kbLayout, 'timeline.zoomOut'), action: () => p.setZoom(z => Math.max(z / 1.25, 0.1)) },
+        // The same steps and limits as the keyboard and the zoom slider.
+        { id: 'zoom-in', label: 'Zoom In', shortcut: getShortcutLabel(p.kbLayout, 'timeline.zoomIn'), action: () => p.setZoom(z => Math.min(4, +(z + 0.25).toFixed(2))) },
+        { id: 'zoom-out', label: 'Zoom Out', shortcut: getShortcutLabel(p.kbLayout, 'timeline.zoomOut'), action: () => p.setZoom(z => Math.max(p.minZoom, +(z - 0.25).toFixed(2))) },
         { id: 'sep-2', label: '', separator: true },
         { id: 'reset-layout', label: 'Reset Layout', action: () => p.handleResetLayout() },
       ],

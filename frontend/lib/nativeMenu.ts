@@ -49,13 +49,16 @@ export function hasNativeMenu(): boolean {
  * otherwise (and on unmount) it goes back to the app's own menu.
  */
 export function useNativeMenu(menus: MenuDefinition[] | null, active: boolean): void {
+  // The commands follow every render (they must act on the current state); the
+  // window menu is only rebuilt when what it shows changes (labels, enabled).
   const actionsRef = useRef(new Map<string, () => void>())
+  const built = menus ? toNativeMenu(menus) : null
+  if (built) actionsRef.current = built.actions
+  const specKey = built ? JSON.stringify(built.spec) : ''
   useEffect(() => {
-    if (!hasNativeMenu() || !active || !menus) return
-    const { spec, actions } = toNativeMenu(menus)
-    actionsRef.current = actions
-    window.electronAPI.setAppMenu?.(spec)
-  }, [menus, active])
+    if (!hasNativeMenu() || !active || !specKey) return
+    window.electronAPI.setAppMenu?.(JSON.parse(specKey))
+  }, [specKey, active])
   useEffect(() => {
     if (!hasNativeMenu() || !active) return
     const off = window.electronAPI.onMenuAction?.(id => actionsRef.current.get(id)?.())

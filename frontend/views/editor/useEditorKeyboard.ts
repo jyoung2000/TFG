@@ -91,7 +91,9 @@ export function useEditorKeyboard(params: UseEditorKeyboardParams) {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
+      // Typing in a field, a dropdown or editable text is not a shortcut (QA 2026-10-01).
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement) return
+      if (e.target instanceof HTMLElement && e.target.isContentEditable) return
       if (refs.isKbEditorOpenRef.current) return
 
       const context = contextRef.current
@@ -161,11 +163,12 @@ export function useEditorKeyboard(params: UseEditorKeyboardParams) {
           break
 
         case 'transport.shuttleStop':
+          // K held: K+J / K+L step a frame, in the clip viewer too (QA 2026-10-01).
+          kHeldRef.current = true
           if (refs.activePanelRef.current === 'source') {
             refs.sourceVideoRef.current?.pause()
             setters.setSourceIsPlaying(false)
           } else {
-            kHeldRef.current = true
             setters.setShuttleSpeed(0)
             setters.setIsPlaying(false)
           }
@@ -407,7 +410,8 @@ export function useEditorKeyboard(params: UseEditorKeyboardParams) {
     }
 
     const handleKeyUp = (e: KeyboardEvent) => {
-      if (e.key.toLowerCase() === 'k') {
+      // Whatever key Stop is bound to, not just K.
+      if (resolveAction(refs.kbLayoutRef.current, e) === 'transport.shuttleStop' || e.key.toLowerCase() === 'k') {
         kHeldRef.current = false
       }
     }

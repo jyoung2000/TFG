@@ -1708,7 +1708,9 @@ export function VideoEditor() {
 
 
   // Menu bar definitions (extracted)
-  const menuDefinitions: MenuDefinition[] = useMemo(() => buildMenuDefinitions({
+  // Rebuilt every render, so a command always acts on the current playhead and
+  // selection (QA 2026-10-01: the memoised menu split at an old playhead).
+  const menuDefinitions: MenuDefinition[] = buildMenuDefinitions({
     selectedClip, selectedClipIds, clips, tracks, subtitles, snapEnabled,
     showEffectsBrowser, showSourceMonitor, showPropertiesPanel, showICLoraPanel: _showICLoraPanel, // IC-LORA HIDDEN
     sourceAsset, activeTool, activeTimeline, timelines, kbLayout,
@@ -1716,13 +1718,13 @@ export function VideoEditor() {
     setShowImportTimelineModal, setShowExportModal, handleExportTimelineXml, handleExportSrt,
     undoRef, redoRef, cutRef, copyRef, pasteRef,
     setSelectedClipIds, handleInsertEdit, handleOverwriteEdit, matchFrameRef, setKbEditorOpen,
-    splitClipAtPlayhead, duplicateClip, pushUndo, setClips, updateClip, setTracks,
+    splitClipAtPlayhead, duplicateClip, pushUndo, setClips, updateClip, setTracks, addTrack, pushTrackUndo, minZoom: getMinZoom(),
     addTextClip, addSubtitleTrack, createAdjustmentLayerAsset, setSnapEnabled, fitToViewRef, setZoom,
     setShowSourceMonitor, setShowEffectsBrowser, setShowPropertiesPanel,
     setShowICLoraPanel: _setShowICLoraPanel, setIcLoraSourceClipId: _setIcLoraSourceClipId, // IC-LORA HIDDEN
     setActiveTool, setLastTrimTool,
     handleAddTimeline, handleDuplicateTimeline, handleResetLayout,
-  }), [selectedClip, selectedClipIds, clips, tracks, subtitles, snapEnabled, showEffectsBrowser, showSourceMonitor, showPropertiesPanel, _showICLoraPanel, sourceAsset, activeTool, activeTimeline, timelines, handleInsertEdit, handleOverwriteEdit, kbLayout])
+  })
 
 
   // The window's own menu bar carries the editor's menus while it is open
@@ -1730,6 +1732,21 @@ export function VideoEditor() {
   // above this one); in a plain browser the in-page menu bar stays.
   const nativeMenu = hasNativeMenu()
   useNativeMenu(menuDefinitions, currentTab === 'video-editor')
+
+  // The File menu shows Ctrl+I / Ctrl+E; they had no key behind them (QA 2026-10-01).
+  useEffect(() => {
+    if (currentTab !== 'video-editor') return
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey) return
+      const t = e.target
+      if (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement || (t instanceof HTMLElement && t.isContentEditable)) return
+      const key = e.key.toLowerCase()
+      if (key === 'i') { e.preventDefault(); fileInputRef.current?.click() }
+      else if (key === 'e') { e.preventDefault(); setShowExportModal(true) }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [currentTab])
 
   // --- Render ---
   
