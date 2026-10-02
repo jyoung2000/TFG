@@ -163,6 +163,17 @@ class TestPresetsAndVramGuard:
         assert fake_services.trainer.requests == []
         assert client.get("/api/training/runs").json()["runs"] == []
 
+    def test_impossible_settings_are_refused_with_a_reason(self, client, tmp_path: Path, fake_services):
+        """QA 2026-10-01: Steps 0, rank 0 or a zero learning rate went straight to the trainer."""
+        dataset = _dataset(client, tmp_path, count=4)
+        for field, value in (("steps", 0), ("rank", 0), ("learning_rate", 0), ("resolution", 64), ("save_every", -5), ("sample_every", -1), ("blocks_to_swap", -2)):
+            config = default_config("z_image", "character").model_dump()
+            config[field] = value
+            response = client.post("/api/training/runs", json={"dataset_id": dataset["id"], "config": config})
+            assert response.status_code == 400, (field, response.text)
+            assert field.replace("_", " ") in response.json()["error"].lower(), (field, response.json()["error"])
+        assert fake_services.trainer.requests == []
+
     def test_a_run_without_its_model_files_is_refused_before_any_work(self, client, tmp_path: Path, fake_services):
         """QA 2026-10-01: nothing in the app set the trainer's model files, so a
         musubi run started and then failed ("Weights missing ... Set them in

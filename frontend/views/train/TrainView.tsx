@@ -1,3 +1,4 @@
+import { nextDatasetName } from './datasetName'
 import { WEIGHT_LABELS, weightStatus, type WeightRow } from './trainerWeights'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ArrowLeft, Ban, FolderOpen, Images, Layers, Loader2, Play, Plus, RefreshCw, Sparkles, Trash2, Video, Wand2 } from 'lucide-react'
@@ -67,7 +68,7 @@ function formatEta(seconds: number | null): string {
 
 /** The Train tab: build a dataset, train a LoRA within 12 GB, keep the registry. */
 export function TrainView() {
-  const { goHome, openHistory } = useProjects()
+  const { goHome, openHistory, pendingTrainDatasetId, clearPendingTrainDataset } = useProjects()
   const [status, setStatus] = useState<TrainingStatusResponse | null>(null)
   const [datasets, setDatasets] = useState<Dataset[]>([])
   const [runs, setRuns] = useState<TrainingRun[]>([])
@@ -81,6 +82,14 @@ export function TrainView() {
   }, [])
 
   useEffect(() => { refresh().catch(e => setError(String(e))) }, [refresh])
+  // Opened from an asset's "LoRA dataset" or Reproduce's "Send to Train": show
+  // that dataset (QA 2026-10-01: Train opened on an empty panel).
+  useEffect(() => {
+    if (!pendingTrainDatasetId) return
+    if (!datasets.some(d => d.id === pendingTrainDatasetId)) return
+    setPanel({ kind: 'dataset', id: pendingTrainDatasetId })
+    clearPendingTrainDataset()
+  }, [pendingTrainDatasetId, datasets, clearPendingTrainDataset])
 
   const anyActive = runs.some(isRunActive)
   useEffect(() => {
@@ -95,11 +104,11 @@ export function TrainView() {
 
   const createDataset = useCallback(async () => {
     try {
-      const dataset = await trainingApi.createDataset({ name: `Dataset ${datasets.length + 1}`, preset: 'character', trigger: '' })
+      const dataset = await trainingApi.createDataset({ name: nextDatasetName(datasets.map(d => d.name)), preset: 'character', trigger: '' })
       await refresh()
       setPanel({ kind: 'dataset', id: dataset.id })
     } catch (e) { setError(String(e)) }
-  }, [datasets.length, refresh])
+  }, [datasets, refresh])
 
   const selectedDataset = panel.kind === 'dataset' ? datasets.find(d => d.id === panel.id) ?? null : null
   const selectedRun = panel.kind === 'run' ? runs.find(r => r.id === panel.id) ?? null : null
@@ -191,10 +200,12 @@ function DatasetBuilder({ dataset, status, onChanged, onStarted, onDeleted, onEr
     try { await fn(); await onChanged() } catch (e) { onError(String(e)) } finally { setBusy('') }
   }, [onChanged, onError])
 
+  // Saved quietly: marking the screen busy here disabled the button the user was
+  // clicking (leaving the trigger field for Auto-caption lost the click, QA 2026-10-01).
   const saveMeta = useCallback(() => {
     if (meta.name === dataset.name && meta.preset === dataset.preset && meta.trigger === dataset.trigger) return
-    void run('Saving', () => trainingApi.updateDataset(dataset.id, meta))
-  }, [dataset, meta, run])
+    trainingApi.updateDataset(dataset.id, meta).then(() => onChanged()).catch(e => onError(String(e)))
+  }, [dataset, meta, onChanged, onError])
 
   useEffect(() => {
     if (dataset.items.length === 0) { setConfig(null); return }

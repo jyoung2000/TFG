@@ -56,7 +56,11 @@ interface ProjectContextType {
   /** The unified History tab. */
   openHistory: () => void
   /** The Train tab: datasets, LoRA training runs and the registry. */
-  openTrain: () => void
+  /** Train, opened on `datasetId` when given (a dataset just made from an asset or a reproduce job). */
+  openTrain: (datasetId?: string) => void
+  /** The dataset Train should open on next (taken once by the Train view). */
+  pendingTrainDatasetId: string | null
+  clearPendingTrainDataset: () => void
   /** Open Reproduce for an image or video analysis; an empty id opens the view without a selection. */
   openAnalysis: (kind: 'image' | 'video', id: string) => void
   /** Set by openAnalysis, consumed (and cleared) by the analysis view that mounts next. */
@@ -555,10 +559,13 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
     setCurrentView('history')
   }, [])
 
-  const openTrain = useCallback(() => {
+  const [pendingTrainDatasetId, setPendingTrainDatasetId] = useState<string | null>(null)
+  const openTrain = useCallback((datasetId?: string) => {
+    setPendingTrainDatasetId(datasetId ?? null)
     setCurrentProjectId(null)
     setCurrentView('train')
   }, [])
+  const clearPendingTrainDataset = useCallback(() => setPendingTrainDatasetId(null), [])
 
   const [pendingAnalysis, setPendingAnalysis] = useState<{ kind: 'image' | 'video'; id: string } | null>(null)
   const openAnalysis = useCallback((kind: 'image' | 'video', id: string) => {
@@ -603,6 +610,8 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
       openAnalyzeVideo,
       openHistory,
       openTrain,
+      pendingTrainDatasetId,
+      clearPendingTrainDataset,
       openAnalysis,
       pendingAnalysis,
       clearPendingAnalysis,

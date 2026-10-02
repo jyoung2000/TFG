@@ -182,7 +182,7 @@ export function Home() {
               { label: 'Create', hint: 'Quick video', icon: <Zap className="h-4 w-4" />, onClick: openQuickMode },
               { label: 'Reproduce image', hint: '', icon: <ImageIcon className="h-4 w-4" />, onClick: () => setCurrentView('analyze-image') },
               { label: 'Reproduce video', hint: '', icon: <FileVideo className="h-4 w-4" />, onClick: openAnalyzeVideo },
-              { label: 'Train', hint: 'LoRA', icon: <Layers className="h-4 w-4" />, onClick: openTrain },
+              { label: 'Train', hint: 'LoRA', icon: <Layers className="h-4 w-4" />, onClick: () => openTrain() },
               { label: 'History', hint: '', icon: <History className="h-4 w-4" />, onClick: openHistory },
             ] as const).map(item => (
               <button
@@ -338,7 +338,7 @@ export function Home() {
               </div>
             </div>
             <button
-              onClick={openTrain}
+              onClick={() => openTrain()}
               className="group text-left rounded-xl border border-zinc-800 bg-zinc-900 hover:border-fuchsia-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-fuchsia-400 p-5 transition-colors"
             >
               <div className="flex items-center gap-2 mb-2">

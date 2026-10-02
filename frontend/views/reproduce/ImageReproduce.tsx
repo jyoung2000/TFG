@@ -170,8 +170,14 @@ export function ImageReproduce() {
     setError('')
     try {
       const dataset = await trainingApi.createDataset({ name: `${job.title || 'Reproduce'} (reproduce)`, preset: 'character', trigger: '' })
-      await trainingApi.importItems(dataset.id, { reproduce_id: job.id })
-      openTrain()
+      try {
+        await trainingApi.importItems(dataset.id, { reproduce_id: job.id })
+      } catch (err) {
+        // Leave no empty dataset behind (QA 2026-10-01).
+        await trainingApi.deleteDataset(dataset.id).catch(() => undefined)
+        throw err
+      }
+      openTrain(dataset.id)
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {
@@ -233,7 +239,8 @@ export function ImageReproduce() {
                   )}
                 </div>
               </section>
-              <LoraPicker model={target} value={loras} onChange={setLoras} disabled={busyJob} compact />
+              {/* LoRAs for the model that renders (the chosen one, else the prompt's target). */}
+              <LoraPicker model={renderModel || target} value={loras} onChange={setLoras} disabled={busyJob} compact />
               {busyJob && (
                 <div className="h-1.5 rounded bg-zinc-800 overflow-hidden" role="progressbar" aria-valuenow={Math.round(job.progress)} aria-valuemin={0} aria-valuemax={100} aria-label="Reproduce progress">
                   <div className="h-full bg-violet-500 transition-all" style={{ width: `${Math.max(2, job.progress)}%` }} />

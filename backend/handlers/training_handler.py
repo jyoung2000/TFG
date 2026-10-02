@@ -456,6 +456,9 @@ class TrainingHandler(StateHandlerBase):
             config = req.config or default_config("z_image", dataset.preset, image_count=len(dataset.items))
         if config.target not in LORA_TARGETS:
             raise HTTPError(400, f"Unknown target {config.target}")
+        problem = _config_problem(config)
+        if problem:
+            raise HTTPError(400, problem)
         memory = self._vram.memory_mb()
         ok, why = fits_machine(config, memory[1] if memory else None)
         if not ok:
@@ -850,6 +853,26 @@ class TrainingHandler(StateHandlerBase):
         if not target and "ltx" in needle:
             target = "ltx2"
         return self.list_loras(target) if target else []
+
+
+def _config_problem(config: TrainingConfig) -> str:
+    """Settings no trainer can run, worded for the Train screen (QA 2026-10-01:
+    Steps 0, rank 0 or a zero learning rate went straight to the trainer)."""
+    if config.steps < 1:
+        return "Steps must be at least 1."
+    if config.rank < 1:
+        return "Rank must be at least 1."
+    if not 0 < config.learning_rate < 1:
+        return "Learning rate must be above 0 and below 1 (e.g. 0.0001)."
+    if config.resolution < 256:
+        return "Resolution must be at least 256 pixels."
+    if config.save_every < 0:
+        return "Save every must be 0 (only at the end) or more."
+    if config.sample_every < 0:
+        return "Sample every must be 0 (no samples) or more."
+    if config.blocks_to_swap < 0:
+        return "Blocks to swap must be 0 or more."
+    return ""
 
 
 def _with_trigger(caption: str, trigger: str, preset: DatasetPreset) -> str:

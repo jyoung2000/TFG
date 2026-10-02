@@ -95,7 +95,7 @@ export function AssetDetail({ asset, onBack, onOpenLightbox, onOpenStudio }: {
     try {
       const dataset = await filmApi.assetDataset(film.id, asset.id)
       setNote(`Dataset "${dataset.name}": ${dataset.items.length} images, trigger "${dataset.trigger}"`)
-      openTrain()
+      openTrain(dataset.id)
     } catch (e) { setNote('Failed: ' + (e instanceof Error ? e.message : String(e))) }
     finally { setBusyDataset(false) }
   }, [film, asset.id, openTrain])
