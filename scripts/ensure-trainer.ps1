@@ -12,16 +12,29 @@ switch ($Which) {
   default { Write-Error "unknown trainer: $Which (musubi | ai-toolkit)"; exit 2 }
 }
 Set-Location $backend
-if (Test-Path (Join-Path $src ".git")) { git -C $src pull --ff-only 2>&1 | Select-Object -Last 2 } else { git clone --depth 1 $repo $src 2>&1 | Select-Object -Last 2 }
-if (-not (Test-Path $venv)) { uv venv $venv --python 3.12 2>&1 | Select-Object -Last 3 }
+# Native tools write progress to stderr; under "Stop", Windows PowerShell 5 took
+# git's "Cloning into..." for a failure and aborted mid-clone (2026-10-02).
+# Each step is judged by its exit code instead.
+function Step([string]$What, [scriptblock]$Block, [int]$Tail = 3) {
+  $ErrorActionPreference = "Continue"
+  & $Block 2>&1 | ForEach-Object { "$_" } | Select-Object -Last $Tail
+  if ($LASTEXITCODE -ne 0) { throw "$What failed (exit $LASTEXITCODE)" }
+}
+# A real clone has .git/HEAD; a bare or empty .git (a clone cut short) would
+# send "git -C" up to the enclosing repository instead.
+if (Test-Path (Join-Path $src ".git\HEAD")) { Step "git pull" { git -C $src pull --ff-only } } else {
+  if (Test-Path $src) { Remove-Item -Recurse -Force $src }  # a clone cut short
+  Step "git clone" { git clone --depth 1 $repo $src }
+}
+if (-not (Test-Path $venv)) { Step "uv venv" { uv venv $venv --python 3.12 } }
 $py = Join-Path $venv "Scripts\python.exe"
 $cuda = if ($env:TFG_TRAINER_CUDA) { $env:TFG_TRAINER_CUDA } else { "cu128" }
-uv pip install --python $py --index-url "https://download.pytorch.org/whl/$cuda" torch torchvision 2>&1 | Select-Object -Last 3
+Step "torch install" { uv pip install --python $py --index-url "https://download.pytorch.org/whl/$cuda" torch torchvision }
 if ($Which -eq "musubi") {
-  uv pip install --python $py -e $src 2>&1 | Select-Object -Last 5
-  uv pip install --python $py accelerate bitsandbytes 2>&1 | Select-Object -Last 3
+  Step "musubi install" { uv pip install --python $py -e $src } 5
+  Step "accelerate install" { uv pip install --python $py accelerate bitsandbytes }
 } else {
-  uv pip install --python $py -r (Join-Path $src "requirements.txt") 2>&1 | Select-Object -Last 5
+  Step "requirements install" { uv pip install --python $py -r (Join-Path $src "requirements.txt") } 5
 }
 Write-Host ""
 Write-Host "Trainer '$Which' ready: $py"

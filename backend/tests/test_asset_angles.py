@@ -91,6 +91,20 @@ class TestAngleSet:
         assert len(params) == 2 and all(p.get("image_refs") for p in params), "each view conditioned on the asset's image"
 
 
+    def test_a_character_view_frames_the_whole_figure_head_to_feet(self, client, test_state, fake_services, create_fake_model_files):
+        # QA pass 2026-10-02 (a standing full-length photo): every view of the
+        # sheet cut off the head and the feet - a 3:4 frame and "full body"
+        # alone made the model fill the frame with the torso. A LoRA trained on
+        # faceless views learns no face.
+        create_fake_model_files(include_zit=True)
+        asset = _character(client, test_state, fake_services)
+        response = client.post(f"/api/film/projects/{PROJECT}/assets/{asset['id']}/reference-sheet", json={"views": ["front view"], "seed": 9})
+        assert response.status_code == 200, response.text
+        params = _image_params(fake_services)[-1]
+        width, height = (int(v) for v in params["resolution"].split("x"))
+        assert height / width >= 1.7, "a standing figure needs a tall frame"
+        assert "head to feet" in params["prompt"] and "whole head" in params["prompt"]
+
 class TestAssetStudioAndDataset:
     def test_an_asset_keeps_its_3d_studio_scene(self, client, test_state, fake_services):
         asset = client.post(f"/api/film/projects/{PROJECT}/assets", json={"kind": "character", "name": "Mara"}).json()["asset"]

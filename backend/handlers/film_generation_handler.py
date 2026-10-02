@@ -235,6 +235,8 @@ PREVIEW_KEEP = "same face, same hair, same body, same outfit and same lighting a
 PREVIEW_SEED = 7
 PREVIEW_MAX_EDGE = 1024
 FRAME_CAST = "the people from the reference images as the characters, same faces, same hair, same outfits"
+#: "full body" alone still cropped the head and the feet off character views.
+FULL_FIGURE = "full body from head to feet, the whole head and both feet in frame, centered with space above the head and below the feet"
 ANGLE_QUALITY = "photo, sharp focus, detailed face, natural skin texture, plain light grey studio background, soft even studio light"
 #: A LoRA dataset wants 15-30 varied images; more angles per call is a queue.
 ANGLE_SET_MAX = 24
@@ -807,8 +809,10 @@ class FilmGenerationHandler(StateHandlerBase):
 
     # ---- Reference images --------------------------------------------------
 
+    # A standing figure is about 1:1.8; at 3:4 the model filled the frame with
+    # the torso and cut off the head and the feet (QA pass 2026-10-02).
     _REFERENCE_SIZES: dict[str, tuple[int, int]] = {
-        "character": (768, 1024),
+        "character": (768, 1344),
         "location": (1344, 768),
         "prop": (1024, 1024),
     }
@@ -823,7 +827,7 @@ class FilmGenerationHandler(StateHandlerBase):
             for value in (asset.appearance, asset.wardrobe, asset.accessories):
                 if value.strip():
                     parts.append(value.strip())
-            parts.append("neutral studio background, full body, even lighting, photoreal")
+            parts.append(f"neutral studio background, {FULL_FIGURE}, even lighting, photoreal")
         elif asset.kind == "location":
             parts.append(f"Establishing view of {asset.name}")
             for value in (asset.environment, asset.lighting, asset.atmosphere, asset.time_of_day):
