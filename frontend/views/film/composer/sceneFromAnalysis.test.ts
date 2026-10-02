@@ -117,6 +117,13 @@ describe('underlaySource', () => {
     expect(underlaySource({ source_ref: null, capture_path: 'captures/shot-1-reproduce.png' })).toEqual({ kind: 'capture', path: 'captures/shot-1-reproduce.png' })
   })
 
+  // 2026-10-01: an image shot's capture is its AI remake; the photo it remakes
+  // is kept as `reference_path` - the original behind the viewfinder and in
+  // the live preview's ORIGINAL picture.
+  it("shows an image shot's reference photo, not its AI remake", () => {
+    expect(underlaySource({ source_ref: null, capture_path: 'captures/s-reproduce.png', reference_path: 'captures/s-reference.png' })).toEqual({ kind: 'capture', path: 'captures/s-reference.png' })
+  })
+
   it('has nothing to show without either', () => {
     expect(underlaySource({ source_ref: null, capture_path: '' })).toBeNull()
   })

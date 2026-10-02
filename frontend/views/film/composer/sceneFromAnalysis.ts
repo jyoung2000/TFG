@@ -139,9 +139,11 @@ export type UnderlaySource = { kind: 'analysis'; analysisId: string; shotId: str
 
 /** What the composer shows behind the viewfinder: the analysed frame for a
  * shot from a video, else the shot's capture (a reproduced image), else nothing. */
-export function underlaySource(shot: { source_ref?: { analysis_id?: string; analysis_shot_id?: string } | null; capture_path?: string }): UnderlaySource | null {
+export function underlaySource(shot: { source_ref?: { analysis_id?: string; analysis_shot_id?: string } | null; capture_path?: string; reference_path?: string }): UnderlaySource | null {
   const ref = shot.source_ref
   if (ref?.analysis_id) return { kind: 'analysis', analysisId: ref.analysis_id, shotId: ref.analysis_shot_id ?? '' }
+  // An image shot's capture is its AI remake; the photo it remakes comes first.
+  if (shot.reference_path) return { kind: 'capture', path: shot.reference_path }
   if (shot.capture_path) return { kind: 'capture', path: shot.capture_path }
   return null
 }
