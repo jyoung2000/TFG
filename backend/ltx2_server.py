@@ -175,6 +175,7 @@ from runtime_config.runtime_policy import decide_force_api_generations
 from state.app_state_types import ModelFileType
 from server_utils.model_layout_migration import migrate_legacy_models_layout
 from services.gpu_info.gpu_info_impl import GpuInfoImpl
+from services.trainer.subprocess_trainer import resolve_trainer_root
 from services.wangp_paths import (
     in_process_diagnostic,
     resolve_wangp_extra_args,
@@ -264,6 +265,7 @@ runtime_config = RuntimeConfig(
     wangp_image_model_type=WANGP_IMAGE_MODEL_TYPE,
     wangp_extra_args=WANGP_EXTRA_ARGS,
     wangp_remote_url=WANGP_REMOTE_URL,
+    trainer_root=resolve_trainer_root(backend_root=Path(__file__).resolve().parent, app_data_dir=APP_DATA_DIR),
     wangp_remote_token=WANGP_REMOTE_TOKEN,
 )
 

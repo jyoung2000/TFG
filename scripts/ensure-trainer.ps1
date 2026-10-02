@@ -1,11 +1,17 @@
-# Create/refresh a LoRA trainer environment beside the backend (Windows). Idempotent.
-#   scripts/ensure-trainer.ps1 musubi      -> backend/.venv-trainer-musubi + backend/.trainer-musubi (kohya-ss/musubi-tuner, Apache-2.0)
-#   scripts/ensure-trainer.ps1 ai-toolkit  -> backend/.venv-trainer-aitoolkit + backend/.trainer-ai-toolkit (ostris/ai-toolkit, MIT)
+# Create/refresh a LoRA trainer environment (Windows). Idempotent.
+#   scripts/ensure-trainer.ps1 musubi      -> <trainers>\.venv-trainer-musubi + .trainer-musubi (kohya-ss/musubi-tuner, Apache-2.0)
+#   scripts/ensure-trainer.ps1 ai-toolkit  -> <trainers>\.venv-trainer-aitoolkit + .trainer-ai-toolkit (ostris/ai-toolkit, MIT)
+#   scripts/ensure-trainer.ps1 musubi "<folder>"  -> into <folder> instead.
+# <trainers> is TFG_TRAINER_ROOT when set, else %LOCALAPPDATA%\LTXDesktop\trainers: where the
+# app looks (backend resolve_trainer_root), and it survives reinstalls - the installed
+# app's own backend folder does not (2026-10-02).
 # Each trainer lives in its own venv so its torch/transformers pins never touch the app's.
-param([string]$Which = "musubi")
+param([string]$Which = "musubi", [string]$Dest = "")
 $ErrorActionPreference = "Stop"
-$root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
-$backend = Join-Path $root "backend"
+if (-not $Dest) { $Dest = $env:TFG_TRAINER_ROOT }
+if (-not $Dest) { $Dest = Join-Path $env:LOCALAPPDATA "LTXDesktop\trainers" }
+New-Item -ItemType Directory -Force -Path $Dest | Out-Null
+$backend = (Resolve-Path $Dest).Path
 switch ($Which) {
   "musubi" { $repo = "https://github.com/kohya-ss/musubi-tuner.git"; $venv = Join-Path $backend ".venv-trainer-musubi"; $src = Join-Path $backend ".trainer-musubi" }
   "ai-toolkit" { $repo = "https://github.com/ostris/ai-toolkit.git"; $venv = Join-Path $backend ".venv-trainer-aitoolkit"; $src = Join-Path $backend ".trainer-ai-toolkit" }

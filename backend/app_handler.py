@@ -254,8 +254,8 @@ class AppHandler:
 
             from services.trainer.subprocess_trainer import AiToolkitTrainer, MusubiTrainer
 
-            backend_root = _Path(__file__).resolve().parent
-            trainers = {"musubi": MusubiTrainer(backend_root), "ai-toolkit": AiToolkitTrainer(backend_root)}
+            trainer_root = config.trainer_root or _Path(__file__).resolve().parent
+            trainers = {"musubi": MusubiTrainer(trainer_root), "ai-toolkit": AiToolkitTrainer(trainer_root)}
         self._trainers = trainers
         if lora_fetcher is None:
             from services.lora_fetcher.requests_fetcher import RequestsLoraFetcher

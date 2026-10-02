@@ -15,6 +15,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from collections.abc import Mapping
 from typing import Any
 
 from services.trainer.catalog import TrainerSpec, trainer_for
@@ -57,6 +58,29 @@ def parse_progress_line(line: str) -> tuple[int, int, float | None, float | None
     return step_total[0], step_total[1], loss, eta
 
 
+TRAINER_ROOT_ENV = "TFG_TRAINER_ROOT"
+
+
+def resolve_trainer_root(*, backend_root: Path, app_data_dir: Path, environ: Mapping[str, str] | None = None) -> Path:
+    """The folder that holds the trainers' clones and venvs.
+
+    1. `TFG_TRAINER_ROOT`, when set.
+    2. `<app data>/trainers`: survives reinstalls, unlike the installed app's
+       own backend folder (the app looked only there, 2026-10-02).
+    3. `backend/`, when a development checkout already has a trainer there.
+    4. Otherwise `<app data>/trainers`, so "not installed" names where to put one.
+    """
+    env = os.environ if environ is None else environ
+    explicit = env.get(TRAINER_ROOT_ENV, "").strip()
+    if explicit:
+        return Path(explicit)
+    persistent = app_data_dir / "trainers"
+    for root in (persistent, backend_root):
+        if root.is_dir() and any(child.is_dir() for child in root.glob(".venv-trainer-*")):
+            return root
+    return persistent
+
+
 class SubprocessTrainer:
     """Shared subprocess loop; subclasses build the command and config."""
 
@@ -93,8 +117,8 @@ class SubprocessTrainer:
             return False, f"{self.spec.name} needs ~{self.spec.image_vram_mb // 1024} GB of VRAM; this machine has 12 GB. {self.spec.notes}"
         if not self.python.is_file():
             script = "scripts/ensure-trainer.ps1" if os.name == "nt" else "scripts/ensure-trainer.sh"
-            return False, f"{self.spec.name} is not installed. Run `{script} {self.spec.id}` (creates backend/{self.spec.env_name})."
-        return True, f"{self.spec.name} ready in backend/{self.spec.env_name}"
+            return False, f'{self.spec.name} is not installed. Run `{script} {self.spec.id} "{self._backend_root}"` (creates {self.env_dir}).'
+        return True, f"{self.spec.name} ready in {self.env_dir}"
 
     # ---- to override ---------------------------------------------------------------
 

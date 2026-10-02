@@ -27,12 +27,15 @@ acceptance test (`docs/RTX_4070_TEST_MATRIX.md`).
 
 ## Installing a trainer
 
-Trainers are **not vendored**. Each is cloned and installed beside the
-backend, in its own venv, by one idempotent script:
+Trainers are **not vendored**. Each is cloned and installed, in its own
+venv, by one idempotent script, into the app data folder's `trainers\`
+(`%LOCALAPPDATA%\LTXDesktop\trainers` on Windows). That is where the app
+looks, and unlike the installed app's own folder it survives reinstalls;
+`TFG_TRAINER_ROOT`, or a folder as the second argument, puts them elsewhere:
 
 ```powershell
-scripts\ensure-trainer.ps1 musubi       # backend\.venv-trainer-musubi + backend\.trainer-musubi
-scripts\ensure-trainer.ps1 ai-toolkit   # backend\.venv-trainer-aitoolkit + backend\.trainer-ai-toolkit
+scripts\ensure-trainer.ps1 musubi       # <trainers>\.venv-trainer-musubi + .trainer-musubi
+scripts\ensure-trainer.ps1 ai-toolkit   # <trainers>\.venv-trainer-aitoolkit + .trainer-ai-toolkit
 ```
 
 (`scripts/ensure-trainer.sh` is the same for macOS/Linux; `TFG_TRAINER_CUDA`

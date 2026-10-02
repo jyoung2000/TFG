@@ -36,6 +36,9 @@ class RuntimeConfig:
     #: Drive a WanGP that lives on another machine/container (`RemoteWanGPBridge`).
     wangp_remote_url: str = ""
     wangp_remote_token: str = ""
+    #: Where LoRA trainers live (services.trainer.subprocess_trainer.resolve_trainer_root);
+    #: None = beside the backend.
+    trainer_root: Path | None = None
 
     def spec_for(self, model_type: ModelFileType) -> ModelFileDownloadSpec:
         return self.model_download_specs[model_type]
