@@ -317,6 +317,8 @@ export interface FilmShot {
   blockout_path: string
   /** Storyboard frame: a still of what the shot describes ('' = none). */
   frame_path?: string
+  /** The original this shot remakes ('' = none): an image job's source photo. */
+  reference_path?: string
   generation: ShotGenerationSettings
   versions: ShotVersion[]
   current_version: number | null

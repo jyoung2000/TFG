@@ -238,3 +238,35 @@ class TestOldImageShotsAreReseededWhenOpened:
         again = client.get(f"/api/film/projects/{done['storyboard_project_id']}").json()["project"]
         kept = next(s for sc in again["scenes"] for s in sc["shots"] if s["id"] == done["storyboard_shot_id"])["composition"]
         assert kept["seed"].startswith("v4:") and kept["duration_seconds"] == 6.5 and kept["objects"] == []
+
+
+class TestTheStoryboardKeepsTheReference:
+    """Asked 2026-10-01: the storyboard should show the AI remake under the
+    reference image of each scene. An image shot's capture is the AI image;
+    the photo it remakes stayed inside the reproduce job."""
+
+    def test_a_shot_from_an_image_job_carries_its_reference_photo(self, client, create_fake_model_files, tmp_path, test_state):
+        job = _image_job(client, create_fake_model_files, tmp_path)
+        client.post(f"/api/reproduce/{job['id']}/start", json={"budget": {"candidates_per_round": 1, "max_rounds": 1}})
+        done = client.get(f"/api/reproduce/{job['id']}").json()
+        project = test_state.film.get_project(done["storyboard_project_id"])
+        shot = project.find_shot(done["storyboard_shot_id"])[1]  # type: ignore[index]
+        assert shot.reference_path, "the shot does not know the photo it remakes"
+        reference = test_state.film.store.resolve_media_path(project.id, shot.reference_path)
+        with Image.open(reference) as image:
+            assert image.getpixel((5, 5)) == (30, 30, 220)  # the source photo, not the AI image
+        assert shot.reference_path != shot.capture_path
+
+    def test_an_older_shot_gets_its_reference_when_opened(self, client, create_fake_model_files, tmp_path, test_state):
+        job = _image_job(client, create_fake_model_files, tmp_path)
+        client.post(f"/api/reproduce/{job['id']}/start", json={"budget": {"candidates_per_round": 1, "max_rounds": 1}})
+        done = client.get(f"/api/reproduce/{job['id']}").json()
+        project = test_state.film.get_project(done["storyboard_project_id"])
+        shot = project.find_shot(done["storyboard_shot_id"])[1]  # type: ignore[index]
+        shot.reference_path = ""
+        shot.composition.duration_seconds = 5.5  # type: ignore[union-attr]  (composed: not re-seeded)
+        test_state.film.store.save(project)
+        opened = client.get(f"/api/film/projects/{project.id}").json()["project"]
+        again = next(s for sc in opened["scenes"] for s in sc["shots"] if s["id"] == shot.id)
+        assert again["reference_path"]
+        assert again["composition"]["duration_seconds"] == 5.5

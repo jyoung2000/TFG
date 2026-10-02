@@ -1026,6 +1026,7 @@ class ReproduceHandler(StateHandlerBase):
             name = f"{shot.id}-reproduce{image_path.suffix.lower() or '.png'}"
             shutil.copyfile(image_path, captures / name)
             shot.capture_path = f"captures/{name}"
+            self._copy_reference(job, shot, captures)
             shot.generation.use_capture_as_reference = True
             if not shot.characters:
                 for asset in self._cast_from_subjects(job, project.id):
@@ -1053,12 +1054,11 @@ class ReproduceHandler(StateHandlerBase):
         if not store.exists(project_id):
             return False
         project = store.load(project_id)
-        due = {
-            shot.id
-            for scene in project.scenes
-            for shot in scene.shots
-            if shot.capture_path and (shot.composition is None or stale_seed(shot.composition))
-        } - self._no_job.get(project_id, set())
+        shots = [shot for scene in project.scenes for shot in scene.shots if shot.capture_path]
+        stale = {shot.id for shot in shots if shot.composition is None or stale_seed(shot.composition)}
+        # Shots sent before they kept their reference photo get it too.
+        unreferenced = {shot.id for shot in shots if not shot.reference_path}
+        due = (stale | unreferenced) - self._no_job.get(project_id, set())
         if not due:
             return False
         jobs = [job for job in self.list() if job.storyboard_project_id == project_id and job.storyboard_shot_id in due]
@@ -1066,6 +1066,8 @@ class ReproduceHandler(StateHandlerBase):
         if not jobs:
             return False
         for job in jobs:
+            if job.storyboard_shot_id not in stale:
+                continue
             try:
                 self._backfill_poses(job)
                 self._save(job)
@@ -1073,13 +1075,29 @@ class ReproduceHandler(StateHandlerBase):
                 logger.warning("Could not read the poses of %s", job.id, exc_info=True)
         with self.lock:
             project = store.load(project_id)
+            captures = store.captures_dir(project.id)
+            captures.mkdir(parents=True, exist_ok=True)
             for job in jobs:
                 found = project.find_shot(job.storyboard_shot_id)
-                if found is not None:
-                    shot = found[1]
+                if found is None:
+                    continue
+                shot = found[1]
+                if not shot.reference_path:
+                    self._copy_reference(job, shot, captures)
+                if job.storyboard_shot_id in stale:
                     self._scene.seed_shot(project, shot, job.spec, shot.duration_seconds)
             store.save(project)
         return True
+
+    def _copy_reference(self, job: ReproduceJob, shot: Any, captures: Path) -> None:
+        """The job's source photo into the project, as the shot's reference
+        (what the storyboard shows above the AI result)."""
+        source = self._dir(job.id) / job.source_path
+        if not job.source_path or not source.is_file():
+            return
+        name = f"{shot.id}-reference{source.suffix.lower() or '.png'}"
+        shutil.copyfile(source, captures / name)
+        shot.reference_path = f"captures/{name}"
 
     def _backfill_poses(self, job: ReproduceJob) -> None:
         """Jobs analysed before the pose component have no poses: read them

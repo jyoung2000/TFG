@@ -423,6 +423,9 @@ class FilmShot(BaseModel):
     #: Storyboard frame: a still of what the shot describes ('' = none). Kept
     #: apart from `capture_path`, which the video model uses as a start frame.
     frame_path: str = ""
+    #: The original this shot remakes ('' = none): an image reproduce job's
+    #: source photo, shown above the AI result in the storyboard.
+    reference_path: str = ""
 
     generation: ShotGenerationSettings = Field(default_factory=ShotGenerationSettings)
     versions: list[ShotVersion] = Field(default_factory=list[ShotVersion])
