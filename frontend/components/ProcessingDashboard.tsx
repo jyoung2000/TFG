@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from 'react'
-import { Activity, Loader2, Clock, Film, ImageIcon, ChevronDown, ChevronUp } from 'lucide-react'
+import { Activity, Loader2, Clock, Film, ImageIcon, ChevronDown, ChevronUp, Sparkles } from 'lucide-react'
 import { backendFetch } from '../lib/backend'
 import { filmOutputUrl } from '../lib/film-api'
 import { jobsApi } from '../lib/jobs-api'
@@ -20,7 +20,7 @@ interface RecentOutput {
   path: string
   prompt: string
   completed_at: number
-  type: 'video' | 'image'
+  type: 'video' | 'image' | 'lora'
   size_mb: number
 }
 
@@ -31,7 +31,12 @@ interface QueueState {
 
 function RecentPreview({ item }: { item: RecentOutput }) {
   const [url, setUrl] = useState('')
-  useEffect(() => { let live = true; void filmOutputUrl(item.path).then(u => { if (live) setUrl(u) }).catch(() => {}); return () => { live = false } }, [item.path])
+  useEffect(() => {
+    if (item.type === 'lora') return
+    let live = true; void filmOutputUrl(item.path).then(u => { if (live) setUrl(u) }).catch(() => {}); return () => { live = false }
+  }, [item.path, item.type])
+  // A LoRA that finished training (2026-10-02): a file, not a picture.
+  if (item.type === 'lora') return <div className="h-12 w-16 rounded bg-fuchsia-950/60 flex items-center justify-center shrink-0" title="LoRA" data-testid="recent-lora"><Sparkles className="h-4 w-4 text-fuchsia-300" /></div>
   if (!url) return <div className="h-12 w-16 rounded bg-zinc-800 flex items-center justify-center shrink-0">{item.type === 'video' ? <Film className="h-4 w-4 text-zinc-500" /> : <ImageIcon className="h-4 w-4 text-zinc-500" />}</div>
   return item.type === 'video'
     ? <video src={url} muted preload="metadata" controls className="h-12 w-16 rounded bg-black object-cover shrink-0" aria-label={`Recent video ${formatPath(item.path)}`} />

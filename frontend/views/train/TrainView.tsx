@@ -2,7 +2,7 @@ import { nextDatasetName } from './datasetName'
 import { WEIGHT_LABELS, trainerChip, weightStatus, type WeightRow } from './trainerWeights'
 import { estimateMinutes, estimateVramMb, maxBlocksToSwap } from './vramEstimate'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ArrowLeft, Ban, FolderOpen, Images, Layers, Loader2, Play, Plus, RefreshCw, Sparkles, Trash2, Video, Wand2 } from 'lucide-react'
+import { Pencil, ArrowLeft, Ban, FolderOpen, Images, Layers, Loader2, Play, Plus, RefreshCw, Sparkles, Trash2, Video, Wand2 } from 'lucide-react'
 import { useProjects } from '../../contexts/ProjectContext'
 import { jobsApi } from '../../lib/jobs-api'
 import { logger } from '../../lib/logger'
@@ -519,17 +519,25 @@ function DownloadFromUrl({ target, onChanged }: { target: string; onChanged: () 
 function LoraRow({ entry, onChanged, onError }: { entry: LoraEntry; onChanged: () => Promise<void>; onError: (message: string) => void }) {
   const [draft, setDraft] = useState({ name: entry.name, trigger: entry.trigger, default_multiplier: entry.default_multiplier })
   useEffect(() => setDraft({ name: entry.name, trigger: entry.trigger, default_multiplier: entry.default_multiplier }), [entry])
+  // Saves on blur or Enter; says so (user, 2026-10-02: nothing showed the name
+  // and trigger were editable, nor that an edit had been kept).
+  const [saved, setSaved] = useState('')
   const save = () => {
     if (draft.name === entry.name && draft.trigger === entry.trigger && draft.default_multiplier === entry.default_multiplier) return
-    trainingApi.updateLora(entry.id, draft).then(() => onChanged()).catch(e => onError(String(e)))
+    if (!draft.name.trim()) { onError('A LoRA needs a name'); setDraft(d => ({ ...d, name: entry.name })); return }
+    trainingApi.updateLora(entry.id, draft).then(() => { setSaved('Saved'); window.setTimeout(() => setSaved(''), 2000); return onChanged() }).catch(e => onError(String(e)))
   }
+  const onEnter = (e: React.KeyboardEvent<HTMLInputElement>) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }
   return (
     <div className="grid grid-cols-[1fr_auto_auto_auto_auto] items-center gap-2 rounded border border-zinc-800 px-2 py-1.5 text-xs" data-testid="lora-row">
-      <div className="min-w-0">
-        <input className="bg-transparent text-zinc-100 w-full focus:outline-none border-b border-transparent focus:border-violet-600" value={draft.name} onChange={e => setDraft(d => ({ ...d, name: e.target.value }))} onBlur={save} aria-label={`Name of ${entry.name}`} />
-        <div className="text-[10px] text-zinc-500 truncate" title={entry.file}>{entry.target}{entry.imported ? ' · imported' : entry.run_id ? ' · trained here' : ''} · {(entry.size_bytes / 1_048_576).toFixed(1)} MB</div>
+      <div className="min-w-0 flex items-center gap-1.5">
+        <Pencil className="h-3 w-3 text-zinc-600 shrink-0" aria-hidden="true" />
+        <div className="min-w-0 flex-1">
+        <input className="bg-transparent text-zinc-100 w-full focus:outline-none border-b border-dashed border-zinc-700 focus:border-violet-600" value={draft.name} onChange={e => setDraft(d => ({ ...d, name: e.target.value }))} onBlur={save} onKeyDown={onEnter} aria-label={`Name of ${entry.name}`} title="Click to rename; Enter or click away saves" data-testid="lora-name" />
+        <div className="text-[10px] text-zinc-500 truncate" title={entry.file}>{entry.target}{entry.imported ? ' · imported' : entry.run_id ? ' · trained here' : ''} · {(entry.size_bytes / 1_048_576).toFixed(1)} MB{saved && <span className="ml-2 text-emerald-300" role="status" data-testid="lora-saved">{saved}</span>}</div>
+        </div>
       </div>
-      <label className="text-[10px] text-zinc-500">trigger <input className={selectClass + ' w-28'} value={draft.trigger} onChange={e => setDraft(d => ({ ...d, trigger: e.target.value }))} onBlur={save} aria-label={`Trigger for ${entry.name}`} /></label>
+      <label className="text-[10px] text-zinc-500">trigger <input className={selectClass + ' w-28'} value={draft.trigger} onChange={e => setDraft(d => ({ ...d, trigger: e.target.value }))} onBlur={save} onKeyDown={onEnter} aria-label={`Trigger for ${entry.name}`} title="The word that calls this LoRA in a prompt; Enter or click away saves" data-testid="lora-trigger" /></label>
       <label className="text-[10px] text-zinc-500">strength <input type="number" step="0.05" min="0" max="2" className={selectClass + ' w-16'} value={draft.default_multiplier} onChange={e => setDraft(d => ({ ...d, default_multiplier: Number(e.target.value) }))} onBlur={save} aria-label={`Default strength for ${entry.name}`} /></label>
       <span className="text-[10px] text-zinc-600">{new Date(entry.created_at).toLocaleDateString()}</span>
       <button onClick={() => { if (window.confirm(`Delete ${entry.name}? The file is removed from the LoRA folder.`)) void trainingApi.deleteLora(entry.id).then(() => onChanged()).catch(e => onError(String(e))) }} aria-label={`Delete ${entry.name}`} className="p-1 text-zinc-600 hover:text-red-300"><Trash2 className="h-3.5 w-3.5" /></button>

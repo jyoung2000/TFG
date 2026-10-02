@@ -114,7 +114,8 @@ class GenerationQueueItem(BaseModel):
     path: str
     prompt: str = ""
     completed_at: int = 0
-    type: Literal["video", "image"]
+    #: "lora": a LoRA that finished training or was imported (2026-10-02).
+    type: Literal["video", "image", "lora"]
     size_mb: float = 0.0
 
 
