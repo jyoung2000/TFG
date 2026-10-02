@@ -209,19 +209,39 @@ class SubprocessTrainer:
             self._process = None
             if code != 0:
                 return TrainingOutcome(status="failed", steps_done=steps_done, final_loss=last_loss, log_tail="\n".join(tail))
-        lora = self._find_lora(request)
+        lora = self.find_lora(request)
         if lora is None:
             return TrainingOutcome(status="failed", steps_done=steps_done, final_loss=last_loss, log_tail="\n".join(tail) + "\nNo .safetensors was written.")
+        convert = self.convert_command(lora, request)
+        if convert is not None:
+            on_progress(TrainingProgress(step=steps_done, total=request.steps, phase="converting"))
+            done = subprocess.run(  # noqa: S603 - our own catalog command
+                convert, cwd=str(self.upstream_dir), capture_output=True, text=True, encoding="utf-8", errors="replace", env=self.child_env(),
+            )
+            converted = Path(convert[convert.index("--output") + 1])
+            if done.returncode != 0 or not converted.is_file():
+                log = "\n".join(tail + (done.stdout + done.stderr).splitlines()[-20:])
+                return TrainingOutcome(status="failed", steps_done=steps_done, final_loss=last_loss, log_tail=log + "\nConverting the LoRA for the renderer failed.")
+            lora = converted
         # A last sweep: musubi samples at the final step, after the last progress line.
         seen_samples.update(str(p) for p in sample_images(work_dir))
         return TrainingOutcome(status="complete", lora_path=str(lora), steps_done=max(steps_done, request.steps), final_loss=last_loss, samples=sorted(seen_samples), log_tail="\n".join(tail))
 
-    def _find_lora(self, request: TrainingRequest) -> Path | None:
+    def find_lora(self, request: TrainingRequest) -> Path | None:
         expected = self.lora_output(request)
         if expected.is_file():
             return expected
-        candidates = sorted(Path(request.output_dir).rglob("*.safetensors"), key=lambda p: p.stat().st_mtime, reverse=True)
+        # Never the latent cache, which also holds .safetensors (2026-10-02).
+        root = Path(request.output_dir)
+        candidates = sorted(
+            (p for p in root.rglob("*.safetensors") if "cache" not in p.relative_to(root).parts),
+            key=lambda p: p.stat().st_mtime, reverse=True,
+        )
         return candidates[0] if candidates else None
+
+    def convert_command(self, lora: Path, request: TrainingRequest) -> list[str] | None:
+        """The command that turns the trained file into one the renderer loads, or None."""
+        return None
 
 
 class MusubiTrainer(SubprocessTrainer):
@@ -263,6 +283,20 @@ class MusubiTrainer(SubprocessTrainer):
         path = work_dir / "dataset.toml"
         path.write_text("\n".join(lines), encoding="utf-8")
         return path
+
+    #: Targets whose LoRA musubi writes in kohya layout (lora_unet_layers_0_...) while
+    #: WanGP matches dotted module paths (layers.0.attention.to_q): converted with
+    #: musubi's own convert_lora.py --target other (zimage.md). The raw file stays
+    #: beside it, for resuming.
+    _CONVERT_FOR_WANGP = ("z_image",)
+
+    def convert_command(self, lora: Path, request: TrainingRequest) -> list[str] | None:
+        if request.target not in self._CONVERT_FOR_WANGP:
+            return None
+        output = lora.with_name(f"{lora.stem}-wangp.safetensors")
+        # src/musubi_tuner/convert_lora.py - zimage.md says networks/, which does not exist (MEASURED).
+        script = self.upstream_dir / "src" / "musubi_tuner" / "convert_lora.py"
+        return [str(self.python), str(script), "--input", str(lora), "--output", str(output), "--target", "other"]
 
     def missing_weights(self, target: str, weights: dict[str, str]) -> list[str]:
         """musubi needs the DiT, the VAE and the text encoder as files on disk."""

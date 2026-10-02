@@ -563,6 +563,32 @@ class TestSubprocessTrainers:
         env = MusubiTrainer(tmp_path).child_env()
         assert env["PYTHONIOENCODING"] == "utf-8" and env["PYTHONUTF8"] == "1" and env["PYTHONUNBUFFERED"] == "1"
 
+    def test_a_z_image_lora_is_converted_for_wangp(self, tmp_path: Path):
+        """musubi writes kohya-style keys (lora_unet_layers_0_...); WanGP's loader
+        matches dotted module paths (layers.0.attention.to_q), so the raw file
+        would load and change nothing. musubi's convert_lora.py --target other
+        writes that layout (zimage.md); the raw file stays for resuming."""
+        trainer = MusubiTrainer(tmp_path)
+        lora = tmp_path / "raven.safetensors"
+        command = trainer.convert_command(lora, self._request(tmp_path))
+        assert command is not None
+        assert command[1].replace("\\", "/").endswith("src/musubi_tuner/convert_lora.py")  # MEASURED: not networks/ as zimage.md says
+        assert command[command.index("--input") + 1] == str(lora)
+        assert command[command.index("--output") + 1] == str(tmp_path / "raven-wangp.safetensors")
+        assert command[command.index("--target") + 1] == "other"
+        assert trainer.convert_command(lora, self._request(tmp_path, target="qwen_image")) is None
+
+    def test_the_lora_is_never_taken_from_the_latent_cache(self, tmp_path: Path):
+        """The run's latent cache (cache/*.safetensors) sits in its output folder;
+        the fallback search could register a cached latent as the LoRA."""
+        trainer = MusubiTrainer(tmp_path)
+        request = self._request(tmp_path, output_dir=str(tmp_path), output_name="raven")
+        (tmp_path / "cache").mkdir()
+        (tmp_path / "cache" / "0001-photo_0768x1344_zi.safetensors").write_bytes(b"x")
+        assert trainer.find_lora(request) is None
+        (tmp_path / "raven-step00000183.safetensors").write_bytes(b"x")
+        assert trainer.find_lora(request) == tmp_path / "raven-step00000183.safetensors"
+
     def test_musubi_refuses_wan22_and_missing_weights(self, tmp_path: Path):
         trainer = MusubiTrainer(tmp_path)
         with pytest.raises(TrainerUnavailable, match="24 GB"):
