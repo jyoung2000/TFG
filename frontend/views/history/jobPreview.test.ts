@@ -5,8 +5,8 @@ import type { JobOutput } from '../../types/jobs'
 const out = (o: Partial<JobOutput>) => ({ kind: 'file', path: '', ...o }) as JobOutput
 
 describe('jobPreview', () => {
-  it('previews a finished LoRA run by its sample, not its .safetensors', () => {
-    const job = { outputs: [out({ kind: 'file', path: 'raven.safetensors' }), out({ kind: 'image', path: 'sample_840.png' })], metrics: {} }
+  it('previews a finished LoRA run by its last sample, not its .safetensors', () => {
+    const job = { kind: 'training' as const, outputs: [out({ kind: 'file', path: 'raven.safetensors' }), out({ kind: 'image', path: 'sample_420.png' }), out({ kind: 'image', path: 'sample_840.png' })], metrics: {} }
     expect(jobPreview(job)).toEqual({ source: 'sample_840.png', kind: 'image' })
   })
   it('previews a running training job by its latest sample', () => {

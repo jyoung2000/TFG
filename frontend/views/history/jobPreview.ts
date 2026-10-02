@@ -5,8 +5,10 @@
  */
 import type { Job } from '../../types/jobs'
 
-export function jobPreview(job: Pick<Job, 'outputs' | 'metrics'>): { source: string; kind: 'image' | 'video' | 'file' | null } {
-  const shown = job.outputs.find(o => o.thumb || o.kind === 'image')
+export function jobPreview(job: Pick<Job, 'outputs' | 'metrics'> & { kind?: Job['kind'] }): { source: string; kind: 'image' | 'video' | 'file' | null } {
+  // A training run lists its samples oldest first; the newest shows what it learned.
+  const candidates = job.outputs.filter(o => o.thumb || o.kind === 'image')
+  const shown = job.kind === 'training' ? candidates[candidates.length - 1] : candidates[0]
   if (shown) return { source: shown.thumb || shown.path, kind: shown.kind }
   const samples = job.metrics?.samples
   if (Array.isArray(samples) && samples.length > 0) {
