@@ -29,7 +29,7 @@ from film.training_api_types import (
     TrainingStatusResponse,
 )
 from film.training_models import LORA_TARGETS, Dataset, DatasetItem, DatasetPreset, ItemSource, LoraEntry, TrainingConfig, TrainingRun, TrainingSample, now_ms
-from film.training_presets import default_config, fits_machine
+from film.training_presets import default_config, estimate_vram_mb, fits_machine, max_blocks_to_swap
 from handlers.base import StateHandlerBase
 from handlers.jobs_handler import Job, JobsHandler
 from handlers.vision_handler import VisionHandler
@@ -468,6 +468,8 @@ class TrainingHandler(StateHandlerBase):
         problem = _config_problem(config)
         if problem:
             raise HTTPError(400, problem)
+        # Our estimate, never the client's number (it follows Block swap).
+        config = config.model_copy(update={"estimated_vram_mb": estimate_vram_mb(config)})
         memory = self._vram.memory_mb()
         ok, why = fits_machine(config, memory[1] if memory else None)
         if not ok:
@@ -578,9 +580,11 @@ class TrainingHandler(StateHandlerBase):
             self._jobs.mark_running(run.job_id)
         # Make room: unload every vision model the trainer's estimate needs.
         try:
-            self._vram.prepare_for_render("training", needed_mb=run.config.estimated_vram_mb)
+            self._vram.prepare_for_render("training", needed_mb=estimate_vram_mb(run.config))
         except VramError as exc:
-            self._fail(run_id, str(exc))
+            limit = max_blocks_to_swap(run.config.target)
+            hint = f" Or raise Block swap (now {run.config.blocks_to_swap}, up to {limit}): each block moves about 0.2 GB to system RAM." if limit and run.config.blocks_to_swap < limit else ""
+            self._fail(run_id, f"{exc}{hint}")
             return
         out_dir = self._run_dir(run.id)
         request = TrainingRequest(
@@ -881,6 +885,9 @@ def _config_problem(config: TrainingConfig) -> str:
         return "Sample every must be 0 (no samples) or more."
     if config.blocks_to_swap < 0:
         return "Blocks to swap must be 0 or more."
+    limit = max_blocks_to_swap(config.target)
+    if limit is not None and config.blocks_to_swap > limit:
+        return f"Blocks to swap can be at most {limit} for {config.target}."
     return ""
 
 

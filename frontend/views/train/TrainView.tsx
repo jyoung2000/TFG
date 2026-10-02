@@ -1,5 +1,6 @@
 import { nextDatasetName } from './datasetName'
 import { WEIGHT_LABELS, trainerChip, weightStatus, type WeightRow } from './trainerWeights'
+import { estimateVramMb, maxBlocksToSwap } from './vramEstimate'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ArrowLeft, Ban, FolderOpen, Images, Layers, Loader2, Play, Plus, RefreshCw, Sparkles, Trash2, Video, Wand2 } from 'lucide-react'
 import { useProjects } from '../../contexts/ProjectContext'
@@ -238,12 +239,13 @@ function DatasetBuilder({ dataset, status, onChanged, onStarted, onDeleted, onEr
   const fromAnalysis = (id: string) => run('Importing', () => trainingApi.importItems(dataset.id, { analysis_id: id }))
 
   const machine = status?.machine_vram_mb ?? 12288
-  const fits = config ? config.estimated_vram_mb <= machine : true
+  const estimate = config ? estimateVramMb(config) : 0
+  const fits = config ? estimate <= machine : true
   const trainer = status?.trainers.find(t => t.id === config?.trainer)
   // The target's model files (QA 2026-10-01: nothing set them, so runs failed minutes in).
   const weights = weightStatus(status?.weights, target)
   const canTrain = dataset.items.length >= 4 && config !== null && fits && (trainer?.installed ?? false) && weights.ready
-  const blocker = dataset.items.length < 4 ? 'Add at least 4 images (12 or more is the sweet spot).' : !fits ? `Estimated ${(config!.estimated_vram_mb / 1024).toFixed(1)} GB does not fit this ${Math.round(machine / 1024)} GB card.` : trainer && !trainer.installed ? trainer.reason : weights.blocker
+  const blocker = dataset.items.length < 4 ? 'Add at least 4 images (12 or more is the sweet spot).' : !fits ? `Estimated ${(estimate / 1024).toFixed(1)} GB does not fit this ${Math.round(machine / 1024)} GB card${maxBlocksToSwap(config!.target) ? ' - raise Block swap' : ''}.` : trainer && !trainer.installed ? trainer.reason : weights.blocker
 
   return (
     <div className="max-w-5xl space-y-4" data-testid="dataset-builder">
@@ -310,7 +312,7 @@ function DatasetBuilder({ dataset, status, onChanged, onStarted, onDeleted, onEr
             ))}
             <label className="flex items-center gap-1 text-zinc-400 self-end"><input type="checkbox" checked={config.fp8} onChange={e => setConfig(c => (c ? { ...c, fp8: e.target.checked } : c))} /> fp8</label>
             <div className="col-span-2 md:col-span-4 lg:col-span-7 text-[11px] text-zinc-500">
-              {config.trainer} · estimated <span className={fits ? 'text-emerald-300' : 'text-amber-300'}>{(config.estimated_vram_mb / 1024).toFixed(1)} GB</span> of {Math.round(machine / 1024)} GB · buckets {config.buckets.join('/')}
+              {config.trainer} · estimated <span className={fits ? 'text-emerald-300' : 'text-amber-300'}>{(estimate / 1024).toFixed(1)} GB</span> of {Math.round(machine / 1024)} GB · buckets {config.buckets.join('/')}{maxBlocksToSwap(config.target) ? ` · Block swap up to ${maxBlocksToSwap(config.target)} (about 0.2 GB of VRAM each, slower)` : ''}
             </div>
           </div>
         )}
