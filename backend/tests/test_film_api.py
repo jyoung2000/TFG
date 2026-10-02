@@ -133,6 +133,14 @@ class TestAssets:
         )
         assert response.status_code == 400
 
+    def test_an_asset_cannot_be_renamed_to_blank(self, client):
+        # QA 2026-10-01: create refused a blank name but update stored one.
+        asset_id = client.post(f"/api/film/projects/{PROJECT}/assets", json={"kind": "prop", "name": "Lamp"}).json()["asset"]["id"]
+        response = client.put(f"/api/film/projects/{PROJECT}/assets/{asset_id}", json={"name": "   "})
+        assert response.status_code == 400
+        project = client.get(f"/api/film/projects/{PROJECT}").json()["project"]
+        assert project["assets"][0]["name"] == "Lamp"
+
     def test_asset_reference_image_saved(self, client, test_state):
         asset_id = client.post(
             f"/api/film/projects/{PROJECT}/assets",

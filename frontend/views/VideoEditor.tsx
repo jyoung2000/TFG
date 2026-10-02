@@ -1410,7 +1410,8 @@ export function VideoEditor() {
   
   const handleDuplicateTimeline = (timelineId: string) => {
     if (!currentProjectId) return
-    const dup = duplicateTimeline(currentProjectId, timelineId)
+    // The open timeline is copied as it is on screen, unsaved edits included.
+    const dup = duplicateTimeline(currentProjectId, timelineId, timelineId === loadedTimelineIdRef.current ? { clips, tracks, subtitles } : undefined)
     // Auto-open the duplicated timeline tab
     if (dup?.id) {
       setOpenTimelineIds(prev => { const next = new Set(prev); next.add(dup.id); return next })
@@ -1423,7 +1424,7 @@ export function VideoEditor() {
     // Force-save current timeline before switching
     if (loadedTimelineIdRef.current) {
       if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current)
-      updateTimeline(currentProjectId, loadedTimelineIdRef.current, { clips, tracks })
+      updateTimeline(currentProjectId, loadedTimelineIdRef.current, { clips, tracks, subtitles })
     }
     loadedTimelineIdRef.current = null // Reset so the useEffect picks up the new one
     setActiveTimeline(currentProjectId, timelineId)
@@ -2694,11 +2695,8 @@ export function VideoEditor() {
                             <Tooltip content="Delete track" side="right">
                               <button
                                 onClick={() => {
-                                  if (confirm(`Delete subtitle track "${track.name}"?`)) {
-                                    pushTrackUndo()
-                                    setTracks(tracks.filter((_, i) => i !== realIndex))
-                                    setSubtitles(prev => prev.filter(s => s.trackIndex !== realIndex))
-                                  }
+                                  // The shared delete shifts clips on later tracks too (QA 2026-10-01).
+                                  if (confirm(`Delete subtitle track "${track.name}"?`)) deleteTrack(realIndex)
                                 }}
                                 className="p-0.5 rounded text-zinc-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
                               >

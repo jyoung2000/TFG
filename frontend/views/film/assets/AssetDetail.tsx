@@ -5,6 +5,7 @@
  * the asset is used. All handlers are the pre-redesign ones.
  */
 
+import { assetUpdates, type AssetEdits, type AssetTextField } from './assetEdits'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ArrowLeft, Box, Check, Copy, GraduationCap, ImagePlus, Layers, Loader2, Lock, Plus, Sparkles, Wand2, X } from 'lucide-react'
 import { useProjects } from '../../../contexts/ProjectContext'
@@ -27,24 +28,27 @@ export function AssetDetail({ asset, onBack, onOpenLightbox, onOpenStudio }: {
   const { film, refresh } = useFilm()
   const { openTrain } = useProjects()
   const [busyDataset, setBusyDataset] = useState(false)
-  const [draft, setDraft] = useState<Partial<FilmAsset>>({ ...asset })
+  // Only the user's edits: every other field shows the live asset, so text the AI
+  // fills (style guide) is neither shown stale nor saved back over (QA 2026-10-01).
+  const [draft, setDraft] = useState<AssetEdits>({})
   const [note, setNote] = useState('')
   const [generating, setGenerating] = useState(false)
   const [generatingGuide, setGeneratingGuide] = useState(false)
   const [busySheet, setBusySheet] = useState(false)
-  useEffect(() => { setDraft({ ...asset }) }, [asset.id]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setDraft({}) }, [asset.id])
   const c = consistencyOf(asset)
   const meta = KIND_META[asset.kind]
 
   const save = useCallback(async () => {
     if (!film) return
-    const updates: Record<string, unknown> = {}
-    for (const key of ['name','description','appearance','wardrobe','accessories','environment','lighting','atmosphere','time_of_day','prop_details','style_prompt','continuity_notes'] as const) {
-      if (draft[key] !== undefined && draft[key] !== asset[key]) updates[key] = draft[key]
-    }
-    if (Object.keys(updates).length === 0) return
-    await filmApi.updateAsset(film.id, asset.id, updates)
-    await refresh(); setNote('Saved'); setTimeout(() => setNote(''), 1500)
+    const updates = assetUpdates(draft, asset)
+    if (Object.keys(updates).length === 0) { setDraft({}); return }
+    try {
+      await filmApi.updateAsset(film.id, asset.id, updates)
+      await refresh()
+      setDraft({})
+      setNote('Saved'); setTimeout(() => setNote(''), 1500)
+    } catch (e) { setNote('Save failed: ' + (e instanceof Error ? e.message : String(e))) }
   }, [film, asset, draft, refresh])
 
   const addReference = useCallback(async () => {
@@ -111,7 +115,7 @@ export function AssetDetail({ asset, onBack, onOpenLightbox, onOpenStudio }: {
         <button onClick={onBack} aria-label="Back to all assets" className="p-1.5 rounded hover:bg-zinc-800 text-zinc-400"><ArrowLeft className="h-4 w-4" /></button>
         <span className={'px-1.5 py-0.5 rounded text-[10px] font-medium ' + meta.color}>{meta.label}</span>
         <input className="bg-transparent text-base font-semibold text-white focus:outline-none border-b border-transparent focus:border-violet-600 min-w-0 flex-1 max-w-xs"
-          value={(draft.name as string) ?? ''} aria-label="Asset name"
+          value={draft.name ?? asset.name ?? ''} aria-label="Asset name"
           onChange={e => setDraft(d => ({ ...d, name: e.target.value }))} onBlur={() => void save()} />
         {asset.kind !== 'style' && (
           <span className={'flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium ' + (c.locked ? 'bg-emerald-900/60 text-emerald-300' : 'bg-amber-900/50 text-amber-300')}>
@@ -173,8 +177,8 @@ export function AssetDetail({ asset, onBack, onOpenLightbox, onOpenStudio }: {
               {KIND_FIELDS[asset.kind].map(field => (
                 <label key={String(field.key)} className="block">
                   <span className="text-[10px] text-zinc-500 uppercase tracking-wide">{field.label}</span>
-                  <textarea className={inputClass + ' mt-0.5 resize-none h-14'} value={String(draft[field.key] ?? '')}
-                    onChange={e => setDraft(d => ({ ...d, [field.key]: e.target.value }))} />
+                  <textarea className={inputClass + ' mt-0.5 resize-none h-14'} value={String(draft[field.key as AssetTextField] ?? (asset as unknown as Record<string, unknown>)[field.key] ?? '')}
+                    onChange={e => setDraft(d => ({ ...d, [field.key as AssetTextField]: e.target.value }))} />
                 </label>
               ))}
             </div>

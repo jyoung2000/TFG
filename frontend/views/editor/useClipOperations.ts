@@ -1,3 +1,4 @@
+import { removeTrackAt } from './timelineOps'
 import { useCallback } from 'react'
 import type { Asset, TimelineClip, Track, TransitionType, SubtitleClip, ClipEffect, EffectType, TextOverlayStyle } from '../../types/project'
 import { DEFAULT_COLOR_CORRECTION, DEFAULT_LETTERBOX, EFFECT_DEFINITIONS, DEFAULT_TEXT_STYLE } from '../../types/project'
@@ -462,15 +463,9 @@ export function useClipOperations(params: UseClipOperationsParams) {
   const deleteTrack = (idx: number) => {
     if (tracks.length <= 1) return
     pushTrackUndo()
-    setClips(prev => prev
-      .filter(c => c.trackIndex !== idx)
-      .map(c => c.trackIndex > idx ? { ...c, trackIndex: c.trackIndex - 1 } : c)
-    )
-    // Also shift subtitle track indices
-    setSubtitles(prev => prev
-      .filter(s => s.trackIndex !== idx)
-      .map(s => s.trackIndex > idx ? { ...s, trackIndex: s.trackIndex - 1 } : s)
-    )
+    // Clips and subtitles on later tracks move up with them.
+    setClips(prev => removeTrackAt(prev, [], tracks, idx).clips)
+    setSubtitles(prev => removeTrackAt([], prev, tracks, idx).subtitles)
     setTracks(tracks.filter((_, i) => i !== idx))
   }
   

@@ -349,6 +349,8 @@ class FilmHandler(StateHandlerBase):
             asset = project.asset(asset_id)
             if asset is None:
                 raise HTTPError(404, f"Asset not found: {asset_id}")
+            if req.name is not None and not req.name.strip():
+                raise HTTPError(400, "Asset name is required")
             updates = {
                 key: value
                 for key, value in req.model_dump().items()

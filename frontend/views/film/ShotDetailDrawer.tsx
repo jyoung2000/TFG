@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { syncDraft } from './drawerDraft'
+import { useCallback, useEffect, useMemo, useState, useRef } from 'react'
 import {
   AlertTriangle,
   Aperture,
@@ -101,8 +102,11 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
     setVisualFrames(null)
   }, [shot.id])
 
+  // A different shot resets the form; a refresh of this one (the queue poll
+  // during a render) only updates fields the user has not edited (QA 2026-10-01).
+  const serverDraftRef = useRef<{ id: string; values: typeof draft } | null>(null)
   useEffect(() => {
-    setDraft({
+    const values = {
       title: shot.title,
       description: shot.description,
       action: shot.action,
@@ -111,8 +115,12 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
       visual_prompt: shot.visual_prompt,
       camera_move: shot.camera_move,
       gap_before: shot.gap_before_seconds == null ? '' : String(shot.gap_before_seconds),
-    })
-  }, [shot.id, shot.updated_at, shot.title, shot.description, shot.action, shot.dialogue, shot.duration_seconds, shot.visual_prompt, shot.camera_move, shot.gap_before_seconds])
+    }
+    const previous = serverDraftRef.current
+    serverDraftRef.current = { id: shot.id, values }
+    if (!previous || previous.id !== shot.id) setDraft(values)
+    else setDraft(d => syncDraft(d, previous.values, values))
+  }, [shot.id, shot.title, shot.description, shot.action, shot.dialogue, shot.duration_seconds, shot.visual_prompt, shot.camera_move, shot.gap_before_seconds])
 
   useEffect(() => {
     if (!projectId) return

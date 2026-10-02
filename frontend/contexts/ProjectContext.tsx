@@ -1,3 +1,4 @@
+import { copyTimelineContent } from '../views/editor/timelineOps'
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react'
 import type { Project, Asset, AssetTake, ViewType, ProjectTab, Timeline } from '../types/project'
 
@@ -39,7 +40,8 @@ interface ProjectContextType {
   addTimeline: (projectId: string, name?: string) => Timeline
   deleteTimeline: (projectId: string, timelineId: string) => void
   renameTimeline: (projectId: string, timelineId: string, name: string) => void
-  duplicateTimeline: (projectId: string, timelineId: string) => Timeline | null
+  /** `content`: the timeline as the editor has it now (edits not auto-saved yet). */
+  duplicateTimeline: (projectId: string, timelineId: string, content?: Pick<Timeline, 'clips' | 'tracks' | 'subtitles'>) => Timeline | null
   setActiveTimeline: (projectId: string, timelineId: string) => void
   updateTimeline: (projectId: string, timelineId: string, updates: Partial<Pick<Timeline, 'tracks' | 'clips' | 'subtitles'>>) => void
   getActiveTimeline: (projectId: string) => Timeline | null
@@ -447,25 +449,22 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
     ))
   }, [])
   
-  const duplicateTimeline = useCallback((projectId: string, timelineId: string): Timeline | null => {
+  const duplicateTimeline = useCallback((projectId: string, timelineId: string, content?: Pick<Timeline, 'clips' | 'tracks' | 'subtitles'>): Timeline | null => {
     const project = projects.find(p => p.id === projectId)
     const source = project?.timelines?.find(t => t.id === timelineId)
     if (!source) return null
     
+    // The copy's clips get new ids and their links point at each other (QA 2026-10-01).
+    const from = content ?? source
+    const copied = copyTimelineContent(from, kind => `${kind}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`)
     const newTimeline: Timeline = {
       ...source,
       id: `timeline-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       name: `${source.name} (copy)`,
       createdAt: Date.now(),
-      tracks: source.tracks.map(t => ({ ...t })),
-      clips: source.clips.map(c => ({ 
-        ...c, 
-        id: `clip-${Date.now()}-${Math.random().toString(36).substr(2, 9)}` 
-      })),
-      subtitles: source.subtitles?.map(s => ({
-        ...s,
-        id: `sub-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
-      })),
+      tracks: from.tracks.map(t => ({ ...t })),
+      clips: copied.clips,
+      subtitles: copied.subtitles,
     }
     
     setProjects(prev => prev.map(p => 
