@@ -107,6 +107,10 @@ class TrainingHandler(StateHandlerBase):
     def _run_dir(self, run_id: str) -> Path:
         return self._root / "runs" / run_id
 
+    def media_root(self) -> Path:
+        """Where run samples live; the media route serves them for History previews."""
+        return self._root / "runs"
+
     def _load_dataset(self, dataset_id: str) -> Dataset:
         path = self._dataset_dir(dataset_id) / "dataset.json"
         if not path.is_file():

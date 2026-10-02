@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { AlertTriangle, Clock, Download, FileVideo, ImageIcon, Loader2, RefreshCw, ScanSearch, Sparkles, XCircle } from 'lucide-react'
 import { filmOutputUrl } from '../../lib/film-api'
 import { JOB_KIND_LABEL, isActive, type Job, type JobKind } from '../../types/jobs'
+import { jobPreview } from './jobPreview'
 
 export const KIND_ICON: Record<JobKind, React.ReactNode> = {
   image_gen: <ImageIcon className="h-3.5 w-3.5" />,
@@ -43,8 +44,7 @@ export function formatSeconds(value: unknown): string {
 
 /** Resolve the first output's thumbnail (or the output itself for images) to a loadable URL. */
 export function useJobThumb(job: Job): { url: string | null; kind: 'image' | 'video' | 'file' | null; error: boolean } {
-  const first = job.outputs[0]
-  const source = first?.thumb || (first?.kind === 'image' ? first.path : '')
+  const { source, kind } = jobPreview(job)
   const [state, setState] = useState<{ url: string | null; error: boolean }>({ url: null, error: false })
   useEffect(() => {
     let cancelled = false
@@ -57,7 +57,7 @@ export function useJobThumb(job: Job): { url: string | null; kind: 'image' | 'vi
       .catch(() => { if (!cancelled) setState({ url: null, error: true }) })
     return () => { cancelled = true }
   }, [source])
-  return { url: state.url, kind: first?.kind ?? null, error: state.error }
+  return { url: state.url, kind, error: state.error }
 }
 
 interface JobCardProps {
@@ -96,7 +96,7 @@ export function JobCard({ job, selected, onOpen, onCancel }: JobCardProps) {
             alt=""
             loading="lazy"
             onError={() => setImgFailed(true)}
-            className="w-full h-full object-cover"
+            className="w-full h-full object-cover object-top"
           />
         ) : error || imgFailed ? (
           <div className="flex flex-col items-center text-red-300 text-[11px] gap-1" role="img" aria-label="Preview unavailable">
