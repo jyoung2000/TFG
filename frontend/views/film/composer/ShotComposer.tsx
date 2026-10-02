@@ -68,6 +68,7 @@ import { CompositionHistory } from './history'
 import { layoutFromComposition, underlaySource } from './sceneFromAnalysis'
 import { LORA_ANGLES } from './angleViews'
 import { PosePreviewPanel } from './PosePreviewPanel'
+import { FramingTracker } from './framingTracker'
 
 /** One generated angle, through the authenticated film media route. */
 function AngleThumb({ projectId, path }: { projectId: string; path: string }) {
@@ -226,6 +227,16 @@ export function ShotComposer({ projectId, scene, shot, onClose, studio }: ShotCo
   const [framing, setFraming] = useState<ShotFraming>(shot.framing)
   const [cameraMove, setCameraMove] = useState<CameraMove>(shot.camera_move)
   const [moveIntensity, setMoveIntensity] = useState(1)
+  // The framing the 3D scene already shows: re-applying it would re-solve the
+  // camera and wipe its keyframes (QA 2026-10-01, see framingTracker.ts).
+  const framingTracker = useRef(new FramingTracker())
+  // Current values for callbacks bound once at mount (the drag history).
+  const framingRef = useRef(framing)
+  framingRef.current = framing
+  const cameraMoveRef = useRef(cameraMove)
+  cameraMoveRef.current = cameraMove
+  const moveIntensityRef = useRef(moveIntensity)
+  moveIntensityRef.current = moveIntensity
   const [previewT, setPreviewT] = useState(0)
   const previewSecondsRef = useRef(0)
   const [motionPreviewOn, setMotionPreviewOn] = useState(false)
@@ -318,7 +329,7 @@ export function ShotComposer({ projectId, scene, shot, onClose, studio }: ShotCo
       if (!history) return
       if (dragging) history.begin()
       else {
-        history.end(composer.serialize(shot.framing, shot.camera_move, shot.duration_seconds))
+        history.end(composer.serialize(framingRef.current, cameraMoveRef.current, shot.duration_seconds))
         setHistoryTick(t => t + 1)
       }
     }
@@ -326,6 +337,7 @@ export function ShotComposer({ projectId, scene, shot, onClose, studio }: ShotCo
     // Hydrate from the saved composition, or seed from the shot's cast.
     if (shot.composition && shot.composition.objects.length > 0) {
       composer.hydrate(shot.composition)
+      framingTracker.current.loaded(shot.composition.framing)
       setCameraMove(shot.composition.camera_move)
       setFraming(shot.composition.framing)
     } else {
@@ -338,6 +350,7 @@ export function ShotComposer({ projectId, scene, shot, onClose, studio }: ShotCo
       })
       if (shot.characters.length === 0) composer.addObject(newObject('figure', 'Character 1'))
       composer.applyFraming(shot.framing)
+      framingTracker.current.loaded(shot.framing)
     }
     setObjects(composer.snapshotObjects())
     dirtyRef.current = false
@@ -360,9 +373,18 @@ export function ShotComposer({ projectId, scene, shot, onClose, studio }: ShotCo
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shot.id])
 
-  // Re-solve the camera whenever framing presets change (manual mode keeps the camera).
+  // Re-solve the camera when the user changes the framing (manual mode keeps
+  // the camera). A framing the scene was loaded or restored with is already in
+  // place - re-applying it would wipe the camera keyframes. A change is an edit:
+  // marked unsaved and recorded for undo.
   useEffect(() => {
-    sceneRef.current?.applyFraming(framing)
+    const composer = sceneRef.current
+    if (!composer || !framingTracker.current.changed(framing)) return
+    composer.applyFraming(framing)
+    if (cameraMoveRef.current !== 'static') composer.applyCameraMove(cameraMoveRef.current, shot.duration_seconds, moveIntensityRef.current)
+    markDirty()
+    setTransformTick(t => t + 1)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [framing])
 
   // Sync joint sliders when the selection or joint changes.
@@ -462,6 +484,7 @@ export function ShotComposer({ projectId, scene, shot, onClose, studio }: ShotCo
       else composer.select(selectedId)
     }
     setCameraMove(snapshot.camera_move)
+    framingTracker.current.loaded(snapshot.framing)
     setFraming(snapshot.framing)
     syncObjects()
     markDirty()
@@ -954,6 +977,7 @@ export function ShotComposer({ projectId, scene, shot, onClose, studio }: ShotCo
             <button
               key={mode}
               title={title}
+              aria-label={title}
               aria-pressed={gizmoMode === mode}
               onClick={() => setGizmoMode(mode)}
               className={`p-1.5 ${gizmoMode === mode ? 'bg-violet-600/70 text-white' : 'text-zinc-400 hover:bg-zinc-800'}`}
@@ -1199,7 +1223,8 @@ export function ShotComposer({ projectId, scene, shot, onClose, studio }: ShotCo
                       onClick={() => {
                         if (!selectedId) return
                         sceneRef.current?.resetJoint(selectedId, selectedJoint as JointName)
-                        setJointEuler([0, 0, 0])
+                        // The body may not let the joint go all the way back: show where it is.
+                        setJointEuler(sceneRef.current?.readPoseOf(selectedId)[selectedJoint] ?? [0, 0, 0])
                       }}
                       disabled={selectedObject.locked}
                       className="ml-auto px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 text-[10px] text-zinc-200"
@@ -1492,8 +1517,8 @@ export function ShotComposer({ projectId, scene, shot, onClose, studio }: ShotCo
                       <span className="w-3">{axis}</span>
                       <input
                         type="range"
-                        min={-160}
-                        max={160}
+                        min={-180}
+                        max={180}
                         step={1}
                         value={jointEuler[index as 0 | 1 | 2]}
                         onChange={event => updateJoint(index as 0 | 1 | 2, Number(event.target.value))}
