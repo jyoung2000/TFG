@@ -44,6 +44,11 @@ describe('trainerChip', () => {
     expect(trainerChip(musubi, { wan: { dit: 'D:/dit.safetensors', vae: 'D:/vae.safetensors' }, ltx: { dit: '' } }).text).toBe('ready')
     expect(trainerChip({ ...musubi, targets: ['flux'] }, {}).text).toBe('ready')
   })
+  it('believes the backend about which targets can start', () => {
+    // QA 2026-10-02 (r50): FLUX's name-only row made musubi look ready with no files set.
+    expect(trainerChip({ ...musubi, ready_targets: [] }, { wan: { dit: '' }, ltx: { name_or_path: '' } }).text).toBe('needs model files')
+    expect(trainerChip({ ...musubi, ready_targets: ['z_image'] }, {}).title).toContain('z_image')
+  })
   it('says why a trainer is unavailable', () => {
     expect(trainerChip({ ...musubi, installed: false }, {}).text).toBe('not installed')
     expect(trainerChip({ ...musubi, installed: false, fits_12gb: false }, {}).text).toBe('needs more than 12 GB')

@@ -58,6 +58,8 @@ class TrainerStatus(BaseModel):
     fits_12gb: bool
     reason: str
     notes: str
+    #: Targets this trainer can start now: installed, model files set, fits this card.
+    ready_targets: list[str] = Field(default_factory=list[str])
 
 
 class TrainingStatusResponse(BaseModel):

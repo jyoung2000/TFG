@@ -192,22 +192,31 @@ class TrainingHandler(StateHandlerBase):
 
     def status(self) -> TrainingStatusResponse:
         trainers: list[TrainerStatus] = []
+        configured = self.weights()
+        memory = self._vram.memory_mb()
+        machine = memory[1] if memory else MACHINE_VRAM_MB
         for spec in TRAINERS:
             trainer = self._trainers.get(spec.id)
             installed, reason = trainer.available() if trainer is not None else (False, f"{spec.name} is not wired in this build")
-            trainers.append(TrainerStatus(id=spec.id, name=spec.name, upstream=spec.upstream, license=spec.license, targets=list(spec.targets), installed=installed and spec.fits_12gb, fits_12gb=spec.fits_12gb, reason=reason, notes=spec.notes))
+            # The same checks Start makes (QA 2026-10-02: the header said "ready"
+            # for a trainer that Start would refuse).
+            ready = [
+                target for target in spec.targets
+                if trainer is not None and installed and spec.fits_12gb
+                and not trainer.missing_weights(target, configured.get(target, {}))
+                and fits_machine(default_config(target, "character"), machine)[0]
+            ]
+            trainers.append(TrainerStatus(id=spec.id, name=spec.name, upstream=spec.upstream, license=spec.license, targets=list(spec.targets), installed=installed and spec.fits_12gb, fits_12gb=spec.fits_12gb, reason=reason, notes=spec.notes, ready_targets=ready))
         weights: dict[str, dict[str, str]] = {}
-        configured = self.weights()
         for target, keys in WEIGHT_KEYS.items():
             row: dict[str, str] = {}
             for key in keys:
                 value = configured.get(target, {}).get(key, "")
                 row[key] = value if value and (key == "name_or_path" or Path(value).exists()) else ("" if not value else f"missing: {value}")
             weights[target] = row
-        memory = self._vram.memory_mb()
         with self.lock:
             active = self._active
-        return TrainingStatusResponse(trainers=trainers, weights=weights, machine_vram_mb=memory[1] if memory else MACHINE_VRAM_MB, active_run_id=active)
+        return TrainingStatusResponse(trainers=trainers, weights=weights, machine_vram_mb=machine, active_run_id=active)
 
     # ---- datasets ----------------------------------------------------------------------
 

@@ -228,6 +228,22 @@ class TestPresetsAndVramGuard:
         assert client.put("/api/training/weights/nope", json={}).status_code == 400
 
 
+    def test_status_says_which_targets_each_trainer_can_train_now(self, client, tmp_path: Path, fake_services):
+        """QA 2026-10-02 (r50): the Train header called musubi "ready" with no
+        model file set - FLUX's settings row has only a model name, which the
+        chip took as ready, though musubi needs files for every target and Start
+        refused. The status now asks each trainer, as Start does."""
+        fake_services.trainer.required_weights = ("dit", "vae", "text_encoder")
+        musubi = lambda: next(t for t in client.get("/api/training/status").json()["trainers"] if t["id"] == "musubi")
+        assert musubi()["ready_targets"] == []
+        files = {}
+        for key in ("dit", "vae", "text_encoder"):
+            path = tmp_path / f"{key}.safetensors"
+            path.write_bytes(b"x")
+            files[key] = str(path)
+        assert client.put("/api/training/weights/z_image", json=files).status_code == 200
+        assert musubi()["ready_targets"] == ["z_image"]
+
 class TestTrainingRuns:
     def test_run_lifecycle_lands_in_history_with_loss_and_samples(self, client, tmp_path: Path, fake_services):
         dataset = _dataset(client, tmp_path, count=6, trigger="mara_v1")

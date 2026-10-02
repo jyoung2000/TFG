@@ -117,6 +117,8 @@ export interface TrainerStatus {
   fits_12gb: boolean
   reason: string
   notes: string
+  /** Targets it can start now (installed, model files set, fits the card); absent from older backends. */
+  ready_targets?: string[]
 }
 
 export interface TrainingStatusResponse {
