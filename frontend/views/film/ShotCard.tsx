@@ -153,7 +153,7 @@ export function ShotCard({
       {/* Reference above, its AI remake below (a shot made from scratch has just its picture). */}
       {reference && (
         <div className="relative aspect-video bg-zinc-950 flex items-center justify-center" data-testid="shot-reference">
-          {reference.url ? <img src={reference.url} alt="Reference" className="w-full h-full object-cover" /> : <Clapperboard className="h-7 w-7 text-zinc-700" />}
+          {reference.url ? <img src={reference.url} alt="Reference" className="w-full h-full object-contain" /> : <Clapperboard className="h-7 w-7 text-zinc-700" />}
           <span className="absolute bottom-1.5 left-1.5 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wide bg-teal-500 text-black">Reference</span>
         </div>
       )}
@@ -169,10 +169,10 @@ export function ShotCard({
               playsInline
               preload="metadata"
               onError={onThumbError}
-              className="w-full h-full object-cover"
+              className={`w-full h-full ${reference ? 'object-contain' : 'object-cover'}`}
             />
           ) : (
-            <img src={thumb.url} alt={thumb.kind === 'blockout' ? '3D blockout' : ''} data-testid={thumb.kind === 'blockout' ? 'shot-thumb-blockout' : undefined} className="w-full h-full object-cover" />
+            <img src={thumb.url} alt={thumb.kind === 'blockout' ? '3D blockout' : ''} data-testid={thumb.kind === 'blockout' ? 'shot-thumb-blockout' : undefined} className={`w-full h-full ${reference ? 'object-contain' : 'object-cover'}`} />
           )
         ) : (
           <Clapperboard className="h-7 w-7 text-zinc-700" />

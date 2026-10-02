@@ -1514,8 +1514,8 @@ class FilmGenerationHandler(StateHandlerBase):
         """The photo as the 3D model is now posed: FLUX.2 composes the person
         from the original photo into the pose, camera angle and framing of
         the composer's viewfinder. A fixed seed, so successive previews differ
-        by the edit, not by chance. Throwaway: no History job, nothing saved
-        to the project but the one guide file it overwrites."""
+        by the edit, not by chance. Throwaway: no History job, and no file left in the project
+        or the outputs folder."""
         handler = self._image_generation
         if handler is None:  # pragma: no cover - wired in AppHandler
             raise HTTPError(500, "Local image generation is not available in this build")
@@ -1550,6 +1550,9 @@ class FilmGenerationHandler(StateHandlerBase):
         out = Path(paths[0])
         mime = "image/png" if out.suffix.lower() == ".png" else "image/jpeg"
         encoded = base64.b64encode(out.read_bytes()).decode("ascii")
+        # Throwaway: the preview leaves no file in the outputs folder.
+        for leftover in [*paths, str(guide)]:
+            Path(leftover).unlink(missing_ok=True)
         return PreviewRenderResponse(image=f"data:{mime};base64,{encoded}", seconds=round(time.perf_counter() - started, 2), model=model)
 
     def asset_dataset(self, project_id: str, asset_id: str) -> Dataset:

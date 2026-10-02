@@ -36,10 +36,12 @@ def _wangp(test_state, fake_services, *, flux: bool = True) -> None:
 
 
 class TestPosePreview:
-    def test_the_edited_pose_is_rendered_from_the_viewfinder_and_the_photo(self, client, test_state, fake_services, create_fake_model_files):
+    def test_the_edited_pose_is_rendered_from_the_viewfinder_and_the_photo(self, client, test_state, fake_services, create_fake_model_files, tmp_path):
         create_fake_model_files(include_zit=True)
         _wangp(test_state, fake_services)
         photo = _photo(client)
+        outputs = tmp_path / "outputs"
+        outputs_before = {f for f in outputs.rglob("*") if f.is_file()}
         jobs_before = len(client.get("/api/jobs").json()["jobs"])
         project_before = client.get(f"/api/film/projects/{PROJECT}").json()["project"]
         response = client.post(
@@ -54,8 +56,10 @@ class TestPosePreview:
         assert params["model_type"] == "flux2_klein_4b" and params["video_prompt_type"] == "KI"
         assert len(params["image_refs"]) == 2, "the viewfinder first, then the photo"
         assert "black leather jacket" in params["prompt"]
-        # Throwaway: no History entry, the project untouched.
+        # Throwaway: no History entry, the project untouched, and no image
+        # left in the outputs folder (MEASURED: every live preview left one).
         assert len(client.get("/api/jobs").json()["jobs"]) == jobs_before
+        assert {f for f in outputs.rglob("*") if f.is_file()} == outputs_before
         assert client.get(f"/api/film/projects/{PROJECT}").json()["project"]["assets"] == project_before["assets"]
 
     def test_the_edit_is_spelled_out_and_the_photo_keeps_its_background(self, client, test_state, fake_services, create_fake_model_files):
