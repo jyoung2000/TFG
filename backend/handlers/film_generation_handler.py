@@ -24,6 +24,8 @@ from typing import Any, cast
 
 from _routes._errors import HTTPError
 from api_types import GenerateImageRequest, GenerateVideoRequest, VideoCameraMotion, LoraUse
+from PIL import Image
+
 from film.film_api_types import (
     AddAssetReferenceRequest,
     BatchGenerateRequest,
@@ -48,6 +50,7 @@ from film.film_api_types import (
     ReferenceSheetResponse,
     UpdateAssetRequest,
 )
+from film.identity_dataset import rare_trigger, source_crops
 from film.training_api_types import ImportDatasetItemsRequest
 from film.training_models import Dataset
 from film.film_continuity import check_shot_continuity
@@ -1614,9 +1617,36 @@ class FilmGenerationHandler(StateHandlerBase):
         if not images:
             raise HTTPError(400, "The asset has no images yet: generate a multi-angle set first")
         preset = {"character": "character", "style": "style"}.get(asset.kind, "object")
-        trigger = asset.lora_trigger.strip() or "".join(ch for ch in asset.name.lower() if ch.isalnum() or ch == "_") or "subject"
+        # A character's default trigger is a rare token: "raven" rendered the bird (2026-10-02).
+        name_trigger = "".join(ch for ch in asset.name.lower() if ch.isalnum() or ch == "_") or "subject"
+        trigger = asset.lora_trigger.strip() or (rare_trigger(asset.name) if preset == "character" else name_trigger)
         dataset = self._training.create_dataset(name=f"{asset.name} (asset)", preset=preset, trigger=trigger)  # type: ignore[arg-type]
-        return self._training.import_items(dataset.id, ImportDatasetItemsRequest(image_paths=images))
+        if preset != "character":
+            return self._training.import_items(dataset.id, ImportDatasetItemsRequest(image_paths=images))
+        # The real photo, weighted up: twice, plus head and upper-body crops of it.
+        with tempfile.TemporaryDirectory(prefix="lora-source-") as folder:
+            extra = [images[0], *self._source_crops(Path(images[0]), Path(folder), asset.name)]
+            return self._training.import_items(dataset.id, ImportDatasetItemsRequest(image_paths=[images[0], *extra, *images[1:]]))
+
+    def _source_crops(self, photo: Path, folder: Path, name: str) -> list[str]:
+        """Crops around the face Florence finds in the photo; none when it finds none."""
+        if self._vision is None:
+            return []
+        try:
+            found = self._vision.vision.detect(str(photo), "caption_to_phrase_grounding", "face")
+        except Exception as exc:  # noqa: BLE001 - crops are a bonus; the dataset stands without them
+            logger.info("No face crops for %s: %s", photo.name, exc)
+            return []
+        if not found.regions:
+            return []
+        face = max(found.regions, key=lambda region: region.score)
+        out: list[str] = []
+        with Image.open(photo) as image:
+            for suffix, crop in source_crops(image.convert("RGB"), face.bbox):
+                path = folder / f"{name}-{suffix}.png"
+                crop.save(path)
+                out.append(str(path))
+        return out
 
     def attach_training(self, training: TrainingHandler, vision: VisionHandler | None = None) -> None:
         self._training = training

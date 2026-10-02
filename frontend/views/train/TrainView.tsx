@@ -1,6 +1,6 @@
 import { nextDatasetName } from './datasetName'
 import { WEIGHT_LABELS, trainerChip, weightStatus, type WeightRow } from './trainerWeights'
-import { estimateVramMb, maxBlocksToSwap } from './vramEstimate'
+import { estimateMinutes, estimateVramMb, maxBlocksToSwap } from './vramEstimate'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ArrowLeft, Ban, FolderOpen, Images, Layers, Loader2, Play, Plus, RefreshCw, Sparkles, Trash2, Video, Wand2 } from 'lucide-react'
 import { useProjects } from '../../contexts/ProjectContext'
@@ -312,7 +312,7 @@ function DatasetBuilder({ dataset, status, onChanged, onStarted, onDeleted, onEr
             ))}
             <label className="flex items-center gap-1 text-zinc-400 self-end"><input type="checkbox" checked={config.fp8} onChange={e => setConfig(c => (c ? { ...c, fp8: e.target.checked } : c))} /> fp8</label>
             <div className="col-span-2 md:col-span-4 lg:col-span-7 text-[11px] text-zinc-500">
-              {config.trainer} · estimated <span className={fits ? 'text-emerald-300' : 'text-amber-300'}>{(estimate / 1024).toFixed(1)} GB</span> of {Math.round(machine / 1024)} GB · buckets {config.buckets.join('/')}{maxBlocksToSwap(config.target) ? ` · Block swap up to ${maxBlocksToSwap(config.target)} (about 0.2 GB of VRAM each, slower)` : ''}
+              {config.trainer} · estimated <span className={fits ? 'text-emerald-300' : 'text-amber-300'}>{(estimate / 1024).toFixed(1)} GB</span> of {Math.round(machine / 1024)} GB · buckets {config.buckets.join('/')}{estimateMinutes(config) ? ` · about ${estimateMinutes(config)} min` : ''}{maxBlocksToSwap(config.target) ? ` · Block swap up to ${maxBlocksToSwap(config.target)} (about 0.2 GB of VRAM each, slower)` : ''}
             </div>
           </div>
         )}

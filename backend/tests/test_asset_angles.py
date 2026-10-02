@@ -163,6 +163,28 @@ class TestAssetStudioAndDataset:
         saved = client.put(f"/api/film/projects/{PROJECT}/assets/{asset['id']}", json={"composition": composition}).json()["asset"]
         assert saved["composition"]["objects"][0]["pose"]["l_arm"] == [0, 0, 40]
 
+    def test_a_character_dataset_learns_the_real_photo(self, client, test_state, fake_services, create_fake_model_files):
+        # QA 2026-10-02 (Raven): the one real photo was 1 image in 22, its face
+        # small in a full-length frame. The dataset now holds it twice plus a
+        # head and an upper-body crop around the face Florence finds in it.
+        from services.vision.protocol import VisionRegion
+
+        create_fake_model_files(include_zit=True)
+        test_state.config.wangp_enabled = True
+        fake_services.wangp_bridge.available = True
+        asset = client.post(f"/api/film/projects/{PROJECT}/assets", json={"kind": "character", "name": "Raven"}).json()["asset"]
+        buffer = io.BytesIO()
+        Image.new("RGB", (1125, 2000), (90, 60, 50)).save(buffer, format="PNG")
+        photo = base64.b64encode(buffer.getvalue()).decode()
+        client.post(f"/api/film/projects/{PROJECT}/assets/{asset['id']}/references", json={"image_base64": photo, "name_hint": "photo"})
+        client.post(f"/api/film/projects/{PROJECT}/assets/{asset['id']}/references", json={"image_base64": _png((1, 2, 3)), "name_hint": "Raven-closeup-front"})
+        fake_services.vision.regions_override = [VisionRegion(label="face", bbox=[0.40, 0.06, 0.18, 0.10], score=0.9)]
+        dataset = client.post(f"/api/film/projects/{PROJECT}/assets/{asset['id']}/dataset", json={}).json()
+        assert dataset["trigger"] == "rvnx", "a rare token, not the word raven"
+        files = [i["file"] for i in dataset["items"]]
+        assert len(files) == 5, files  # photo x2, its two crops, the close-up
+        assert sum("source-face" in f for f in files) == 1 and sum("source-upper" in f for f in files) == 1
+
     def test_an_assets_images_become_a_character_dataset_with_its_trigger(self, client, test_state, fake_services, create_fake_model_files):
         create_fake_model_files(include_zit=True)
         asset = _character(client, test_state, fake_services)
@@ -170,5 +192,8 @@ class TestAssetStudioAndDataset:
         response = client.post(f"/api/film/projects/{PROJECT}/assets/{asset['id']}/dataset", json={})
         assert response.status_code == 200, response.text
         dataset = response.json()
-        assert dataset["preset"] == "character" and dataset["trigger"] == "mara"
-        assert len(dataset["items"]) == 3
+        # 2026-10-02: a character's default trigger is a rare token (was the name,
+        # "mara"), and the source photo is weighted up - here twice; its crops are
+        # skipped, the fake photo being too small to crop.
+        assert dataset["preset"] == "character" and dataset["trigger"] == "mrx"
+        assert len(dataset["items"]) == 4

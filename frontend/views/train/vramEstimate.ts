@@ -9,7 +9,7 @@ import type { TrainingConfig } from '../../types/training'
 
 /** Per target: the preset's blocks and estimate, VRAM per swapped block, musubi's maximum. */
 const SWAP: Record<string, { baseBlocks: number; baseMb: number; perBlockMb: number; maxBlocks: number }> = {
-  z_image: { baseBlocks: 8, baseMb: 10500, perBlockMb: 205, maxBlocks: 28 },
+  z_image: { baseBlocks: 8, baseMb: 8600, perBlockMb: 170, maxBlocks: 28 },
 }
 
 export function estimateVramMb(config: Pick<TrainingConfig, 'target' | 'blocks_to_swap' | 'estimated_vram_mb'>): number {
@@ -17,6 +17,17 @@ export function estimateVramMb(config: Pick<TrainingConfig, 'target' | 'blocks_t
   if (!swap) return config.estimated_vram_mb
   const blocks = Math.min(Math.max(config.blocks_to_swap, 0), swap.maxBlocks)
   return swap.baseMb - (blocks - swap.baseBlocks) * swap.perBlockMb
+}
+
+/**
+ * About how long a run takes, in minutes, or null when unmeasured. MEASURED
+ * 2026-10-02 (RTX 4070, musubi Z-Image): 2.3 s/step at 512 px, 4.9 at 768,
+ * plus ~4 min to load the models and cache the dataset.
+ */
+export function estimateMinutes(config: Pick<TrainingConfig, 'target' | 'steps' | 'resolution'>): number | null {
+  if (config.target !== 'z_image') return null
+  const secondsPerStep = 2.3 * Math.pow(Math.max(256, config.resolution) / 512, 2)
+  return Math.round((config.steps * secondsPerStep) / 60 + 4)
 }
 
 export function maxBlocksToSwap(target: string): number | null {

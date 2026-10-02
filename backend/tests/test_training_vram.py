@@ -53,3 +53,19 @@ def test_a_refused_start_says_to_raise_block_swap(client, tmp_path: Path, fake_s
     run = client.post("/api/training/runs", json={"dataset_id": dataset["id"], "config": config}).json()
     detail = client.get(f"/api/training/runs/{run['id']}").json()
     assert detail["status"] == "failed" and "Block swap" in detail["error"], detail
+
+
+def test_a_character_lora_trains_at_512_in_about_half_an_hour() -> None:
+    """MEASURED 2026-10-02 (RTX 4070, musubi Z-Image, fp8, gradient checkpointing):
+    4.9 s/step at 768 px (Raven's 1100-step run took 108 min), 2.3 s/step at 512 px.
+    Block swap barely moved the speed (4.7 s at 4 blocks, 4.9 at 16)."""
+    config = default_config("z_image", "character", image_count=26)
+    assert config.resolution == 512 and config.buckets == [512]
+    assert config.steps <= 840, config.steps
+
+
+def test_the_estimate_matches_what_training_used() -> None:
+    """MEASURED: ~7.2 GB at 768 px, 8 swapped blocks; 4 -> 16 blocks freed ~2.0 GB.
+    The old 10.5 GB figure refused runs that fit beside a browser."""
+    base = default_config("z_image", "character")
+    assert 8000 <= estimate_vram_mb(base) <= 9000

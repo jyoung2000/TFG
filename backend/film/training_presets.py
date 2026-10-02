@@ -33,7 +33,10 @@ class _Tweak:
 
 
 _BASE: dict[str, _Base] = {
-    "z_image": _Base("musubi", 16, 600, 768, (512, 768), 8, 10500),
+    # MEASURED 2026-10-02 (RTX 4070, fp8, gradient checkpointing): 4.9 s/step at
+    # 768 px, 2.3 s/step at 512 px; ~7.2 GB in use at 768 px with 8 blocks swapped
+    # (8.6 GB here leaves a margin; the old 10.5 GB refused runs that fit).
+    "z_image": _Base("musubi", 16, 600, 512, (512,), 8, 8600),
     "qwen_image": _Base("musubi", 16, 800, 768, (512, 768), 20, 11200),
     "flux": _Base("ai-toolkit", 16, 1000, 768, (512, 768, 1024), 0, 11500),
     "wan22": _Base("musubi", 16, 800, 512, (384, 512), 30, 24000),
@@ -47,11 +50,13 @@ class _Swap:
     max_blocks: int
 
 
-#: Block swap per target, from the model and musubi's docs: Z-Image's DiT is
-#: 12.3 GB bf16 = ~6.2 GB fp8 over 30 blocks (~205 MB each); zimage.md says at
-#: most 28 can be offloaded. Targets not listed keep their fixed estimate.
+#: Block swap per target: Z-Image swapping 4 -> 16 blocks freed ~2.0 GB
+#: (MEASURED 2026-10-02, ~170 MB a block; 12.3 GB bf16 DiT / 30 blocks in fp8
+#: predicts ~205); zimage.md says at most 28 can be offloaded. Swap barely
+#: changes the speed (4.7 s/step at 4 blocks, 4.9 at 16). Targets not listed
+#: keep their fixed estimate.
 _SWAP: dict[str, _Swap] = {
-    "z_image": _Swap(205, 28),
+    "z_image": _Swap(170, 28),
 }
 
 _PRESET_TWEAKS: dict[DatasetPreset, _Tweak] = {
@@ -67,7 +72,10 @@ def default_config(target: str, preset: DatasetPreset, *, image_count: int = 12)
     rank = max(4, base.rank + tweak.rank_delta)
     steps = int(base.steps * tweak.steps_scale)
     # More images need more steps to see each a sensible number of times.
-    steps = max(200, min(3000, int(steps * max(0.6, min(2.0, image_count / 12)))))
+    # A character's look is learned in a few hundred steps once the captions leave it
+    # to the trigger; up to 2x for 24+ images made Raven's run 1100 steps (108 min).
+    cap = 1.4 if preset == "character" else 2.0
+    steps = max(200, min(3000, int(steps * max(0.6, min(cap, image_count / 12)))))
     buckets = list(base.buckets)
     return TrainingConfig(
         target=target,

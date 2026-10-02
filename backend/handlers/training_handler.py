@@ -29,6 +29,7 @@ from film.training_api_types import (
     TrainingStatusResponse,
 )
 from film.training_models import LORA_TARGETS, Dataset, DatasetItem, DatasetPreset, ItemSource, LoraEntry, TrainingConfig, TrainingRun, TrainingSample, now_ms
+from film.identity_dataset import character_caption
 from film.training_presets import default_config, estimate_vram_mb, fits_machine, max_blocks_to_swap
 from handlers.base import StateHandlerBase
 from handlers.jobs_handler import Job, JobsHandler
@@ -392,7 +393,12 @@ class TrainingHandler(StateHandlerBase):
                 continue
             captioned += 1
             model = analysis.caption.model
-            item.caption = _with_trigger(analysis.caption.text.strip(), dataset.trigger, dataset.preset)
+            # A character keeps only what varies, so the look binds to the trigger (2026-10-02).
+            item.caption = (
+                character_caption(analysis.caption.text, dataset.trigger, item.file)
+                if dataset.preset == "character" and dataset.trigger.strip()
+                else _with_trigger(analysis.caption.text.strip(), dataset.trigger, dataset.preset)
+            )
             item.edited = False
         if attempted and not captioned:
             # Silence here is how a broken vision stack masquerades as a

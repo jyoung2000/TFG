@@ -105,7 +105,9 @@ class TestDatasets:
         by_id = {i["id"]: i for i in captioned["items"]}
         assert by_id[first]["caption"] == "hand written, mara_v1 smiling" and by_id[first]["edited"] is True
         others = [i for i in captioned["items"] if i["id"] != first]
-        assert all(i["caption"] == "mara_v1, A woman in a green jacket stands by a window" for i in others)
+        # 2026-10-02: a character caption keeps only what varies (was the whole
+        # Florence sentence, which bound the look to words, not the trigger).
+        assert all(i["caption"] == "mara_v1, woman" for i in others)
         assert all(i["edited"] is False for i in others)
         # Style datasets phrase the trigger as a style, and overwrite_edited re-captions everything.
         client.put(f"/api/training/datasets/{dataset['id']}", json={"preset": "style", "trigger": "relaystyle"})
