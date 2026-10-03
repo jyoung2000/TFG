@@ -52,7 +52,7 @@ from film.film_api_types import (
     ReferenceSheetResponse,
     UpdateAssetRequest,
 )
-from film.face_lock import blend_face, head_square
+from film.face_lock import FRONT_YAW, MAX_YAW_SHIFT, PROFILE_YAW, blend_face, head_square, yaw
 from film.identity_dataset import PERSON_WORDS, face_crop, face_crop_name, rare_trigger, source_crops
 from services.face_match import SAME_PERSON, FaceMatcher, similarity
 from film.training_api_types import ImportDatasetItemsRequest
@@ -259,6 +259,11 @@ FACE_CANDIDATES = 3
 #: Face lock (film.face_lock): the re-composed head, the seeds tried, and how
 #: much of the style sheet's view is its head (3.2 face sides: hair and neck).
 FACE_LOCK_PROMPT = "close-up of the head and shoulders, exactly the face of the second image: same eyes, nose, lips, jaw, brows and skin"
+#: For a turned head: the identity prompt pulled it toward the sheet's front face.
+FACE_LOCK_TURNED_PROMPT = (
+    "the person from the second image with exactly the head angle, head turn, gaze direction and expression of the first image, "
+    "exactly the face of the second image: same eyes, nose, lips, jaw, brows and skin"
+)
 FACE_LOCK_SEEDS = (11, 22)
 FACE_LOCK_SIZE = 768
 FACE_LOCK_REFERENCE_SCALE = 3.2
@@ -1919,6 +1924,10 @@ class FilmGenerationHandler(StateHandlerBase):
         if found is None:
             return before
         box, points = found
+        turn = yaw(points)
+        if abs(turn) > PROFILE_YAW:
+            return before  # a profile: the style sheet has no side face to lock it to
+        prompt = FACE_LOCK_PROMPT if abs(turn) <= FRONT_YAW else FACE_LOCK_TURNED_PROMPT
         with Image.open(path) as opened:
             image = np.asarray(opened.convert("RGB"))
         square = head_square(box, image.shape[1], image.shape[0])
@@ -1931,7 +1940,7 @@ class FilmGenerationHandler(StateHandlerBase):
             Image.fromarray(image[top:top + side, left:left + side]).save(guide)
             for attempt, seed in enumerate(FACE_LOCK_SEEDS):
                 response = handler.generate(
-                    GenerateImageRequest(prompt=FACE_LOCK_PROMPT, width=FACE_LOCK_SIZE, height=FACE_LOCK_SIZE, numImages=1, model=model),
+                    GenerateImageRequest(prompt=prompt, width=FACE_LOCK_SIZE, height=FACE_LOCK_SIZE, numImages=1, model=model),
                     seed=seed, reference_images=[str(guide), str(head_reference)], reference_mode="KI", record=False,
                 )
                 outs = response.image_paths or []
@@ -1943,8 +1952,8 @@ class FilmGenerationHandler(StateHandlerBase):
                     made.convert("RGB").resize((side, side), Image.Resampling.LANCZOS).save(head_file)
                 rendered.unlink(missing_ok=True)
                 head_found = matcher.face_points(str(head_file))
-                if head_found is None:
-                    continue
+                if head_found is None or abs(yaw(head_found[1]) - turn) > MAX_YAW_SHIFT:
+                    continue  # no face, or the head turned: the pose is the render's
                 with Image.open(head_file) as opened_head:
                     head = np.asarray(opened_head.convert("RGB"))
                 blended = blend_face(image, head, (left, top), head_found[1], points, box)
