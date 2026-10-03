@@ -2,6 +2,7 @@ import { nextDatasetName } from './datasetName'
 import { WEIGHT_LABELS, trainerChip, weightStatus, type WeightRow } from './trainerWeights'
 import { estimateMinutes, estimateVramMb, maxBlocksToSwap } from './vramEstimate'
 import { PREVIEW_LABELS, weightBadge } from './itemWeight'
+import { loraThumb, newestFirst, runThumb, whenLabel, type ListThumb } from './loraList'
 import { faceSummary } from '../film/assets/faceMatch'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Eye, Pencil, ArrowLeft, Ban, FolderOpen, Images, Layers, Loader2, Play, Plus, RefreshCw, Sparkles, Trash2, Video, Wand2 } from 'lucide-react'
@@ -54,6 +55,14 @@ function SampleThumb({ runId, path, step }: { runId: string; path: string; step:
       <figcaption className="text-[10px] text-zinc-500 text-center">step {step}</figcaption>
     </figure>
   )
+}
+
+/** A list row's square thumbnail: the LoRA's rendered close-up or the run's last sample. */
+function RowThumb({ thumb, alt }: { thumb: ListThumb; alt: string }) {
+  const url = useUrl(() => (thumb.kind === 'preview' ? filmOutputUrl(thumb.path) : thumb.kind === 'sample' ? runMediaUrl(thumb.runId, thumb.path) : Promise.resolve('')), [thumb.kind, thumb.kind === 'none' ? '' : thumb.path])
+  return url
+    ? <img src={url} alt={alt} className="w-10 h-10 object-cover object-top rounded bg-zinc-900 shrink-0" data-testid="row-thumb" />
+    : <div className="w-10 h-10 rounded bg-zinc-900 shrink-0 flex items-center justify-center" aria-hidden="true"><Layers className="h-3.5 w-3.5 text-zinc-700" /></div>
 }
 
 function HistoryThumb({ job }: { job: Job }) {
@@ -155,10 +164,14 @@ export function TrainView() {
           <section>
             <h2 className="px-2 mb-1 text-[10px] uppercase tracking-wide text-zinc-500 font-semibold">Training runs</h2>
             {runs.length === 0 && <p className="px-2 text-xs text-zinc-600">No runs yet.</p>}
-            {runs.map(r => (
-              <button key={r.id} onClick={() => setPanel({ kind: 'run', id: r.id })} className={`w-full text-left px-2 py-1.5 rounded text-xs hover:bg-zinc-800 ${panel.kind === 'run' && panel.id === r.id ? 'bg-zinc-800 text-white' : 'text-zinc-300'}`} data-testid="run-item">
-                <div className="truncate">{r.name}</div>
-                <div className="text-[10px] text-zinc-500">{r.status}{isRunActive(r) ? ` · ${r.step}/${r.total_steps}` : ''} · {r.config.target}</div>
+            {newestFirst(runs).map(r => (
+              <button key={r.id} onClick={() => setPanel({ kind: 'run', id: r.id })} className={`w-full text-left px-2 py-1.5 rounded text-xs hover:bg-zinc-800 flex items-center gap-2 ${panel.kind === 'run' && panel.id === r.id ? 'bg-zinc-800 text-white' : 'text-zinc-300'}`} data-testid="run-item">
+                <RowThumb thumb={runThumb(r, loras)} alt={`${r.name} preview`} />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate">{r.name}</div>
+                  <div className="text-[10px] text-zinc-500 truncate">{r.status}{isRunActive(r) ? ` · ${r.step}/${r.total_steps}` : ''} · {r.config.target}</div>
+                  <div className="text-[10px] text-zinc-600" data-testid="run-when">{whenLabel(r.created_at)}</div>
+                </div>
               </button>
             ))}
           </section>
@@ -180,7 +193,7 @@ export function TrainView() {
           )}
           {selectedDataset && <DatasetBuilder key={selectedDataset.id} dataset={selectedDataset} status={status} onChanged={refresh} onStarted={run => { refresh().then(() => setPanel({ kind: 'run', id: run.id })).catch(() => setPanel({ kind: 'run', id: run.id })) }} onDeleted={() => { setPanel({ kind: 'empty' }); void refresh() }} onError={setError} />}
           {selectedRun && <RunDetail run={selectedRun} dataset={datasets.find(d => d.id === selectedRun.dataset_id) ?? null} onChanged={refresh} onDeleted={() => { setPanel({ kind: 'empty' }); void refresh() }} onResumed={run => setPanel({ kind: 'run', id: run.id })} onOpenHistory={openHistory} onError={setError} />}
-          {panel.kind === 'loras' && <Registry loras={loras} onChanged={refresh} onError={setError} />}
+          {panel.kind === 'loras' && <Registry loras={loras} runs={runs} onChanged={refresh} onError={setError} />}
         </main>
       </div>
     </div>
@@ -309,7 +322,7 @@ function DatasetBuilder({ dataset, status, onChanged, onStarted, onDeleted, onEr
           </label>
           <label className="text-[11px] text-zinc-400 flex items-center gap-1">Speed
             <select className={selectClass} value={speed} onChange={e => setSpeed(e.target.value as 'standard' | 'balanced' | 'fast')} aria-label="Training speed" data-testid="training-speed">
-              <option value="balanced">Balanced · about 20 min</option>
+              <option value="balanced">Balanced · about 20-25 min</option>
               <option value="fast">Fast · about 10 min, less consistent</option>
               <option value="standard">Standard · about 35 min</option>
             </select>
@@ -447,7 +460,7 @@ function RunDetail({ run, dataset, onChanged, onDeleted, onResumed, onOpenHistor
 
 // ---- registry -------------------------------------------------------------------------------
 
-function Registry({ loras, onChanged, onError }: { loras: LoraEntry[]; onChanged: () => Promise<void>; onError: (message: string) => void }) {
+function Registry({ loras, runs, onChanged, onError }: { loras: LoraEntry[]; runs: TrainingRun[]; onChanged: () => Promise<void>; onError: (message: string) => void }) {
   const [target, setTarget] = useState('z_image')
   const [busy, setBusy] = useState(false)
   const importLora = async () => {
@@ -470,7 +483,7 @@ function Registry({ loras, onChanged, onError }: { loras: LoraEntry[]; onChanged
       <DownloadFromUrl target={target} onChanged={onChanged} />
       {loras.length === 0 && <p className="text-xs text-zinc-600">Nothing yet. Finish a training run, import a file, or paste a link above.</p>}
       <div className="space-y-1">
-        {loras.map(entry => <LoraRow key={entry.id} entry={entry} onChanged={onChanged} onError={onError} />)}
+        {newestFirst(loras).map(entry => <LoraRow key={entry.id} entry={entry} runs={runs} onChanged={onChanged} onError={onError} />)}
       </div>
     </div>
   )
@@ -529,7 +542,7 @@ function DownloadFromUrl({ target, onChanged }: { target: string; onChanged: () 
   )
 }
 
-function LoraRow({ entry, onChanged, onError }: { entry: LoraEntry; onChanged: () => Promise<void>; onError: (message: string) => void }) {
+function LoraRow({ entry, runs, onChanged, onError }: { entry: LoraEntry; runs: TrainingRun[]; onChanged: () => Promise<void>; onError: (message: string) => void }) {
   const [draft, setDraft] = useState({ name: entry.name, trigger: entry.trigger, default_multiplier: entry.default_multiplier })
   useEffect(() => setDraft({ name: entry.name, trigger: entry.trigger, default_multiplier: entry.default_multiplier }), [entry])
   // Saves on blur or Enter; says so (user, 2026-10-02: nothing showed the name
@@ -562,6 +575,7 @@ function LoraRow({ entry, onChanged, onError }: { entry: LoraEntry; onChanged: (
     <div className="rounded border border-zinc-800 text-xs" data-testid="lora-row">
     <div className="grid grid-cols-[1fr_auto_auto_auto_auto_auto] items-center gap-2 px-2 py-1.5">
       <div className="min-w-0 flex items-center gap-1.5">
+        <RowThumb thumb={loraThumb(entry, runs)} alt={`${entry.name} preview`} />
         <Pencil className="h-3 w-3 text-zinc-600 shrink-0" aria-hidden="true" />
         <div className="min-w-0 flex-1">
         <input className="bg-transparent text-zinc-100 w-full focus:outline-none border-b border-dashed border-zinc-700 focus:border-violet-600" value={draft.name} onChange={e => setDraft(d => ({ ...d, name: e.target.value }))} onBlur={save} onKeyDown={onEnter} aria-label={`Name of ${entry.name}`} title="Click to rename; Enter or click away saves" data-testid="lora-name" />
@@ -570,7 +584,7 @@ function LoraRow({ entry, onChanged, onError }: { entry: LoraEntry; onChanged: (
       </div>
       <label className="text-[10px] text-zinc-500">trigger <input className={selectClass + ' w-28'} value={draft.trigger} onChange={e => setDraft(d => ({ ...d, trigger: e.target.value }))} onBlur={save} onKeyDown={onEnter} aria-label={`Trigger for ${entry.name}`} title="The word that calls this LoRA in a prompt; Enter or click away saves" data-testid="lora-trigger" /></label>
       <label className="text-[10px] text-zinc-500">strength <input type="number" step="0.05" min="0" max="2" className={selectClass + ' w-16'} value={draft.default_multiplier} onChange={e => setDraft(d => ({ ...d, default_multiplier: Number(e.target.value) }))} onBlur={save} aria-label={`Default strength for ${entry.name}`} /></label>
-      <span className="text-[10px] text-zinc-600">{new Date(entry.created_at).toLocaleDateString()}</span>
+      <span className="text-[10px] text-zinc-600 whitespace-nowrap" data-testid="lora-when">{whenLabel(entry.created_at)}</span>
       <button onClick={() => setOpen(o => !o)} className="btn-chip" aria-expanded={open} data-testid="lora-preview-toggle"><Eye className="h-3.5 w-3.5" /> Preview{entry.preview_paths?.length ? ` (${entry.preview_paths.length})` : ''}</button>
       <button onClick={() => { if (window.confirm(`Delete ${entry.name}? The file is removed from the LoRA folder.`)) void trainingApi.deleteLora(entry.id).then(() => onChanged()).catch(e => onError(String(e))) }} aria-label={`Delete ${entry.name}`} className="p-1 text-zinc-600 hover:text-red-300"><Trash2 className="h-3.5 w-3.5" /></button>
     </div>
