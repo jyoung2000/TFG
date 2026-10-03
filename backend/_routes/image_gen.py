@@ -17,5 +17,8 @@ def route_generate_image(
     handler: AppHandler = Depends(get_state_service),
 ) -> GenerateImageResponse:
     """POST /api/generate-image."""
-    return handler.image_generation.generate(req)
+    response = handler.image_generation.generate(req)
+    if req.faceLock and req.loras and response.status == "complete" and response.image_paths:
+        response.face_scores = handler.film_generation.face_lock(response.image_paths, req.loras)
+    return response
 

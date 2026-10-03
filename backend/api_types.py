@@ -202,6 +202,9 @@ class GenerateVideoResponse(BaseModel):
 class GenerateImageResponse(BaseModel):
     status: str
     image_paths: list[str] | None = None
+    #: Face match of each image against the character's photo after face lock;
+    #: None when no face lock ran.
+    face_scores: list[float | None] | None = None
 
 
 class CancelResponse(BaseModel):
@@ -305,6 +308,9 @@ class GenerateImageRequest(BaseModel):
     #: Which installed local image model renders this request. Empty means the
     #: backend's configured default (`WANGP_IMAGE_MODEL_TYPE`).
     model: str = ""
+    #: With a character LoRA trained here: re-compose each render's face from the
+    #: style sheet's front face (film.face_lock). Needs FLUX.2 Klein and the face models.
+    faceLock: bool = True
 
 
 class ModelDownloadRequest(BaseModel):

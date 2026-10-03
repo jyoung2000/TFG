@@ -4,6 +4,7 @@ import { backendFetch } from '../lib/backend'
 import { toFileUrl } from '../lib/file-url'
 import { expectedInferenceSeconds, inferenceStatusMessage, interpolateInferenceProgress } from '../lib/generation-progress'
 import { useAppSettings } from '../contexts/AppSettingsContext'
+import { faceMatchNote } from '../lib/faceLock'
 
 interface GenerationState {
   isGenerating: boolean
@@ -16,6 +17,8 @@ interface GenerationState {
   imagePath: string | null  // Original file path for first image
   imageUrls: string[]  // For multiple image variations
   imagePaths: string[]  // Original file paths for all images
+  /** "Face match 0.62" after a face-locked image render; '' otherwise. */
+  faceMatch: string
   error: string | null
 }
 
@@ -117,6 +120,7 @@ export function useGeneration(): UseGenerationReturn {
     imagePath: null,
     imageUrls: [],
     imagePaths: [],
+    faceMatch: '',
     error: null,
   })
 
@@ -143,6 +147,7 @@ export function useGeneration(): UseGenerationReturn {
       imagePath: null,
       imageUrls: [],
       imagePaths: [],
+      faceMatch: '',
       error: null,
     })
 
@@ -254,6 +259,7 @@ export function useGeneration(): UseGenerationReturn {
           imagePath: null,
           imageUrls: [],
           imagePaths: [],
+          faceMatch: '',
           error: null,
         })
       } else if (result.status === 'cancelled') {
@@ -356,6 +362,7 @@ export function useGeneration(): UseGenerationReturn {
       imagePath: null,
       imageUrls: [],
       imagePaths: [],
+      faceMatch: '',
       error: null,
     })
 
@@ -405,6 +412,7 @@ export function useGeneration(): UseGenerationReturn {
           numSteps,
           numImages,
           loras: settings.loras ?? [],
+          faceLock: settings.faceLock ?? true,
         }),
         signal: abortControllerRef.current.signal,
       })
@@ -444,6 +452,7 @@ export function useGeneration(): UseGenerationReturn {
             imagePath: rawPaths[0],  // First image path
             imageUrls: fileUrls,    // All images
             imagePaths: rawPaths,   // All image paths
+            faceMatch: faceMatchNote(result.face_scores),
             error: null,
           })
         }
@@ -490,6 +499,7 @@ export function useGeneration(): UseGenerationReturn {
       imagePath: null,
       imageUrls: [],
       imagePaths: [],
+      faceMatch: '',
       error: null,
     })
   }, [])

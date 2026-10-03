@@ -3,8 +3,11 @@ import {
   Trash2, Download, Image, Video, X,
   Heart, Film, Volume2, VolumeX, Sparkles,
   Clock, Monitor, ChevronUp, Scissors, Music,
-  ChevronLeft, ChevronRight, Copy, Check
+  ChevronLeft, ChevronRight, Copy, Check, Layers
 } from 'lucide-react'
+import { LoraPicker } from '../components/LoraPicker'
+import type { LoraUse } from '../types/training'
+import { imageLoraLabel } from '../lib/faceLock'
 import { useProjects } from '../contexts/ProjectContext'
 import type { GenSpaceRetakeSource } from '../contexts/ProjectContext'
 import { useAppSettings } from '../contexts/AppSettingsContext'
@@ -290,6 +293,46 @@ function SettingsDropdown({
   )
 }
 
+/**
+ * The image toolbar's LoRA popover: registry LoRAs for Z-Image, and face lock -
+ * a character LoRA render's face re-composed from its style sheet (on by default).
+ */
+function ImageLoraButton({ loras, onLorasChange, faceLock, onFaceLockChange, faceMatch, disabled }: {
+  loras: LoraUse[]
+  onLorasChange: (next: LoraUse[]) => void
+  faceLock: boolean
+  onFaceLockChange: (on: boolean) => void
+  faceMatch: string
+  disabled?: boolean
+}) {
+  const [isOpen, setIsOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const close = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setIsOpen(false) }
+    if (isOpen) document.addEventListener('mousedown', close)
+    return () => document.removeEventListener('mousedown', close)
+  }, [isOpen])
+  return (
+    <div ref={ref} className="relative">
+      <button onClick={() => setIsOpen(!isOpen)} className={`flex shrink-0 items-center gap-1 whitespace-nowrap px-2 py-1.5 rounded-md transition-colors ${isOpen ? 'bg-zinc-700 hover:bg-zinc-700' : 'hover:bg-zinc-800'}`} aria-expanded={isOpen} data-testid="image-lora-button">
+        <Layers className="h-3.5 w-3.5" />
+        <span className={loras.length ? 'text-zinc-200' : ''}>{imageLoraLabel(loras.length, faceLock)}</span>
+      </button>
+      {isOpen && (
+        <div className="absolute bottom-full right-0 mb-2 bg-zinc-800 border border-zinc-700 rounded-md p-2 w-72 shadow-xl z-[9999] space-y-2" data-testid="image-lora-panel">
+          <div className="text-[10px] text-zinc-500 uppercase tracking-wider">LoRAs</div>
+          <LoraPicker model="z_image" value={loras} onChange={onLorasChange} disabled={disabled} compact />
+          <label className="flex items-start gap-2 text-xs text-zinc-300 border-t border-zinc-700 pt-2">
+            <input type="checkbox" checked={faceLock} disabled={disabled} onChange={e => onFaceLockChange(e.target.checked)} className="mt-0.5" data-testid="face-lock" />
+            <span>Face lock<span className="block text-[10px] text-zinc-500">Re-composes a character LoRA's face from its style sheet after each render (about 20 s per image).</span></span>
+          </label>
+          {faceMatch && <p className="text-[10px] text-emerald-300" data-testid="face-match">Last render · {faceMatch}</p>}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // Lightricks brand icon
 function LightricksIcon({ className }: { className?: string }) {
   return (
@@ -336,6 +379,11 @@ function PromptBar({
   canGenerate,
   buttonLabel,
   buttonIcon,
+  imageLoras,
+  onImageLorasChange,
+  faceLock,
+  onFaceLockChange,
+  faceMatch,
 }: {
   mode: 'image' | 'video' | 'retake'
   onModeChange: (mode: 'image' | 'video' | 'retake') => void
@@ -362,6 +410,11 @@ function PromptBar({
   }
   onSettingsChange: (settings: any) => void
   shouldVideoGenerateWithLtxApi: boolean
+  imageLoras: LoraUse[]
+  onImageLorasChange: (next: LoraUse[]) => void
+  faceLock: boolean
+  onFaceLockChange: (on: boolean) => void
+  faceMatch: string
 }) {
   const inputRef = useRef<HTMLInputElement>(null)
   const audioInputRef = useRef<HTMLInputElement>(null)
@@ -612,7 +665,8 @@ function PromptBar({
                 </>
               }
             />
-            
+
+            <ImageLoraButton loras={imageLoras} onLorasChange={onImageLorasChange} faceLock={faceLock} onFaceLockChange={onFaceLockChange} faceMatch={faceMatch} disabled={isGenerating} />
           </>
         ) : (
           <>
@@ -843,9 +897,13 @@ export function GenSpace() {
     videoPath,
     imageUrls,
     imagePaths,
+    faceMatch,
     error,
     reset,
   } = useGeneration()
+  // Image mode: registry LoRAs and face lock (frontend/lib/faceLock.ts).
+  const [imageLoras, setImageLoras] = useState<LoraUse[]>([])
+  const [faceLock, setFaceLock] = useState(true)
 
   const {
     submitRetake,
@@ -1132,6 +1190,8 @@ export function GenSpace() {
           imageAspectRatio: settings.aspectRatio,
           imageSteps: settings.imageSteps,
           variations: settings.variations,
+          loras: imageLoras,
+          faceLock,
         }
       )
     } else {
@@ -1439,6 +1499,11 @@ export function GenSpace() {
           settings={settings}
           onSettingsChange={(nextSettings) => setSettings(applyForcedVideoSettings(nextSettings))}
           shouldVideoGenerateWithLtxApi={shouldVideoGenerateWithLtxApi}
+          imageLoras={imageLoras}
+          onImageLorasChange={setImageLoras}
+          faceLock={faceLock}
+          onFaceLockChange={setFaceLock}
+          faceMatch={faceMatch}
         />
       </div>
       

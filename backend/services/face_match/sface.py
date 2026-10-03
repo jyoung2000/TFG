@@ -66,6 +66,18 @@ class SFaceMatcher:
             feature = recognizer.feature(recognizer.alignCrop(image, face))
             return [float(v) for v in feature.flatten()]
 
+    def face_points(self, image_path: str) -> tuple[tuple[float, float, float, float], list[tuple[float, float]]] | None:
+        if not self.available():
+            return None
+        with self._lock:
+            found = self._largest_face(image_path)
+        if found is None:
+            return None
+        _, face, scale = found
+        box = (float(face[0]) / scale, float(face[1]) / scale, float(face[2]) / scale, float(face[3]) / scale)
+        points = [(float(face[4 + 2 * i]) / scale, float(face[5 + 2 * i]) / scale) for i in range(5)]
+        return box, points
+
     def face_box(self, image_path: str) -> tuple[float, float, float, float] | None:
         if not self.available():
             return None

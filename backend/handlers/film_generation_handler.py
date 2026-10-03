@@ -25,6 +25,7 @@ from typing import Any, cast
 
 from _routes._errors import HTTPError
 from api_types import GenerateImageRequest, GenerateVideoRequest, VideoCameraMotion, LoraUse
+import numpy as np
 from PIL import Image
 
 from film.film_api_types import (
@@ -51,6 +52,7 @@ from film.film_api_types import (
     ReferenceSheetResponse,
     UpdateAssetRequest,
 )
+from film.face_lock import blend_face, head_square
 from film.identity_dataset import PERSON_WORDS, face_crop, face_crop_name, rare_trigger, source_crops
 from services.face_match import SAME_PERSON, FaceMatcher, similarity
 from film.training_api_types import ImportDatasetItemsRequest
@@ -254,6 +256,12 @@ SHEET_VIEW_WORDS = {
 FULL_FIGURE = "full body from head to feet, the whole head and both feet in frame, centered with space above the head and below the feet"
 #: How many renders compete for each view when a face matcher is installed.
 FACE_CANDIDATES = 3
+#: Face lock (film.face_lock): the re-composed head, the seeds tried, and how
+#: much of the style sheet's view is its head (3.2 face sides: hair and neck).
+FACE_LOCK_PROMPT = "close-up of the head and shoulders, exactly the face of the second image: same eyes, nose, lips, jaw, brows and skin"
+FACE_LOCK_SEEDS = (11, 22)
+FACE_LOCK_SIZE = 768
+FACE_LOCK_REFERENCE_SCALE = 3.2
 #: A generated view this close to the photo's face also trains as a face close-up.
 FACE_CROP_MIN = 0.6
 #: A candidate this close to the photo's face ends the search early.
@@ -1820,6 +1828,8 @@ class FilmGenerationHandler(StateHandlerBase):
         folder = self._training.preview_root() / entry.id
         folder.mkdir(parents=True, exist_ok=True)
         loras = [LoraUse(name=entry.file, multiplier=entry.default_multiplier or 1.0)]
+        # The preview shows what a render gives: face-locked to the style sheet when it can be.
+        identity = self._lora_identity(loras)
         paths: list[str] = []
         scores: list[float | None] = []
         for index, view in enumerate(self.PREVIEW_VIEWS):
@@ -1832,9 +1842,129 @@ class FilmGenerationHandler(StateHandlerBase):
             target = folder / f"{index + 1:02d}{source.suffix.lower() or '.png'}"
             shutil.copyfile(source, target)
             paths.append(str(target))
+            if identity is not None:
+                scores.append(self._lock_face(target, *identity))
+                continue
             vector = self._face_vector(target) if identity_vector else None
             scores.append(round(similarity(identity_vector, vector), 4) if identity_vector and vector else None)
         return self._training.set_lora_preview(entry.id, paths, scores)
+
+    def face_lock(self, paths: list[str], loras: list[LoraUse]) -> list[float | None] | None:
+        """Each image's face re-composed from the style sheet's front face of the
+        first character LoRA in `loras` that was trained here; each image keeps
+        the result only when its face then matches the photo better. Returns
+        each image's face score after; None when no LoRA has a character to lock to."""
+        identity = self._lora_identity(loras)
+        if identity is None:
+            return None
+        head, reference = identity
+        return [self._lock_face(Path(path), head, reference) for path in paths]
+
+    def _lora_identity(self, loras: list[LoraUse]) -> tuple[Path, list[float]] | None:
+        """(the style sheet's head, the photo's face vector) of the first LoRA
+        trained from a character dataset; None without the models to lock with."""
+        matcher = self._faces()
+        handler = self._image_generation
+        if self._training is None or matcher is None or handler is None or handler.reference_model() is None:
+            return None
+        for use in loras:
+            entry = self._training.lora_for_file(use.name)
+            if entry is None or not entry.dataset_id:
+                continue
+            try:
+                dataset = self._training.get_dataset(entry.dataset_id)
+            except HTTPError:
+                continue
+            if not dataset.items:
+                continue
+            photo = self._training.media_path(dataset.id, dataset.items[0].file)
+            vector = matcher.embedding(str(photo)) if photo.is_file() else None
+            if not vector:
+                continue
+            sheet = next((item for item in dataset.items if "front-view" in item.file), dataset.items[0])
+            return self._identity_head(entry.id, self._training.media_path(dataset.id, sheet.file)), vector
+        return None
+
+    def _identity_head(self, lora_id: str, image: Path) -> Path:
+        """The head of the style sheet's front view, cached beside the LoRA's
+        previews; the whole view when no face is found in it."""
+        assert self._training is not None
+        target = self._training.preview_root() / lora_id / f"identity-{image.stem[:60]}.png"
+        if target.is_file() and target.stat().st_mtime >= image.stat().st_mtime:
+            return target
+        matcher = self._faces()
+        found = matcher.face_points(str(image)) if matcher is not None else None
+        if found is None:
+            return image
+        with Image.open(image) as opened:
+            rgb = opened.convert("RGB")
+            square = head_square(found[0], rgb.width, rgb.height, scale=FACE_LOCK_REFERENCE_SCALE)
+            if square is None:
+                return image
+            left, top, side = square
+            target.parent.mkdir(parents=True, exist_ok=True)
+            rgb.crop((left, top, left + side, top + side)).save(target)
+        return target
+
+    def _lock_face(self, path: Path, head_reference: Path, reference: list[float]) -> float | None:
+        """One image's face lock; returns its face score after (or as it was)."""
+        matcher = self._faces()
+        handler = self._image_generation
+        model = handler.reference_model() if handler is not None else None
+        if matcher is None or handler is None or model is None:
+            return None
+        vector = matcher.embedding(str(path))
+        before = round(similarity(reference, vector), 4) if vector else None
+        found = matcher.face_points(str(path))
+        if found is None:
+            return before
+        box, points = found
+        with Image.open(path) as opened:
+            image = np.asarray(opened.convert("RGB"))
+        square = head_square(box, image.shape[1], image.shape[0])
+        if square is None:
+            return before
+        left, top, side = square
+        best_score, best = before, None
+        with tempfile.TemporaryDirectory(prefix="facelock-") as folder:
+            guide = Path(folder) / f"{path.stem}-guide.png"
+            Image.fromarray(image[top:top + side, left:left + side]).save(guide)
+            for attempt, seed in enumerate(FACE_LOCK_SEEDS):
+                response = handler.generate(
+                    GenerateImageRequest(prompt=FACE_LOCK_PROMPT, width=FACE_LOCK_SIZE, height=FACE_LOCK_SIZE, numImages=1, model=model),
+                    seed=seed, reference_images=[str(guide), str(head_reference)], reference_mode="KI", record=False,
+                )
+                outs = response.image_paths or []
+                if response.status != "complete" or not outs:
+                    break
+                rendered = Path(outs[0])
+                head_file = Path(folder) / f"{rendered.stem}-head.png"
+                with Image.open(rendered) as made:
+                    made.convert("RGB").resize((side, side), Image.Resampling.LANCZOS).save(head_file)
+                rendered.unlink(missing_ok=True)
+                head_found = matcher.face_points(str(head_file))
+                if head_found is None:
+                    continue
+                with Image.open(head_file) as opened_head:
+                    head = np.asarray(opened_head.convert("RGB"))
+                blended = blend_face(image, head, (left, top), head_found[1], points, box)
+                if blended is None:
+                    continue
+                candidate = Path(folder) / f"{path.stem}-facelock-{attempt}.png"
+                Image.fromarray(blended).save(candidate)
+                locked = matcher.embedding(str(candidate))
+                score = round(similarity(reference, locked), 4) if locked else None
+                if score is not None and (best_score is None or score > best_score):
+                    best_score, best = score, blended
+                if best_score is not None and best_score >= FACE_GOOD_ENOUGH:
+                    break
+        if best is not None:
+            locked_image = Image.fromarray(best)
+            if path.suffix.lower() in (".jpg", ".jpeg"):
+                locked_image.save(path, quality=95)
+            else:
+                locked_image.save(path)
+        return best_score
 
     def attach_training(self, training: TrainingHandler, vision: VisionHandler | None = None, face_matcher: FaceMatcher | None = None) -> None:
         self._training = training

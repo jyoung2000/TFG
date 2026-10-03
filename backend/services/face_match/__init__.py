@@ -25,6 +25,11 @@ class FaceMatcher(Protocol):
         """The largest face's box in the image's own pixels (x, y, w, h), or None."""
         ...
 
+    def face_points(self, image_path: str) -> tuple[tuple[float, float, float, float], list[tuple[float, float]]] | None:
+        """The largest face's box and its five landmarks (right eye, left eye,
+        nose tip, mouth corners) in the image's own pixels, or None."""
+        ...
+
 
 def similarity(a: list[float], b: list[float]) -> float:
     dot = sum(x * y for x, y in zip(a, b))

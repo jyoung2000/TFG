@@ -764,6 +764,10 @@ class FakeFaceMatcher:
     calls: list[str] = field(default_factory=list[str])
     #: Face boxes (pixels: x, y, w, h) by file-name fragment; none by default.
     boxes: dict[str, tuple[float, float, float, float]] = field(default_factory=dict[str, tuple[float, float, float, float]])
+    #: Face box and five landmarks by file-name fragment; none by default.
+    points: dict[str, tuple[tuple[float, float, float, float], list[tuple[float, float]]]] = field(
+        default_factory=dict[str, tuple[tuple[float, float, float, float], list[tuple[float, float]]]]
+    )
 
     def available(self) -> bool:
         return self.enabled
@@ -772,6 +776,12 @@ class FakeFaceMatcher:
         for fragment, box in self.boxes.items():
             if fragment in image_path:
                 return box
+        return None
+
+    def face_points(self, image_path: str) -> tuple[tuple[float, float, float, float], list[tuple[float, float]]] | None:
+        for fragment, found in self.points.items():
+            if fragment in image_path:
+                return found
         return None
 
     def embedding(self, image_path: str) -> list[float] | None:

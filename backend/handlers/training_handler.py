@@ -743,6 +743,12 @@ class TrainingHandler(StateHandlerBase):
         self._save_registry(entries)
         return entry
 
+    def lora_for_file(self, name: str) -> LoraEntry | None:
+        """The registry entry a render's LoRA (`LoraUse.name`: its file) refers to."""
+        entries = self._load_registry()
+        exact = next((e for e in entries if e.file == name), None)
+        return exact or next((e for e in entries if Path(e.file).name == Path(name).name), None)
+
     def get_lora(self, lora_id: str) -> LoraEntry:
         entry = next((e for e in self._load_registry() if e.id == lora_id), None)
         if entry is None:

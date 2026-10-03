@@ -22,6 +22,8 @@ export interface GenerationSettings {
   variations?: number  // Number of image variations to generate
   /** Registry LoRAs (absolute safetensors path + strength) applied to the render. */
   loras?: { name: string; multiplier: number }[]
+  /** Re-compose a character LoRA render's face from its style sheet (backend film/face_lock.py). */
+  faceLock?: boolean
 }
 
 interface SettingsPanelProps {
