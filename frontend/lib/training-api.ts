@@ -48,7 +48,7 @@ export const trainingApi = {
     request<Dataset>(`/api/training/datasets/${enc(id)}/items/${enc(itemId)}`, { method: 'PUT', body: JSON.stringify({ caption }) }),
   removeItem: (id: string, itemId: string) => request<Dataset>(`/api/training/datasets/${enc(id)}/items/${enc(itemId)}`, { method: 'DELETE' }),
 
-  suggest: (datasetId: string, target: string, speed: 'standard' | 'fast' = 'standard') =>
+  suggest: (datasetId: string, target: string, speed: 'standard' | 'balanced' | 'fast' = 'standard') =>
     request<TrainingConfig>('/api/training/suggest', { method: 'POST', body: JSON.stringify({ dataset_id: datasetId, target, speed }) }),
 
   listRuns: () => request<{ runs: TrainingRun[] }>('/api/training/runs').then(r => r.runs),

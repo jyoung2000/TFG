@@ -86,6 +86,17 @@ def test_the_fast_preset_trains_a_character_in_about_ten_minutes() -> None:
     assert default_config("z_image", "character", image_count=23, speed="standard") == standard
 
 
+def test_the_balanced_preset_is_the_fast_recipe_with_twice_the_steps() -> None:
+    """MEASURED 2026-10-02 (same 6 prompts and seeds, SFace vs. the photo): at 150
+    steps / batch 2 / LR 4e-4 the face score swung 0.33-0.44 between runs and the
+    outfit sometimes drifted; the learning curve never plateaus, so the dependable
+    lever is steps. Balanced doubles them for about twenty minutes."""
+    fast = default_config("z_image", "character", speed="fast")
+    balanced = default_config("z_image", "character", speed="balanced")
+    assert balanced.batch_size == fast.batch_size and balanced.learning_rate == fast.learning_rate
+    assert balanced.steps == 2 * fast.steps == 300
+
+
 def test_the_estimate_counts_the_batch() -> None:
     """MEASURED: batch 1 peaked at 7.7 GB of GPU use, batch 2 at 9.3 GB."""
     one = default_config("z_image", "character")

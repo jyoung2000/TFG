@@ -60,7 +60,7 @@ _SWAP: dict[str, _Swap] = {
     "z_image": _Swap(170, 28),
 }
 
-TrainingSpeed = Literal["standard", "fast"]
+TrainingSpeed = Literal["standard", "balanced", "fast"]
 
 #: The fast character run (user, 2026-10-02: "an accurate LoRA in around 10
 #: minutes"). MEASURED on Raven's face-matched set, same 6 prompts and seeds,
@@ -73,6 +73,13 @@ TrainingSpeed = Literal["standard", "fast"]
 _FAST: dict[str, tuple[int, int, float]] = {
     # target: (batch_size, steps, learning_rate)
     "z_image": (2, 150, 4e-4),
+}
+#: Balanced: the same recipe with twice the steps. At 150 steps the face score
+#: swung 0.33-0.44 between runs and the outfit sometimes drifted (bodysuits
+#: from the trigger alone); the learning curve never plateaued, so steps are
+#: the dependable lever. MEASURED: see test_training_vram.
+_BALANCED: dict[str, tuple[int, int, float]] = {
+    "z_image": (2, 300, 4e-4),
 }
 
 #: VRAM each extra image in a batch costs (MEASURED: batch 1 peaked at 7.7 GB,
@@ -90,7 +97,7 @@ def default_config(target: str, preset: DatasetPreset, *, image_count: int = 12,
     base = _BASE.get(target, _BASE["z_image"])
     tweak = _PRESET_TWEAKS[preset]
     rank = max(4, base.rank + tweak.rank_delta)
-    fast = _FAST.get(target) if speed == "fast" else None
+    fast = _FAST.get(target) if speed == "fast" else _BALANCED.get(target) if speed == "balanced" else None
     if fast is not None:
         batch_size, fast_steps, learning_rate = fast
         config = TrainingConfig(

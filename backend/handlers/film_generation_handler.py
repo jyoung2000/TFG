@@ -254,10 +254,6 @@ SHEET_VIEW_WORDS = {
 FULL_FIGURE = "full body from head to feet, the whole head and both feet in frame, centered with space above the head and below the feet"
 #: How many renders compete for each view when a face matcher is installed.
 FACE_CANDIDATES = 3
-#: A generated angle this close to the photo's face trains twice as often.
-STRONG_FACE = 0.6
-#: File-name tokens of the asset's style-sheet views.
-SHEET_VIEW_TOKENS = ("front-view", "three-quarter-view", "profile-view", "back-view")
 #: A candidate this close to the photo's face ends the search early.
 FACE_GOOD_ENOUGH = 0.7
 ANGLE_QUALITY = "photo, sharp focus, detailed face, natural skin texture, plain light grey studio background, soft even studio light"
@@ -1725,15 +1721,13 @@ class FilmGenerationHandler(StateHandlerBase):
             crops = self._source_crops(Path(images[0]), Path(folder), asset.name)
             extra = [images[0], *crops]
             dataset = self._training.import_items(dataset.id, ImportDatasetItemsRequest(image_paths=[images[0], *extra, *images[1:]]))
-        # The photo, its crops and the style sheet lead training (3x); angles whose
-        # face matches closely follow (2x); the rest 1x (the 10-minute LoRA drifted
-        # when every image pulled equally, 2026-10-02).
-        weights: dict[str, tuple[int, float | None]] = {}
-        for image in [images[0], *crops, *images[1:]]:
-            name = Path(image).name
-            score = scores.get(image)
-            leads = image == images[0] or image in crops or any(f"-{token}" in name for token in SHEET_VIEW_TOKENS)
-            weights[name] = (3 if leads else 2 if score is not None and score >= STRONG_FACE else 1, score)
+        # Every image trains once per epoch; each keeps its face score for the
+        # Train screen. MEASURED 2026-10-02: weighting the photo, its crops and the
+        # sheet 3x and close angles 2x scored 0.331 vs 0.354 unweighted on the same
+        # prompts, and the trigger alone lost the outfit - the outfit lives in the
+        # 17 angle shots, which the weighting starved. The mechanism stays (an
+        # item's `repeats`) for datasets built by hand.
+        weights: dict[str, tuple[int, float | None]] = {Path(image).name: (1, scores.get(image)) for image in [images[0], *crops, *images[1:]]}
         return self._training.set_item_weights(dataset.id, weights)
 
     def _source_crops(self, photo: Path, folder: Path, name: str) -> list[str]:

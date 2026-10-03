@@ -75,8 +75,9 @@ class TrainingStatusResponse(BaseModel):
 class SuggestConfigRequest(BaseModel):
     dataset_id: str
     target: str = "z_image"
-    #: "fast": about ten minutes on a 12 GB card (film.training_presets); "standard": the best run.
-    speed: Literal["standard", "fast"] = "standard"
+    #: "fast": about ten minutes on a 12 GB card; "balanced": about twenty, the
+    #: default; "standard": the long run (film.training_presets).
+    speed: Literal["standard", "balanced", "fast"] = "standard"
 
 
 class StartTrainingRequest(BaseModel):

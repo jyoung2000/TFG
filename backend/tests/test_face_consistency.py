@@ -91,11 +91,11 @@ def test_the_lora_dataset_leaves_out_strangers(client, test_state, fake_services
     assert not any("medium-34-left" in f for f in files), "a different person: left out"
 
 
-def test_the_lora_dataset_weights_the_photo_and_the_sheet(client, test_state, fake_services, create_fake_model_files):
-    """User, 2026-10-02: the 10-minute LoRA's face and body drifted and it did not
-    look built from the style sheet - every image, strong or weak, pulled equally.
-    The photo, its crops and the sheet views now repeat 3x, angles that match the
-    face closely (>= 0.6) 2x, the rest 1x; each item carries its face score."""
+def test_the_lora_dataset_records_each_face_score(client, test_state, fake_services, create_fake_model_files):
+    """Each item carries its face match for the Train screen. MEASURED 2026-10-02:
+    weighting the photo, crops and sheet 3x (close angles 2x) scored 0.331 vs 0.354
+    unweighted and lost the outfit, so every image trains once per epoch; the
+    `repeats` mechanism stays for datasets built by hand."""
     create_fake_model_files(include_zit=True)
     asset = _raven(client, test_state, fake_services)
     base = f"/api/film/projects/{PROJECT}/assets/{asset['id']}"
@@ -106,9 +106,8 @@ def test_the_lora_dataset_weights_the_photo_and_the_sheet(client, test_state, fa
     matcher.vectors = {"front-view": [0.8, 0.6], "closeup-front": [0.9, 0.436], "full-back": [], "full-profile-left": [0.5, 0.866]}
     dataset = client.post(f"{base}/dataset", json={}).json()
     by_name = {i["file"].split("Raven-")[-1].split(".")[0] if "Raven-" in i["file"] else i["file"]: i for i in dataset["items"]}
-    assert by_name["front-view"]["repeats"] == 3 and by_name["front-view"]["face_score"] == 0.8
-    assert by_name["closeup-front"]["repeats"] == 2 and by_name["closeup-front"]["face_score"] == 0.9
-    assert by_name["full-back"]["repeats"] == 1 and by_name["full-back"]["face_score"] is None
-    assert by_name["full-profile-left"]["repeats"] == 1 and by_name["full-profile-left"]["face_score"] == 0.5
-    photos = [i for i in dataset["items"] if "6.jpg" in i["file"] or "source-" in i["file"]]
-    assert photos and all(i["repeats"] == 3 for i in photos)
+    assert by_name["front-view"]["face_score"] == 0.8 and by_name["closeup-front"]["face_score"] == 0.9
+    assert by_name["full-back"]["face_score"] is None and by_name["full-profile-left"]["face_score"] == 0.5
+    assert all(i["repeats"] == 1 for i in dataset["items"])
+    photos = [i for i in dataset["items"] if "-photo" in i["file"]]
+    assert photos and all(i["face_score"] == 1.0 for i in photos)

@@ -193,8 +193,9 @@ function DatasetBuilder({ dataset, status, onChanged, onStarted, onDeleted, onEr
   const [busy, setBusy] = useState('')
   const [meta, setMeta] = useState({ name: dataset.name, preset: dataset.preset, trigger: dataset.trigger })
   const [target, setTarget] = useState('z_image')
-  // Fast: about ten minutes on this card (measured, see training_presets); Standard: the best run.
-  const [speed, setSpeed] = useState<'standard' | 'fast'>('fast')
+  // Balanced (default): about twenty minutes, the fast recipe with twice the steps;
+  // Fast: about ten, with more run-to-run swing; Standard: the long run (training_presets).
+  const [speed, setSpeed] = useState<'standard' | 'balanced' | 'fast'>('balanced')
   const [config, setConfig] = useState<TrainingConfig | null>(null)
   const [runName, setRunName] = useState('')
   const [historyJobs, setHistoryJobs] = useState<Job[] | null>(null)
@@ -307,9 +308,10 @@ function DatasetBuilder({ dataset, status, onChanged, onStarted, onDeleted, onEr
             </select>
           </label>
           <label className="text-[11px] text-zinc-400 flex items-center gap-1">Speed
-            <select className={selectClass} value={speed} onChange={e => setSpeed(e.target.value as 'standard' | 'fast')} aria-label="Training speed" data-testid="training-speed">
-              <option value="fast">Fast · about 10 min</option>
-              <option value="standard">Standard · best, about 35 min</option>
+            <select className={selectClass} value={speed} onChange={e => setSpeed(e.target.value as 'standard' | 'balanced' | 'fast')} aria-label="Training speed" data-testid="training-speed">
+              <option value="balanced">Balanced · about 20 min</option>
+              <option value="fast">Fast · about 10 min, less consistent</option>
+              <option value="standard">Standard · about 35 min</option>
             </select>
           </label>
           <input className={selectClass + ' w-56'} placeholder={`${dataset.name || 'Dataset'} · ${target}`} value={runName} onChange={e => setRunName(e.target.value)} aria-label="Run name" />
