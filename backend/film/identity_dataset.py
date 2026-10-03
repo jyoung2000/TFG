@@ -27,6 +27,7 @@ _PERSON = re.compile(r"\b(" + "|".join(PERSON_WORDS) + r")\b", re.IGNORECASE)
 #: File-name tokens (asset sheet views and multi-angle names) -> caption words.
 #: Longest first: "back-34-left" before "back", "34-left" before "front".
 _VIEW_WORDS: tuple[tuple[str, str], ...] = (
+    ("facecrop", "close-up portrait"),
     ("source-face", "close-up portrait"),
     ("source-upper", "medium shot"),
     ("closeup", "close-up portrait"),
@@ -69,6 +70,40 @@ def character_caption(florence_text: str, trigger: str, file_name: str) -> str:
             rest = rest.replace(f"-{token}", "-")
     parts.extend(used)
     return ", ".join(p for p in parts if p)
+
+
+#: A face crop's square side, in face-box sides: head, hair and shoulders.
+FACE_CROP_SCALE = 2.6
+#: A smaller crop is too blurry at 512 px to teach a face.
+FACE_CROP_MIN_SIDE = 300
+_FRAMING_TOKENS = ("-full", "-medium", "-closeup")
+
+
+def face_crop(image: Image.Image, box: tuple[float, float, float, float], *, min_side: int = FACE_CROP_MIN_SIDE) -> Image.Image | None:
+    """A head-and-shoulders square around a face box (pixels: x, y, w, h), kept
+    inside the image; None when it would be under `min_side`. In a full-body
+    view at 512 px the face is ~50 px and the LoRA learns a blur there
+    (MEASURED 2026-10-03, see test_identity_dataset)."""
+    x, y, w, h = box
+    if w <= 0 or h <= 0:
+        return None
+    width, height = image.size
+    side = int(min(FACE_CROP_SCALE * max(w, h), width, height))
+    if side < min_side:
+        return None
+    left = int(min(max(0.0, x + w / 2 - side / 2), width - side))
+    top = int(min(max(0.0, y + 0.75 * h - side / 2), height - side))
+    return image.crop((left, top, left + side, top + side))
+
+
+def face_crop_name(stem: str) -> str:
+    """A view's file stem as its face crop's: the framing token gives way to
+    "facecrop" (captioned "close-up portrait"), the view tokens stay."""
+    for token in _FRAMING_TOKENS:
+        stem = stem.replace(f"{token}-", "-")
+        if stem.endswith(token):
+            stem = stem[: -len(token)]
+    return f"{stem}-facecrop"
 
 
 def source_crops(image: Image.Image, face_bbox: list[float], *, min_edge: int = 384) -> list[tuple[str, Image.Image]]:

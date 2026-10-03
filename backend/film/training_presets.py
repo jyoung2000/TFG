@@ -81,6 +81,10 @@ _FAST: dict[str, tuple[int, int, float]] = {
 _BALANCED: dict[str, tuple[int, int, float]] = {
     "z_image": (2, 300, 4e-4),
 }
+#: Balanced trains at this size. MEASURED 2026-10-03 (see test_training_vram):
+#: 2.29 s/step at 384 px against 3.35 at 512, and a character dataset's face
+#: close-ups are ~360-490 px crops that 512 px only upscaled.
+_BALANCED_RESOLUTION: dict[str, int] = {"z_image": 384}
 
 #: VRAM each extra image in a batch costs (MEASURED: batch 1 peaked at 7.7 GB,
 #: batch 2 at 9.3 GB of GPU use at 512 px).
@@ -100,9 +104,10 @@ def default_config(target: str, preset: DatasetPreset, *, image_count: int = 12,
     fast = _FAST.get(target) if speed == "fast" else _BALANCED.get(target) if speed == "balanced" else None
     if fast is not None:
         batch_size, fast_steps, learning_rate = fast
+        resolution = _BALANCED_RESOLUTION.get(target) if speed == "balanced" else None
         config = TrainingConfig(
             target=target, trainer=base.trainer, rank=rank, steps=fast_steps, learning_rate=learning_rate, batch_size=batch_size,
-            resolution=base.resolution, buckets=list(base.buckets), blocks_to_swap=base.blocks_to_swap, fp8=True,
+            resolution=resolution or base.resolution, buckets=[resolution] if resolution else list(base.buckets), blocks_to_swap=base.blocks_to_swap, fp8=True,
             save_every=max(50, fast_steps // 2), sample_every=max(50, fast_steps // 2), estimated_vram_mb=base.estimated_vram_mb,
         )
         return config.model_copy(update={"estimated_vram_mb": estimate_vram_mb(config)})

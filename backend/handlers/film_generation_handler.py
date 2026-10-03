@@ -51,7 +51,7 @@ from film.film_api_types import (
     ReferenceSheetResponse,
     UpdateAssetRequest,
 )
-from film.identity_dataset import PERSON_WORDS, rare_trigger, source_crops
+from film.identity_dataset import PERSON_WORDS, face_crop, face_crop_name, rare_trigger, source_crops
 from services.face_match import SAME_PERSON, FaceMatcher, similarity
 from film.training_api_types import ImportDatasetItemsRequest
 from film.training_models import Dataset, LoraEntry
@@ -254,6 +254,8 @@ SHEET_VIEW_WORDS = {
 FULL_FIGURE = "full body from head to feet, the whole head and both feet in frame, centered with space above the head and below the feet"
 #: How many renders compete for each view when a face matcher is installed.
 FACE_CANDIDATES = 3
+#: A generated view this close to the photo's face also trains as a face close-up.
+FACE_CROP_MIN = 0.6
 #: A candidate this close to the photo's face ends the search early.
 FACE_GOOD_ENOUGH = 0.7
 ANGLE_QUALITY = "photo, sharp focus, detailed face, natural skin texture, plain light grey studio background, soft even studio light"
@@ -1720,15 +1722,47 @@ class FilmGenerationHandler(StateHandlerBase):
         with tempfile.TemporaryDirectory(prefix="lora-source-") as folder:
             crops = self._source_crops(Path(images[0]), Path(folder), asset.name)
             extra = [images[0], *crops]
-            dataset = self._training.import_items(dataset.id, ImportDatasetItemsRequest(image_paths=[images[0], *extra, *images[1:]]))
-        # Every image trains once per epoch; each keeps its face score for the
-        # Train screen. MEASURED 2026-10-02: weighting the photo, its crops and the
-        # sheet 3x and close angles 2x scored 0.331 vs 0.354 unweighted on the same
-        # prompts, and the trigger alone lost the outfit - the outfit lives in the
-        # 17 angle shots, which the weighting starved. The mechanism stays (an
-        # item's `repeats`) for datasets built by hand.
-        weights: dict[str, tuple[int, float | None]] = {Path(image).name: (1, scores.get(image)) for image in [images[0], *crops, *images[1:]]}
+            # ...and a close-up of every generated view whose face matches well.
+            face_crops = self._face_crops(images[1:], scores, reference, Path(folder))
+            scores.update(face_crops)
+            dataset = self._training.import_items(dataset.id, ImportDatasetItemsRequest(image_paths=[images[0], *extra, *images[1:], *face_crops]))
+        # Each image keeps its face score for the Train screen. The full-body views
+        # train twice per epoch, everything else once. MEASURED 2026-10-02: weighting
+        # the photo, its crops and the sheet 3x scored 0.331 vs 0.354 unweighted and
+        # the trigger alone lost the outfit - the outfit lives in the full-body
+        # shots. MEASURED 2026-10-03: the face close-ups lifted the face (0.452 ->
+        # 0.518) but crowded those shots out (a bikini at 180-240 steps); doubling
+        # them brought the outfit back by step 160.
+        weights: dict[str, tuple[int, float | None]] = {
+            Path(image).name: (2 if "-full-" in Path(image).name else 1, scores.get(image)) for image in [images[0], *crops, *images[1:], *face_crops]
+        }
         return self._training.set_item_weights(dataset.id, weights)
+
+    def _face_crops(self, images: list[str], scores: dict[str, float | None], reference: list[float] | None, folder: Path) -> dict[str, float | None]:
+        """Head-and-shoulders crops of the generated views whose face matches the
+        photo well, each kept only when the crop itself still matches: path -> score."""
+        matcher = self._faces()
+        if matcher is None or reference is None:
+            return {}
+        out: dict[str, float | None] = {}
+        for image in images:
+            score = scores.get(image)
+            if score is None or score < FACE_CROP_MIN:
+                continue
+            box = matcher.face_box(image)
+            if box is None:
+                continue
+            with Image.open(image) as opened:
+                crop = face_crop(opened.convert("RGB"), box)
+            if crop is None:
+                continue
+            path = folder / f"{face_crop_name(Path(image).stem)}.png"
+            crop.save(path)
+            vector = matcher.embedding(str(path))
+            crop_score = round(similarity(reference, vector), 4) if vector else None
+            if crop_score is not None and crop_score >= FACE_CROP_MIN:
+                out[str(path)] = crop_score
+        return out
 
     def _source_crops(self, photo: Path, folder: Path, name: str) -> list[str]:
         """Crops around the face Florence finds in the photo; none when it finds none."""

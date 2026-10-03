@@ -108,6 +108,41 @@ def test_the_lora_dataset_records_each_face_score(client, test_state, fake_servi
     by_name = {i["file"].split("Raven-")[-1].split(".")[0] if "Raven-" in i["file"] else i["file"]: i for i in dataset["items"]}
     assert by_name["front-view"]["face_score"] == 0.8 and by_name["closeup-front"]["face_score"] == 0.9
     assert by_name["full-back"]["face_score"] is None and by_name["full-profile-left"]["face_score"] == 0.5
-    assert all(i["repeats"] == 1 for i in dataset["items"])
+    # Full-body views carry the outfit: twice per epoch, so the face close-ups do
+    # not crowd it out (MEASURED 2026-10-03: with close-ups and no doubling, the
+    # trigger alone rendered a bikini at 180-240 steps).
+    assert by_name["full-back"]["repeats"] == 2 and by_name["full-profile-left"]["repeats"] == 2
+    assert all(i["repeats"] == 1 for i in dataset["items"] if "-full-" not in i["file"])
     photos = [i for i in dataset["items"] if "-photo" in i["file"]]
     assert photos and all(i["face_score"] == 1.0 for i in photos)
+
+
+def _big_png() -> str:
+    buffer = io.BytesIO()
+    Image.new("RGB", (768, 1024), (80, 70, 60)).save(buffer, format="PNG")
+    return base64.b64encode(buffer.getvalue()).decode()
+
+
+def test_the_lora_dataset_adds_a_face_close_up_of_each_matching_view(client, test_state, fake_services, create_fake_model_files):
+    """User, 2026-10-03: "the LoRA faces still aren't consistent and aren't
+    styleguide quality". The faces in the full-body and medium views are too
+    small at 512 px to teach; each generated view whose face matches the photo
+    well (>= 0.6) now also gives a head-and-shoulders crop, kept only when the
+    crop itself still matches."""
+    create_fake_model_files(include_zit=True)
+    asset = _raven(client, test_state, fake_services)
+    base = f"/api/film/projects/{PROJECT}/assets/{asset['id']}"
+    for name in ("Raven-front-view", "Raven-full-34-left", "Raven-full-profile-left", "Raven-medium-front"):
+        client.post(f"{base}/references", json={"image_base64": _big_png(), "name_hint": name})
+    matcher = fake_services.face_matcher
+    matcher.enabled = True
+    matcher.vectors = {
+        "front-view-facecrop": [0.96, 0.28], "34-left-facecrop": [0.3, 0.954],
+        "front-view": [0.8, 0.6], "full-34-left": [0.7, 0.714], "full-profile-left": [0.5, 0.866], "medium-front": [0.75, 0.661],
+    }
+    matcher.boxes = {"front-view": (330.0, 100.0, 120.0, 150.0), "full-34-left": (330.0, 100.0, 120.0, 150.0), "full-profile-left": (330.0, 100.0, 120.0, 150.0), "medium-front": (350.0, 80.0, 60.0, 80.0)}
+    dataset = client.post(f"{base}/dataset", json={}).json()
+    crops = {i["file"].split("Raven-")[-1].split(".")[0]: i for i in dataset["items"] if "facecrop" in i["file"]}
+    assert set(crops) == {"front-view-facecrop"}, "34-left's crop no longer matches; the profile is under 0.6; medium-front's face is too small"
+    assert crops["front-view-facecrop"]["face_score"] == 0.96, "the crop's own match, shown on the Train screen"
+    assert sum("front-view" in i["file"] for i in dataset["items"]) == 2, "the view itself stays: it carries the outfit"

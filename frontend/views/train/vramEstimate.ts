@@ -29,7 +29,10 @@ export function estimateMinutes(config: Pick<TrainingConfig, 'target' | 'steps' 
   if (config.target !== 'z_image') return null
   // MEASURED 2026-10-02: a batch-2 step costs about 1.4x a batch-1 step at 512 px.
   const batchFactor = 1 + 0.4 * Math.max(0, (config.batch_size ?? 1) - 1)
-  const secondsPerStep = 2.3 * Math.pow(Math.max(256, config.resolution) / 512, 2) * batchFactor
+  // Below 512 px a step has a floor that does not shrink with the image
+  // (MEASURED 2026-10-03: 2.29 s/step at 384 px, batch 2; 3.35 at 512).
+  const area = Math.pow(Math.max(256, config.resolution) / 512, 2)
+  const secondsPerStep = (config.resolution < 512 ? 0.63 + 1.67 * area : 2.3 * area) * batchFactor
   return Math.round((config.steps * secondsPerStep) / 60 + 4)
 }
 

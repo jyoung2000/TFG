@@ -322,7 +322,7 @@ function DatasetBuilder({ dataset, status, onChanged, onStarted, onDeleted, onEr
           </label>
           <label className="text-[11px] text-zinc-400 flex items-center gap-1">Speed
             <select className={selectClass} value={speed} onChange={e => setSpeed(e.target.value as 'standard' | 'balanced' | 'fast')} aria-label="Training speed" data-testid="training-speed">
-              <option value="balanced">Balanced · about 20-25 min</option>
+              <option value="balanced">Balanced · about 15 min</option>
               <option value="fast">Fast · about 10 min, less consistent</option>
               <option value="standard">Standard · about 35 min</option>
             </select>

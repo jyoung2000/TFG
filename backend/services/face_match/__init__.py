@@ -21,6 +21,10 @@ class FaceMatcher(Protocol):
         """The largest face's identity vector, or None when no face is found."""
         ...
 
+    def face_box(self, image_path: str) -> tuple[float, float, float, float] | None:
+        """The largest face's box in the image's own pixels (x, y, w, h), or None."""
+        ...
+
 
 def similarity(a: list[float], b: list[float]) -> float:
     dot = sum(x * y for x, y in zip(a, b))

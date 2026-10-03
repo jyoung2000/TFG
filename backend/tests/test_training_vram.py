@@ -97,6 +97,20 @@ def test_the_balanced_preset_is_the_fast_recipe_with_twice_the_steps() -> None:
     assert balanced.steps == 2 * fast.steps == 300
 
 
+def test_the_balanced_preset_trains_at_384_px() -> None:
+    """User, 2026-10-03: a consistent face and body "while only taking 0-15
+    minutes". MEASURED (same 6 prompts and seeds, SFace vs. the photo), with face
+    close-ups in the dataset and the full-body views twice per epoch: 300 steps
+    at 384 px = 0.499 in 11.4 min of training (2.29 s/step) against 0.452 in
+    18.7 min at 512 px without them. The close-ups are ~360-490 px crops, so
+    512 px only upscaled them."""
+    balanced = default_config("z_image", "character", speed="balanced")
+    assert balanced.resolution == 384 and balanced.buckets == [384]
+    assert balanced.steps == 300 and balanced.batch_size == 2
+    assert default_config("z_image", "character", speed="fast").resolution == 512
+    assert default_config("z_image", "character").resolution == 512
+
+
 def test_the_estimate_counts_the_batch() -> None:
     """MEASURED: batch 1 peaked at 7.7 GB of GPU use, batch 2 at 9.3 GB."""
     one = default_config("z_image", "character")

@@ -33,27 +33,45 @@ class SFaceMatcher:
             self._models = (detector, recognizer)
         return self._models
 
-    def embedding(self, image_path: str) -> list[float] | None:
-        if not self.available():
-            return None
+    def _largest_face(self, image_path: str) -> tuple[Any, Any, float] | None:
+        """(image as detected on, the largest face row, the scale it was resized by). Call under the lock."""
         import cv2
         import numpy as np
 
+        detector, _ = self._load()
+        image = cast(Any, cv2.imdecode(np.fromfile(image_path, dtype=np.uint8), cv2.IMREAD_COLOR))
+        if image is None:
+            return None
+        height, width = int(image.shape[0]), int(image.shape[1])
+        scale = min(1.0, 1280 / max(height, width))
+        if scale < 1.0:
+            width, height = int(width * scale), int(height * scale)
+            resized = cast(Any, cv2.resize(image, (width, height)))
+            image = resized
+        detector.setInputSize((width, height))
+        _, faces = detector.detect(image)
+        if faces is None or len(faces) == 0:
+            return None
+        return image, max(faces, key=lambda f: float(f[2]) * float(f[3])), scale
+
+    def embedding(self, image_path: str) -> list[float] | None:
+        if not self.available():
+            return None
         with self._lock:
-            detector, recognizer = self._load()
-            image = cast(Any, cv2.imdecode(np.fromfile(image_path, dtype=np.uint8), cv2.IMREAD_COLOR))
-            if image is None:
+            found = self._largest_face(image_path)
+            if found is None:
                 return None
-            height, width = int(image.shape[0]), int(image.shape[1])
-            scale = 1280 / max(height, width)
-            if scale < 1.0:
-                width, height = int(width * scale), int(height * scale)
-                resized = cast(Any, cv2.resize(image, (width, height)))
-                image = resized
-            detector.setInputSize((width, height))
-            _, faces = detector.detect(image)
-            if faces is None or len(faces) == 0:
-                return None
-            face = max(faces, key=lambda f: float(f[2]) * float(f[3]))
+            image, face, _ = found
+            _, recognizer = self._load()
             feature = recognizer.feature(recognizer.alignCrop(image, face))
             return [float(v) for v in feature.flatten()]
+
+    def face_box(self, image_path: str) -> tuple[float, float, float, float] | None:
+        if not self.available():
+            return None
+        with self._lock:
+            found = self._largest_face(image_path)
+        if found is None:
+            return None
+        _, face, scale = found
+        return (float(face[0]) / scale, float(face[1]) / scale, float(face[2]) / scale, float(face[3]) / scale)

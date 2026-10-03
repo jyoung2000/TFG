@@ -15,6 +15,8 @@ describe('estimateVramMb', () => {
     expect(estimateMinutes({ target: 'z_image', steps: 840, resolution: 512 })).toBe(36)
     expect(estimateMinutes({ target: 'z_image', steps: 1100, resolution: 768 })).toBe(99)
     expect(estimateMinutes({ target: 'flux', steps: 800, resolution: 768 })).toBeNull()
+    // MEASURED 2026-10-03: 2.29 s/step at 384 px, batch 2 (300 steps in 11.4 min).
+    expect(estimateMinutes({ target: 'z_image', steps: 300, resolution: 384, batch_size: 2 })).toBe(15)
   })
   it('adds the batch to the VRAM estimate (measured: 7.7 GB at batch 1, 9.3 GB at batch 2)', () => {
     const one = estimateVramMb({ target: 'z_image', blocks_to_swap: 8, estimated_vram_mb: 8600 })
