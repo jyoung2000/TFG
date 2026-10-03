@@ -96,10 +96,16 @@ def prompt_phrases(prompt: str) -> list[str]:
     return seen
 
 
-def summarize(votes: list[TasteVote]) -> TasteSummary:
+def summarize(votes: list[TasteVote], *, ignore: frozenset[str] = frozenset()) -> TasteSummary:
+    """`ignore`: phrases that name rather than describe (LoRA triggers, "woman");
+    a LoRA vote's prompt is its trigger, so LoRA votes add no phrases."""
     tally: dict[str, list[int]] = {}
     for vote in votes:
+        if vote.kind == "lora":
+            continue
         for phrase in prompt_phrases(vote.prompt):
+            if phrase in ignore:
+                continue
             counts = tally.setdefault(phrase, [0, 0])
             counts[0 if vote.vote > 0 else 1] += 1
     phrases = [TastePhrase(text=text, up=up, down=down) for text, (up, down) in tally.items()]

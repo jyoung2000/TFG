@@ -9,6 +9,7 @@ from threading import RLock
 from typing import TYPE_CHECKING
 
 from _routes._errors import HTTPError
+from film.identity_dataset import PERSON_WORDS
 from film.knowledge_models import KnowledgeEvent
 from film.taste import TASTE_KINDS, TasteStore, TasteSummary, TasteVote, summarize, taste_note
 from handlers.base import StateHandlerBase
@@ -111,7 +112,10 @@ class TasteHandler(StateHandlerBase):
         votes = self._store.all()
         if not self.learning():
             return TasteSummary(enabled=False, votes=len(votes), up=sum(1 for v in votes if v.vote > 0), down=sum(1 for v in votes if v.vote < 0))
-        return summarize(votes)
+        triggers: set[str] = set()
+        if self._training is not None:
+            triggers = {e.trigger.strip().lower() for e in self._training.list_loras() if e.trigger.strip()}
+        return summarize(votes, ignore=frozenset(triggers | set(PERSON_WORDS)))
 
     def note(self) -> str:
         """For an AI that writes prompts: what the user's votes say they like."""

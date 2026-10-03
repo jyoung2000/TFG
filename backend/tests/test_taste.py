@@ -127,3 +127,17 @@ def test_the_director_is_told_the_users_taste(client, test_state) -> None:
     system = payload["messages"][0]["content"]
     assert "moody rim light" in system and "handheld shaky cam" in system
     assert "thumbs" in json.dumps(payload["messages"][0])
+
+
+def test_trigger_words_and_subject_words_are_not_taste(client, tmp_path: Path) -> None:
+    """Live QA 2026-10-03: the liked phrases came back as "rvnx" (a LoRA's
+    trigger), "woman" and the LoRA vote's own trigger - noise for the AI."""
+    lora = tmp_path / "raven.safetensors"
+    lora.write_bytes(b"0" * 64)
+    entry = client.post("/api/training/loras/import", json={"path": str(lora), "name": "Raven", "target": "z_image", "trigger": "rvnx"}).json()
+    _vote(client, kind="lora", subject=entry["id"], vote=1)
+    for i in range(2):
+        _vote(client, kind="image", subject=f"C:/renders/r{i}.png", vote=1, prompt=f"rvnx, woman, soft studio light, take {i}")
+    liked = [p["text"] for p in client.get("/api/taste/summary").json()["liked_phrases"]]
+    assert liked == ["soft studio light"]
+
