@@ -1,7 +1,9 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
 import { Layers } from 'lucide-react'
 import { trainingApi } from '../lib/training-api'
 import type { LoraEntry, LoraUse } from '../types/training'
+import { ThumbVote } from './ThumbVote'
+import { byTaste, tasteStore } from '../lib/taste'
 
 interface LoraPickerProps {
   /** Base model id (`z_image`, `qwen_image_20B`, `ltx2_22B_distilled`…) — only compatible LoRAs are offered. */
@@ -19,6 +21,9 @@ interface LoraPickerProps {
 export function LoraPicker({ model, value, onChange, disabled, compact }: LoraPickerProps) {
   const [entries, setEntries] = useState<LoraEntry[]>([])
   const [error, setError] = useState('')
+  // Liked LoRAs first (lib/taste.ts); each can be graded right here.
+  useSyncExternalStore(tasteStore.subscribe, tasteStore.version)
+  useEffect(() => { void tasteStore.load() }, [])
   useEffect(() => {
     let cancelled = false
     trainingApi.listLoras({ model }).then(list => { if (!cancelled) { setEntries(list); setError('') } }).catch(e => { if (!cancelled) setError(String(e)) })
@@ -37,12 +42,13 @@ export function LoraPicker({ model, value, onChange, disabled, compact }: LoraPi
   return (
     <div className={`space-y-1 ${compact ? '' : 'rounded border border-zinc-800 p-2'}`} data-testid="lora-picker">
       {!compact && <span className="text-[10px] text-zinc-500 uppercase tracking-wide">LoRAs</span>}
-      {entries.map(entry => {
+      {byTaste(entries, entry => tasteStore.get('lora', entry.id)).map(entry => {
         const use = value.find(v => v.name === entry.file)
         return (
           <label key={entry.id} className="flex items-center gap-2 text-xs text-zinc-300">
             <input type="checkbox" checked={!!use} disabled={disabled} onChange={() => toggle(entry)} aria-label={`Use LoRA ${entry.name}`} />
             <span className="truncate flex-1" title={entry.file}>{entry.name}{entry.trigger ? <span className="text-zinc-500"> · trigger “{entry.trigger}”</span> : null}</span>
+            <ThumbVote target={{ kind: 'lora', subject: entry.id, prompt: entry.trigger, model: entry.target }} />
             {use && (
               <input type="number" step="0.05" min="0" max="2" value={use.multiplier} disabled={disabled} onChange={e => setMultiplier(entry, Number(e.target.value))} aria-label={`Strength for ${entry.name}`} className="w-16 bg-zinc-900 border border-zinc-700 rounded px-1 py-0.5 text-[11px] text-zinc-200" />
             )}

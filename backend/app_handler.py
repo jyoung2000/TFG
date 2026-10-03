@@ -39,6 +39,7 @@ from handlers.reproduce_handler import ReproduceHandler
 from handlers.video_reproduce_handler import VideoReproduceHandler
 from handlers.scene_handler import SceneHandler
 from handlers.training_handler import TrainingHandler
+from handlers.taste_handler import TasteHandler
 from handlers.wangp_server_handler import WanGPServerHandler
 from services.face_match import FaceMatcher
 from services.lora_fetcher import LoraFetcher
@@ -473,6 +474,16 @@ class AppHandler:
         self.film_generation.attach_knowledge(self.knowledge)
         self.film.attach_knowledge(self.knowledge)
 
+        # Thumbs up / down on what the app makes (film/taste.py).
+        self.taste = TasteHandler(
+            state=self.state,
+            lock=self._lock,
+            path=config.outputs_dir / "taste" / "votes.json",
+            knowledge=self.knowledge,
+            film=self.film,
+        )
+        self.film_generation.attach_taste(self.taste)
+
         self.film_director = FilmDirectorHandler(
             state=self.state,
             lock=self._lock,
@@ -534,6 +545,8 @@ class AppHandler:
             analysis_root=config.outputs_dir / "video_analyses",
         )
         self.film_generation.attach_training(self.training, self.vision, self._face_matcher)
+        self.taste.attach_training(self.training)
+        self.film_director.attach_taste(self.taste)
         self.wangp_server = WanGPServerHandler(
             self.state,
             self._lock,

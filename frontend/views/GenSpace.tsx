@@ -8,6 +8,8 @@ import {
 import { LoraPicker } from '../components/LoraPicker'
 import type { LoraUse } from '../types/training'
 import { imageLoraLabel } from '../lib/faceLock'
+import { ThumbVote } from '../components/ThumbVote'
+import { appendPhrase, tasteApi, tasteChips, type TastePhrase } from '../lib/taste'
 import { useProjects } from '../contexts/ProjectContext'
 import type { GenSpaceRetakeSource } from '../contexts/ProjectContext'
 import { useAppSettings } from '../contexts/AppSettingsContext'
@@ -135,6 +137,9 @@ function AssetCard({
             >
               <Heart className={`h-3.5 w-3.5 ${isFavorite ? 'fill-current' : ''}`} />
             </button>
+            {(asset.type === 'image' || asset.type === 'video') && (
+              <ThumbVote target={{ kind: asset.type, subject: asset.path, prompt: asset.prompt, model: asset.generationParams?.model }} variant="overlay" />
+            )}
             
             {asset.type === 'image' && (
               <>
@@ -384,6 +389,7 @@ function PromptBar({
   faceLock,
   onFaceLockChange,
   faceMatch,
+  likedPhrases,
 }: {
   mode: 'image' | 'video' | 'retake'
   onModeChange: (mode: 'image' | 'video' | 'retake') => void
@@ -415,6 +421,8 @@ function PromptBar({
   faceLock: boolean
   onFaceLockChange: (on: boolean) => void
   faceMatch: string
+  /** Prompt phrases the user's thumbs up favour (lib/taste.ts). */
+  likedPhrases: TastePhrase[]
 }) {
   const inputRef = useRef<HTMLInputElement>(null)
   const audioInputRef = useRef<HTMLInputElement>(null)
@@ -593,6 +601,14 @@ function PromptBar({
             }
             className="w-full bg-transparent text-white text-sm placeholder:text-zinc-500 focus:outline-none px-2 py-2 resize-none overflow-y-auto h-[70px] leading-5"
           />
+          {!isRetake && tasteChips(likedPhrases, prompt).length > 0 && (
+            <div className="flex flex-wrap items-center gap-1 px-2 pb-1" data-testid="taste-chips">
+              <span className="text-[10px] text-zinc-500" title="Phrases from prompts you gave a thumbs up">Your taste</span>
+              {tasteChips(likedPhrases, prompt).map(text => (
+                <button key={text} type="button" onClick={() => onPromptChange(appendPhrase(prompt, text))} className="px-1.5 py-0.5 rounded-full bg-emerald-900/40 border border-emerald-800/60 text-[10px] text-emerald-200 hover:bg-emerald-800/60">+ {text}</button>
+              ))}
+            </div>
+          )}
         </div>
 
       </div>
@@ -904,6 +920,13 @@ export function GenSpace() {
   // Image mode: registry LoRAs and face lock (frontend/lib/faceLock.ts).
   const [imageLoras, setImageLoras] = useState<LoraUse[]>([])
   const [faceLock, setFaceLock] = useState(true)
+  // What the user's thumbs up say they like, offered as one-click prompt phrases.
+  const [likedPhrases, setLikedPhrases] = useState<TastePhrase[]>([])
+  useEffect(() => {
+    let cancelled = false
+    tasteApi.summary().then(s => { if (!cancelled && s.enabled) setLikedPhrases(s.liked_phrases) }).catch(() => undefined)
+    return () => { cancelled = true }
+  }, [isGenerating])
 
   const {
     submitRetake,
@@ -1504,6 +1527,7 @@ export function GenSpace() {
           faceLock={faceLock}
           onFaceLockChange={setFaceLock}
           faceMatch={faceMatch}
+          likedPhrases={likedPhrases}
         />
       </div>
       

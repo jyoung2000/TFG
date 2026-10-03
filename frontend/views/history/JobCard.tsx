@@ -3,6 +3,8 @@ import { AlertTriangle, Clock, Download, FileVideo, ImageIcon, Loader2, RefreshC
 import { filmOutputUrl } from '../../lib/film-api'
 import { JOB_KIND_LABEL, isActive, type Job, type JobKind } from '../../types/jobs'
 import { jobPreview } from './jobPreview'
+import { ThumbVote } from '../../components/ThumbVote'
+import { jobTasteTarget } from '../../lib/taste'
 
 export const KIND_ICON: Record<JobKind, React.ReactNode> = {
   image_gen: <ImageIcon className="h-3.5 w-3.5" />,
@@ -73,6 +75,7 @@ export function JobCard({ job, selected, onOpen, onCancel }: JobCardProps) {
   useEffect(() => setImgFailed(false), [url])
   const active = isActive(job)
   const label = job.title || job.prompt || JOB_KIND_LABEL[job.kind]
+  const taste = jobTasteTarget(job)
 
   return (
     <div
@@ -123,6 +126,7 @@ export function JobCard({ job, selected, onOpen, onCancel }: JobCardProps) {
         <span className="absolute top-1.5 left-1.5 flex items-center gap-1 px-1.5 py-0.5 rounded bg-black/60 text-[10px] text-zinc-200">
           {KIND_ICON[job.kind]} {JOB_KIND_LABEL[job.kind]}
         </span>
+        {taste && <ThumbVote target={taste} variant="overlay" className="absolute top-1.5 right-1.5" />}
         {active && onCancel && (
           <button
             onClick={e => { e.stopPropagation(); onCancel() }}

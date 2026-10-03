@@ -3,6 +3,8 @@ import { WEIGHT_LABELS, trainerChip, weightStatus, type WeightRow } from './trai
 import { estimateMinutes, estimateVramMb, maxBlocksToSwap } from './vramEstimate'
 import { PREVIEW_LABELS, weightBadge } from './itemWeight'
 import { loraThumb, newestFirst, runThumb, whenLabel, type ListThumb } from './loraList'
+import { ThumbVote } from '../../components/ThumbVote'
+import { speedForTaste, tasteApi, type TasteSummary } from '../../lib/taste'
 import { faceSummary } from '../film/assets/faceMatch'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Eye, Pencil, ArrowLeft, Ban, FolderOpen, Images, Layers, Loader2, Play, Plus, RefreshCw, Sparkles, Trash2, Video, Wand2 } from 'lucide-react'
@@ -209,6 +211,21 @@ function DatasetBuilder({ dataset, status, onChanged, onStarted, onDeleted, onEr
   // Balanced (default): about twenty minutes, the fast recipe with twice the steps;
   // Fast: about ten, with more run-to-run swing; Standard: the long run (training_presets).
   const [speed, setSpeed] = useState<'standard' | 'balanced' | 'fast'>('balanced')
+  // The training settings of the LoRAs the user gave a thumbs up (lib/taste.ts):
+  // shown, and the matching speed pre-selected until the user picks one.
+  const [likedTraining, setLikedTraining] = useState<TasteSummary['training']>(null)
+  const [speedTouched, setSpeedTouched] = useState(false)
+  useEffect(() => {
+    let cancelled = false
+    tasteApi.summary().then(summary => {
+      if (cancelled || !summary.enabled) return
+      setLikedTraining(summary.training)
+      const liked = speedForTaste(summary.training)
+      if (liked) setSpeed(current => (speedTouched ? current : liked))
+    }).catch(() => undefined)
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
   const [config, setConfig] = useState<TrainingConfig | null>(null)
   const [runName, setRunName] = useState('')
   const [historyJobs, setHistoryJobs] = useState<Job[] | null>(null)
@@ -321,12 +338,17 @@ function DatasetBuilder({ dataset, status, onChanged, onStarted, onDeleted, onEr
             </select>
           </label>
           <label className="text-[11px] text-zinc-400 flex items-center gap-1">Speed
-            <select className={selectClass} value={speed} onChange={e => setSpeed(e.target.value as 'standard' | 'balanced' | 'fast')} aria-label="Training speed" data-testid="training-speed">
+            <select className={selectClass} value={speed} onChange={e => { setSpeedTouched(true); setSpeed(e.target.value as 'standard' | 'balanced' | 'fast') }} aria-label="Training speed" data-testid="training-speed">
               <option value="balanced">Balanced · about 15 min</option>
               <option value="fast">Fast · about 10 min, less consistent</option>
               <option value="standard">Standard · about 35 min</option>
             </select>
           </label>
+          {likedTraining && (
+            <span className="text-[10px] text-emerald-300/80" data-testid="liked-training" title="From your thumbs up on LoRAs">
+              You liked LoRAs trained at {likedTraining.resolution} px · {likedTraining.steps} steps
+            </span>
+          )}
           <input className={selectClass + ' w-56'} placeholder={`${dataset.name || 'Dataset'} · ${target}`} value={runName} onChange={e => setRunName(e.target.value)} aria-label="Run name" />
         </div>
         {config && (
@@ -573,7 +595,7 @@ function LoraRow({ entry, runs, onChanged, onError }: { entry: LoraEntry; runs: 
   }
   return (
     <div className="rounded border border-zinc-800 text-xs" data-testid="lora-row">
-    <div className="grid grid-cols-[1fr_auto_auto_auto_auto_auto] items-center gap-2 px-2 py-1.5">
+    <div className="grid grid-cols-[1fr_auto_auto_auto_auto_auto_auto] items-center gap-2 px-2 py-1.5">
       <div className="min-w-0 flex items-center gap-1.5">
         <RowThumb thumb={loraThumb(entry, runs)} alt={`${entry.name} preview`} />
         <Pencil className="h-3 w-3 text-zinc-600 shrink-0" aria-hidden="true" />
@@ -585,6 +607,7 @@ function LoraRow({ entry, runs, onChanged, onError }: { entry: LoraEntry; runs: 
       <label className="text-[10px] text-zinc-500">trigger <input className={selectClass + ' w-28'} value={draft.trigger} onChange={e => setDraft(d => ({ ...d, trigger: e.target.value }))} onBlur={save} onKeyDown={onEnter} aria-label={`Trigger for ${entry.name}`} title="The word that calls this LoRA in a prompt; Enter or click away saves" data-testid="lora-trigger" /></label>
       <label className="text-[10px] text-zinc-500">strength <input type="number" step="0.05" min="0" max="2" className={selectClass + ' w-16'} value={draft.default_multiplier} onChange={e => setDraft(d => ({ ...d, default_multiplier: Number(e.target.value) }))} onBlur={save} aria-label={`Default strength for ${entry.name}`} /></label>
       <span className="text-[10px] text-zinc-600 whitespace-nowrap" data-testid="lora-when">{whenLabel(entry.created_at)}</span>
+      <ThumbVote target={{ kind: 'lora', subject: entry.id, prompt: entry.trigger, model: entry.target }} />
       <button onClick={() => setOpen(o => !o)} className="btn-chip" aria-expanded={open} data-testid="lora-preview-toggle"><Eye className="h-3.5 w-3.5" /> Preview{entry.preview_paths?.length ? ` (${entry.preview_paths.length})` : ''}</button>
       <button onClick={() => { if (window.confirm(`Delete ${entry.name}? The file is removed from the LoRA folder.`)) void trainingApi.deleteLora(entry.id).then(() => onChanged()).catch(e => onError(String(e))) }} aria-label={`Delete ${entry.name}`} className="p-1 text-zinc-600 hover:text-red-300"><Trash2 className="h-3.5 w-3.5" /></button>
     </div>

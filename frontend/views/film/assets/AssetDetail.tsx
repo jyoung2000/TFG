@@ -5,6 +5,7 @@
  * the asset is used. All handlers are the pre-redesign ones.
  */
 
+import { ThumbVote } from '../../../components/ThumbVote'
 import { commitNumber } from '../settingsNumber'
 import { assetUpdates, type AssetEdits, type AssetTextField } from './assetEdits'
 import { useCallback, useEffect, useMemo, useState } from 'react'
@@ -152,7 +153,7 @@ export function AssetDetail({ asset, onBack, onOpenLightbox, onOpenStudio }: {
               </div>
               <div className="grid grid-cols-4 gap-2">
                 {sheetImages(asset).map(({ view, path }) => (
-                  <SheetTile key={view} view={view} path={path} onOpen={() => path && openPath(path)} />
+                  <SheetTile key={view} view={view} path={path} projectId={film.id} onOpen={() => path && openPath(path)} />
                 ))}
               </div>
             </section>
@@ -163,6 +164,7 @@ export function AssetDetail({ asset, onBack, onOpenLightbox, onOpenStudio }: {
               {(asset.kind === 'style' ? asset.reference_images : looseReferences(asset)).map(path => (
                 <span key={path} className="relative group">
                   <GalleryThumb path={path} onOpen={() => openPath(path)} size="w-14 h-14" />
+                  <ThumbVote target={{ kind: 'style_guide', subject: path, projectId: film.id }} variant="overlay" className="absolute bottom-0 left-0 hidden group-hover:inline-flex scale-75 origin-bottom-left" />
                   <button onClick={() => void deleteReference(path)} aria-label={`Delete reference ${path.split('/').pop() ?? ''}`}
                     className="absolute -top-1 -right-1 hidden group-hover:flex items-center justify-center w-4 h-4 rounded-full bg-zinc-900 border border-zinc-700 text-zinc-400 hover:text-red-300"><X className="h-2.5 w-2.5" /></button>
                 </span>
@@ -200,7 +202,7 @@ export function AssetDetail({ asset, onBack, onOpenLightbox, onOpenStudio }: {
   )
 }
 
-function SheetTile({ view, path, onOpen }: { view: string; path: string | null; onOpen: () => void }) {
+function SheetTile({ view, path, projectId, onOpen }: { view: string; path: string | null; projectId: string; onOpen: () => void }) {
   const state = useFilmMediaUrl(path ?? undefined)
   return (
     <div>
@@ -215,7 +217,10 @@ function SheetTile({ view, path, onOpen }: { view: string; path: string | null; 
           <img src={state.url} alt="" loading="lazy" className="h-64 w-full object-contain bg-zinc-950 rounded-lg border border-zinc-800" />
         </button>
       )}
-      <span className="block text-center text-[10px] text-zinc-500 mt-1 capitalize">{view.replace(' view', '')}</span>
+      <span className="flex items-center justify-center gap-1 text-[10px] text-zinc-500 mt-1 capitalize">
+        {view.replace(' view', '')}
+        {path && <ThumbVote target={{ kind: 'style_guide', subject: path, projectId }} />}
+      </span>
     </div>
   )
 }

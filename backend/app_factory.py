@@ -17,6 +17,7 @@ from _routes._errors import HTTPError
 from _routes.film import router as film_router
 from _routes.film_director import router as film_director_router
 from _routes.knowledge import router as knowledge_router
+from _routes.taste import router as taste_router
 from _routes.jobs import router as jobs_router
 from _routes.vision import router as vision_router
 from _routes.reproduce import router as reproduce_router
@@ -164,7 +165,7 @@ def _include_all_routers(app: FastAPI) -> None:
         image_analysis_router, suggest_gap_prompt_router, retake_router, ic_lora_router, runtime_policy_router,
         film_router, film_generation_router, film_director_router, video_analysis_router, video_reproduce_router,
         scene_router, training_router, wangp_router, knowledge_router, jobs_router, vision_router, reproduce_router,
-        prompts_router, shot_library_router, timeline_router,
+        prompts_router, shot_library_router, timeline_router, taste_router,
     ):
         app.include_router(router)
 

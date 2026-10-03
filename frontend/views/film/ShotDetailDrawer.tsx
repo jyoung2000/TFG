@@ -34,6 +34,7 @@ import type {
 } from '../../types/film'
 import { CAMERA_MOVES, CONTINUITY_LEVEL_META, SHOT_STATUS_META, VISUAL_REVIEW_META, framingLabel } from '../../types/film'
 import { useShotWorkflow } from './useShotWorkflow'
+import { ThumbVote } from '../../components/ThumbVote'
 
 /** What the local host renders with. The quality profile varies; the family does not. */
 const LOCAL_VIDEO_MODEL = 'ltx-2'
@@ -572,6 +573,11 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
               {busy === 'refine' ? <Loader2 className="h-3 w-3 animate-spin" /> : <Wand2 className="h-3 w-3" />}
               Refine with AI
             </button>
+            {shot.visual_prompt.trim() && (
+              <span className="flex items-center gap-0.5 text-[10px] text-zinc-500" title="Grade this prompt: the AI Director learns what you like">
+                Prompt <ThumbVote target={{ kind: 'prompt', subject: shot.visual_prompt, prompt: shot.visual_prompt, projectId }} />
+              </span>
+            )}
             {shot.prompt_locked && (
               <button
                 onClick={() => void unlockPrompt()}

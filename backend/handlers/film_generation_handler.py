@@ -76,6 +76,7 @@ from handlers.knowledge_handler import KnowledgeHandler
 from handlers.generation_handler import GenerationHandler
 from handlers.jobs_handler import JobsHandler
 from handlers.training_handler import TrainingHandler
+from handlers.taste_handler import TasteHandler
 from handlers.vision_handler import VisionHandler
 from services.similarity.metrics import cosine_similarity
 from handlers.image_generation_handler import ImageGenerationHandler
@@ -317,6 +318,8 @@ class FilmGenerationHandler(StateHandlerBase):
         self._training: TrainingHandler | None = None
         self._vision: VisionHandler | None = None
         self._face_matcher_service: FaceMatcher | None = None
+        #: Thumbs up / down (film/taste.py): what a character's LoRA learns from.
+        self._taste: TasteHandler | None = None
         # Set while a hosted job runs, so the queue can report and cancel it.
         self._hosted_cancel = False
         self._hosted_progress: tuple[int, str] | None = None
@@ -1710,6 +1713,18 @@ class FilmGenerationHandler(StateHandlerBase):
                 images.append(str(path))
         if not images:
             raise HTTPError(400, "The asset has no images yet: generate a multi-angle set first")
+        # The user's grades (film/taste.py): style-guide and angle images graded
+        # down stay out (never the identity photo); renders graded up that were
+        # made with this character's LoRA come in, face-checked like the rest.
+        if self._taste is not None:
+            taste = self._taste
+            images = [images[0], *(i for i in images[1:] if not taste.rejected(i))]
+            if asset.lora_id:
+                try:
+                    bound = self._training.get_lora(asset.lora_id).file
+                except HTTPError:
+                    bound = ""
+                images += [r for r in taste.liked_renders(bound) if r not in images]
         preset = {"character": "character", "style": "style"}.get(asset.kind, "object")
         # A character's default trigger is a rare token: "raven" rendered the bird (2026-10-02).
         name_trigger = "".join(ch for ch in asset.name.lower() if ch.isalnum() or ch == "_") or "subject"
@@ -1974,6 +1989,9 @@ class FilmGenerationHandler(StateHandlerBase):
             else:
                 locked_image.save(path)
         return best_score
+
+    def attach_taste(self, taste: TasteHandler) -> None:
+        self._taste = taste
 
     def attach_training(self, training: TrainingHandler, vision: VisionHandler | None = None, face_matcher: FaceMatcher | None = None) -> None:
         self._training = training
