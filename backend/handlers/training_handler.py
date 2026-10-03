@@ -415,6 +415,15 @@ class TrainingHandler(StateHandlerBase):
         dataset.caption_model = model
         return self._save_dataset(dataset)
 
+    def set_item_weights(self, dataset_id: str, weights: dict[str, tuple[int, float | None]]) -> Dataset:
+        """Repeats and face score per item, keyed by the imported file's name."""
+        dataset = self._load_dataset(dataset_id)
+        for item in dataset.items:
+            found = weights.get(Path(item.origin).name) if item.origin else None
+            if found is not None:
+                item.repeats, item.face_score = max(1, found[0]), found[1]
+        return self._save_dataset(dataset)
+
     def media_path(self, dataset_id: str, file: str) -> Path:
         dataset = self._load_dataset(dataset_id)
         if not any(i.file == file for i in dataset.items):
@@ -609,6 +618,7 @@ class TrainingHandler(StateHandlerBase):
             rank=run.config.rank,
             learning_rate=run.config.learning_rate,
             batch_size=run.config.batch_size,
+            repeats={item.file: item.repeats for item in dataset.items},
             resolution=run.config.resolution,
             buckets=run.config.buckets,
             blocks_to_swap=run.config.blocks_to_swap,
@@ -720,6 +730,19 @@ class TrainingHandler(StateHandlerBase):
             entries = [e for e in entries if e.target == target]
         return sorted(entries, key=lambda e: -e.created_at)
 
+    def preview_root(self) -> Path:
+        """Where LoRA previews live; the media route serves them."""
+        return self._lora_root / "previews"
+
+    def set_lora_preview(self, lora_id: str, paths: list[str], scores: list[float | None]) -> LoraEntry:
+        entries = self._load_registry()
+        entry = next((e for e in entries if e.id == lora_id), None)
+        if entry is None:
+            raise HTTPError(404, "LoRA not found")
+        entry.preview_paths, entry.preview_scores = list(paths), list(scores)
+        self._save_registry(entries)
+        return entry
+
     def get_lora(self, lora_id: str) -> LoraEntry:
         entry = next((e for e in self._load_registry() if e.id == lora_id), None)
         if entry is None:
@@ -746,11 +769,13 @@ class TrainingHandler(StateHandlerBase):
         self._save_registry(entries)
         return entry
 
-    def update_lora(self, lora_id: str, *, name: str | None, trigger: str | None, default_multiplier: float | None) -> LoraEntry:
+    def update_lora(self, lora_id: str, *, name: str | None, trigger: str | None, default_multiplier: float | None, dataset_id: str | None = None) -> LoraEntry:
         entries = self._load_registry()
         entry = next((e for e in entries if e.id == lora_id), None)
         if entry is None:
             raise HTTPError(404, "LoRA not found")
+        if dataset_id is not None:
+            entry.dataset_id = dataset_id
         if name is not None and name.strip():
             entry.name = name.strip()
         if trigger is not None:

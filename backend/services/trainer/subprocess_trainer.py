@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -274,12 +275,28 @@ class MusubiTrainer(SubprocessTrainer):
             "enable_bucket = true",
             "bucket_no_upscale = false",
             "",
-            "[[datasets]]",
-            f'image_directory = "{Path(request.dataset_dir).as_posix()}"',
-            f'cache_directory = "{cache_dir.as_posix()}"',
-            "num_repeats = 1",
-            "",
         ]
+        groups = sorted({max(1, count) for count in request.repeats.values()})
+        if groups and groups != [1]:
+            # Items that repeat train as their own musubi datasets (num_repeats),
+            # copied with their captions into the run folder (2026-10-02).
+            source_dir = Path(request.dataset_dir)
+            for count in groups:
+                folder = work_dir / f"set-r{count}"
+                folder.mkdir(exist_ok=True)
+                for file, repeats in request.repeats.items():
+                    source = source_dir / file
+                    if max(1, repeats) != count or not source.is_file():
+                        continue
+                    shutil.copyfile(source, folder / file)
+                    caption = source.with_suffix(".txt")
+                    if caption.is_file():
+                        shutil.copyfile(caption, folder / caption.name)
+                cache = cache_dir / f"r{count}"
+                cache.mkdir(exist_ok=True)
+                lines += ["[[datasets]]", f'image_directory = "{folder.as_posix()}"', f'cache_directory = "{cache.as_posix()}"', f"num_repeats = {count}", ""]
+        else:
+            lines += ["[[datasets]]", f'image_directory = "{Path(request.dataset_dir).as_posix()}"', f'cache_directory = "{cache_dir.as_posix()}"', "num_repeats = 1", ""]
         path = work_dir / "dataset.toml"
         path.write_text("\n".join(lines), encoding="utf-8")
         return path

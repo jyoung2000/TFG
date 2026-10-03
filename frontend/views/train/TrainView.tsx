@@ -1,8 +1,10 @@
 import { nextDatasetName } from './datasetName'
 import { WEIGHT_LABELS, trainerChip, weightStatus, type WeightRow } from './trainerWeights'
 import { estimateMinutes, estimateVramMb, maxBlocksToSwap } from './vramEstimate'
+import { PREVIEW_LABELS, weightBadge } from './itemWeight'
+import { faceSummary } from '../film/assets/faceMatch'
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Pencil, ArrowLeft, Ban, FolderOpen, Images, Layers, Loader2, Play, Plus, RefreshCw, Sparkles, Trash2, Video, Wand2 } from 'lucide-react'
+import { Eye, Pencil, ArrowLeft, Ban, FolderOpen, Images, Layers, Loader2, Play, Plus, RefreshCw, Sparkles, Trash2, Video, Wand2 } from 'lucide-react'
 import { useProjects } from '../../contexts/ProjectContext'
 import { jobsApi } from '../../lib/jobs-api'
 import { logger } from '../../lib/logger'
@@ -12,7 +14,7 @@ import { filmOutputUrl } from '../../lib/film-api'
 import { getBackendCredentials } from '../../lib/backend'
 import { mediaResolver } from '../../lib/media-resolver'
 import type { Job } from '../../types/jobs'
-import { LORA_TARGETS, PRESET_LABEL, isRunActive, type Dataset, type DatasetPreset, type LoraEntry, type TrainingConfig, type TrainingRun, type TrainingStatusResponse } from '../../types/training'
+import { type DatasetItem, LORA_TARGETS, PRESET_LABEL, isRunActive, type Dataset, type DatasetPreset, type LoraEntry, type TrainingConfig, type TrainingRun, type TrainingStatusResponse } from '../../types/training'
 import { LossSparkline } from './LossSparkline'
 
 const selectClass = 'bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs text-zinc-200 focus:outline-none focus:border-violet-600'
@@ -386,6 +388,7 @@ function ItemCard({ datasetId, item, disabled, onSave, onRemove }: { datasetId: 
     <div className="rounded border border-zinc-800 bg-zinc-900/40 p-1.5 space-y-1" data-testid="dataset-item-card">
       <div className="relative">
         <DatasetThumb datasetId={datasetId} file={item.file} alt={item.caption || item.file} />
+        {weightBadge(item) && <span className="absolute top-1 left-1 px-1 py-0.5 rounded bg-black/70 text-[10px] text-fuchsia-200" title="How often an epoch trains on this image, and its face match to the photo" data-testid="item-weight">{weightBadge(item)}</span>}
         <span className="absolute top-1 left-1 text-[9px] px-1 rounded bg-black/60 text-zinc-300">{item.source}{item.edited ? ' · edited' : ''}</span>
         <button onClick={onRemove} disabled={disabled} aria-label={`Remove ${item.file}`} className="absolute top-1 right-1 p-0.5 rounded bg-black/60 text-zinc-400 hover:text-red-300"><Trash2 className="h-3 w-3" /></button>
       </div>
@@ -536,8 +539,26 @@ function LoraRow({ entry, onChanged, onError }: { entry: LoraEntry; onChanged: (
     trainingApi.updateLora(entry.id, draft).then(() => { setSaved('Saved'); window.setTimeout(() => setSaved(''), 2000); return onChanged() }).catch(e => onError(String(e)))
   }
   const onEnter = (e: React.KeyboardEvent<HTMLInputElement>) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }
+  // The preview: the standard views rendered from the trigger alone, and the
+  // images the LoRA was trained on with their weights (user, 2026-10-02).
+  const [open, setOpen] = useState(false)
+  const [rendering, setRendering] = useState(false)
+  const [items, setItems] = useState<DatasetItem[]>([])
+  useEffect(() => {
+    if (!open || !entry.dataset_id) { setItems([]); return }
+    let live = true
+    trainingApi.getDataset(entry.dataset_id).then(d => { if (live) setItems(d.items) }).catch(() => { if (live) setItems([]) })
+    return () => { live = false }
+  }, [open, entry.dataset_id])
+  const renderPreview = async () => {
+    setRendering(true)
+    try { await trainingApi.previewLora(entry.id); setOpen(true); await onChanged() }
+    catch (e) { onError(e instanceof Error ? e.message : String(e)) }
+    finally { setRendering(false) }
+  }
   return (
-    <div className="grid grid-cols-[1fr_auto_auto_auto_auto] items-center gap-2 rounded border border-zinc-800 px-2 py-1.5 text-xs" data-testid="lora-row">
+    <div className="rounded border border-zinc-800 text-xs" data-testid="lora-row">
+    <div className="grid grid-cols-[1fr_auto_auto_auto_auto_auto] items-center gap-2 px-2 py-1.5">
       <div className="min-w-0 flex items-center gap-1.5">
         <Pencil className="h-3 w-3 text-zinc-600 shrink-0" aria-hidden="true" />
         <div className="min-w-0 flex-1">
@@ -548,7 +569,46 @@ function LoraRow({ entry, onChanged, onError }: { entry: LoraEntry; onChanged: (
       <label className="text-[10px] text-zinc-500">trigger <input className={selectClass + ' w-28'} value={draft.trigger} onChange={e => setDraft(d => ({ ...d, trigger: e.target.value }))} onBlur={save} onKeyDown={onEnter} aria-label={`Trigger for ${entry.name}`} title="The word that calls this LoRA in a prompt; Enter or click away saves" data-testid="lora-trigger" /></label>
       <label className="text-[10px] text-zinc-500">strength <input type="number" step="0.05" min="0" max="2" className={selectClass + ' w-16'} value={draft.default_multiplier} onChange={e => setDraft(d => ({ ...d, default_multiplier: Number(e.target.value) }))} onBlur={save} aria-label={`Default strength for ${entry.name}`} /></label>
       <span className="text-[10px] text-zinc-600">{new Date(entry.created_at).toLocaleDateString()}</span>
+      <button onClick={() => setOpen(o => !o)} className="btn-chip" aria-expanded={open} data-testid="lora-preview-toggle"><Eye className="h-3.5 w-3.5" /> Preview{entry.preview_paths?.length ? ` (${entry.preview_paths.length})` : ''}</button>
       <button onClick={() => { if (window.confirm(`Delete ${entry.name}? The file is removed from the LoRA folder.`)) void trainingApi.deleteLora(entry.id).then(() => onChanged()).catch(e => onError(String(e))) }} aria-label={`Delete ${entry.name}`} className="p-1 text-zinc-600 hover:text-red-300"><Trash2 className="h-3.5 w-3.5" /></button>
     </div>
+    {open && (
+      <div className="border-t border-zinc-800 px-2 py-2 space-y-2" data-testid="lora-preview">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-[10px] uppercase tracking-wide text-zinc-500 font-semibold">LoRA preview · from the trigger alone</span>
+          <button onClick={() => void renderPreview()} disabled={rendering} className="btn-chip" data-testid="lora-render-preview">{rendering ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />} {entry.preview_paths?.length ? 'Re-render preview' : 'Render preview'}</button>
+          {entry.preview_scores && <span className="text-[10px] text-zinc-500">{faceSummary(entry.preview_scores).replace(/^ · /, '')}</span>}
+        </div>
+        {entry.preview_paths?.length ? (
+          <div className="flex gap-2 overflow-x-auto">
+            {entry.preview_paths.map((path, i) => <PreviewThumb key={path} path={path} label={PREVIEW_LABELS[i] ?? `View ${i + 1}`} score={entry.preview_scores?.[i] ?? null} />)}
+          </div>
+        ) : <p className="text-[10px] text-zinc-600">Nothing rendered yet - Render preview makes a close-up, a medium shot and two full-body views with only the trigger word.</p>}
+        {items.length > 0 && (
+          <>
+            <span className="text-[10px] uppercase tracking-wide text-zinc-500 font-semibold">Trained on {items.length} images</span>
+            <div className="flex gap-1.5 overflow-x-auto" data-testid="lora-training-images">
+              {items.map(item => (
+                <figure key={item.id} className="m-0 w-20 shrink-0 relative">
+                  <DatasetThumb datasetId={entry.dataset_id} file={item.file} alt={item.caption} />
+                  {weightBadge(item) && <figcaption className="text-[9px] text-fuchsia-200 text-center truncate">{weightBadge(item)}</figcaption>}
+                </figure>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+    )}
+    </div>
+  )
+}
+
+function PreviewThumb({ path, label, score }: { path: string; label: string; score: number | null }) {
+  const url = useUrl(() => filmOutputUrl(path), [path])
+  return (
+    <figure className="m-0 w-28 shrink-0">
+      {url ? <img src={url} alt={label} className="w-28 h-36 object-cover object-top rounded bg-zinc-900" /> : <div className="w-28 h-36 rounded bg-zinc-900" />}
+      <figcaption className="text-[10px] text-zinc-500 text-center">{label}{score !== null ? ` · ${score.toFixed(2)}` : ''}</figcaption>
+    </figure>
   )
 }

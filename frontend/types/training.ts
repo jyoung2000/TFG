@@ -27,6 +27,10 @@ export interface DatasetItem {
   origin: string
   width: number
   height: number
+  /** Times an epoch sees this image (photo and style sheet 3, close faces 2, else 1); absent on older datasets. */
+  repeats?: number
+  /** Face match to the dataset's photo (SFace cosine); null when unscored or faceless. */
+  face_score?: number | null
 }
 
 export interface Dataset {
@@ -104,6 +108,9 @@ export interface LoraEntry {
   default_multiplier: number
   size_bytes: number
   imported: boolean
+  /** Renders of the standard views from the trigger alone, with each face's match to the photo. */
+  preview_paths?: string[]
+  preview_scores?: (number | null)[]
   created_at: number
 }
 

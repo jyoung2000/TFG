@@ -25,6 +25,8 @@ class TrainingRequest(BaseModel):
     rank: int = 16
     learning_rate: float = 1e-4
     batch_size: int = 1
+    #: Repeats per dataset file (file name -> count); empty or all 1 = one plain dataset.
+    repeats: dict[str, int] = Field(default_factory=dict[str, int])
     resolution: int = 768
     buckets: list[int] = Field(default_factory=lambda: [512, 768])
     blocks_to_swap: int = 0

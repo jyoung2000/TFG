@@ -121,3 +121,5 @@ class UpdateLoraRequest(BaseModel):
     name: str | None = None
     trigger: str | None = None
     default_multiplier: float | None = None
+    #: The dataset the LoRA was trained on (its photo scores the preview).
+    dataset_id: str | None = None

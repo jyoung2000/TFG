@@ -21,7 +21,8 @@ import re
 
 from PIL import Image
 
-_PERSON = re.compile(r"\b(woman|man|girl|boy|lady|person)\b", re.IGNORECASE)
+PERSON_WORDS = ("woman", "man", "girl", "boy", "lady", "person")
+_PERSON = re.compile(r"\b(" + "|".join(PERSON_WORDS) + r")\b", re.IGNORECASE)
 
 #: File-name tokens (asset sheet views and multi-angle names) -> caption words.
 #: Longest first: "back-34-left" before "back", "34-left" before "front".

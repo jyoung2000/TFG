@@ -39,6 +39,12 @@ class DatasetItem(BaseModel):
     origin: str = ""
     width: int = 0
     height: int = 0
+    #: How many times a training epoch sees this image: the photo, its crops and
+    #: the style sheet lead (3), close face matches follow (2), the rest 1
+    #: (2026-10-02: weighted equally, weak angles pulled as hard as the sheet).
+    repeats: int = 1
+    #: Face match to the dataset's photo (OpenCV SFace cosine); None when unscored or faceless.
+    face_score: float | None = None
 
 
 class Dataset(BaseModel):
@@ -130,4 +136,8 @@ class LoraEntry(BaseModel):
     size_bytes: int = 0
     #: True for files a person dropped into the folder (no run behind them).
     imported: bool = False
+    #: Renders of the standard views with this LoRA from its trigger alone, and
+    #: each one's face match to the dataset's photo (2026-10-02).
+    preview_paths: list[str] = Field(default_factory=list[str])
+    preview_scores: list[float | None] = Field(default_factory=list[float | None])
     created_at: int = Field(default_factory=now_ms)

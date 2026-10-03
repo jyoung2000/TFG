@@ -147,7 +147,13 @@ def route_import_lora(req: ImportLoraRequest, handler: AppHandler = Depends(get_
 
 @router.put("/loras/{lora_id}", response_model=LoraEntry)
 def route_update_lora(lora_id: str, req: UpdateLoraRequest, handler: AppHandler = Depends(get_state_service)) -> LoraEntry:
-    return handler.training.update_lora(lora_id, name=req.name, trigger=req.trigger, default_multiplier=req.default_multiplier)
+    return handler.training.update_lora(lora_id, name=req.name, trigger=req.trigger, default_multiplier=req.default_multiplier, dataset_id=req.dataset_id)
+
+
+@router.post("/loras/{lora_id}/preview", response_model=LoraEntry)
+def route_preview_lora(lora_id: str, handler: AppHandler = Depends(get_state_service)) -> LoraEntry:
+    """Render the standard views with the LoRA and keep them on its entry."""
+    return handler.film_generation.preview_lora(lora_id)
 
 
 @router.delete("/loras/{lora_id}", response_model=StatusResponse)

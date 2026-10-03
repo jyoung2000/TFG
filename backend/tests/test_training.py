@@ -591,6 +591,24 @@ class TestSubprocessTrainers:
         (tmp_path / "raven-step00000183.safetensors").write_bytes(b"x")
         assert trainer.find_lora(request) == tmp_path / "raven-step00000183.safetensors"
 
+    def test_weighted_items_become_their_own_dataset_blocks(self, tmp_path: Path):
+        """Items with repeats > 1 (the photo and the sheet) train as separate musubi
+        datasets with num_repeats, copied with their captions into the run folder."""
+        ds = tmp_path / "ds"
+        ds.mkdir()
+        for name in ("photo", "angle"):
+            (ds / f"{name}.png").write_bytes(b"p")
+            (ds / f"{name}.txt").write_text(f"rvnx, woman {name}", encoding="utf-8")
+        work = tmp_path / "work"
+        work.mkdir()
+        request = self._request(tmp_path, dataset_dir=str(ds), repeats={"photo.png": 3, "angle.png": 1})
+        toml = MusubiTrainer(tmp_path).write_dataset_toml(request, work).read_text(encoding="utf-8")
+        assert toml.count("[[datasets]]") == 2 and "num_repeats = 3" in toml and "num_repeats = 1" in toml
+        assert (work / "set-r3" / "photo.png").is_file() and (work / "set-r3" / "photo.txt").read_text(encoding="utf-8") == "rvnx, woman photo"
+        assert (work / "set-r1" / "angle.png").is_file() and not (work / "set-r1" / "photo.png").exists()
+        plain = MusubiTrainer(tmp_path).write_dataset_toml(self._request(tmp_path, dataset_dir=str(ds)), work).read_text(encoding="utf-8")
+        assert plain.count("[[datasets]]") == 1 and str(ds.as_posix()) in plain
+
     def test_musubi_z_image_splits_attention(self, tmp_path: Path):
         """MEASURED 2026-10-02 (30 steps, 512 px, batch 2): --split_attn 4.40 s/step
         vs 4.84 without, and 700 MB less VRAM, with the same numbers out - a free 9%."""

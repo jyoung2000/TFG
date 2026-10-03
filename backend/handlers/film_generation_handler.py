@@ -13,6 +13,7 @@ from __future__ import annotations
 import base64
 import logging
 import os
+import shutil
 import tempfile
 import time
 from collections import deque
@@ -50,10 +51,10 @@ from film.film_api_types import (
     ReferenceSheetResponse,
     UpdateAssetRequest,
 )
-from film.identity_dataset import rare_trigger, source_crops
+from film.identity_dataset import PERSON_WORDS, rare_trigger, source_crops
 from services.face_match import SAME_PERSON, FaceMatcher, similarity
 from film.training_api_types import ImportDatasetItemsRequest
-from film.training_models import Dataset
+from film.training_models import Dataset, LoraEntry
 from film.film_continuity import check_shot_continuity
 from film.media_providers import MediaSpec
 from film.media_runner import MediaRunResult, MediaRunner, image_data_url, suffix_for
@@ -253,6 +254,10 @@ SHEET_VIEW_WORDS = {
 FULL_FIGURE = "full body from head to feet, the whole head and both feet in frame, centered with space above the head and below the feet"
 #: How many renders compete for each view when a face matcher is installed.
 FACE_CANDIDATES = 3
+#: A generated angle this close to the photo's face trains twice as often.
+STRONG_FACE = 0.6
+#: File-name tokens of the asset's style-sheet views.
+SHEET_VIEW_TOKENS = ("front-view", "three-quarter-view", "profile-view", "back-view")
 #: A candidate this close to the photo's face ends the search early.
 FACE_GOOD_ENOUGH = 0.7
 ANGLE_QUALITY = "photo, sharp focus, detailed face, natural skin texture, plain light grey studio background, soft even studio light"
@@ -1703,18 +1708,33 @@ class FilmGenerationHandler(StateHandlerBase):
             return self._training.import_items(dataset.id, ImportDatasetItemsRequest(image_paths=images))
         # Generated images whose face is not the photo's person are left out: they
         # taught Raven's LoRA a blend of strangers (SFace 0.25-0.43, 2026-10-02).
+        scores: dict[str, float | None] = {}
         reference = self._face_vector(Path(images[0]))
         if reference is not None:
             kept = [images[0]]
+            scores[images[0]] = 1.0
             for image in images[1:]:
                 vector = self._face_vector(Path(image))
-                if vector is None or similarity(reference, vector) >= SAME_PERSON:
+                score = round(similarity(reference, vector), 4) if vector else None
+                if score is None or score >= SAME_PERSON:
                     kept.append(image)
+                    scores[image] = score
             images = kept
         # The real photo, weighted up: twice, plus head and upper-body crops of it.
         with tempfile.TemporaryDirectory(prefix="lora-source-") as folder:
-            extra = [images[0], *self._source_crops(Path(images[0]), Path(folder), asset.name)]
-            return self._training.import_items(dataset.id, ImportDatasetItemsRequest(image_paths=[images[0], *extra, *images[1:]]))
+            crops = self._source_crops(Path(images[0]), Path(folder), asset.name)
+            extra = [images[0], *crops]
+            dataset = self._training.import_items(dataset.id, ImportDatasetItemsRequest(image_paths=[images[0], *extra, *images[1:]]))
+        # The photo, its crops and the style sheet lead training (3x); angles whose
+        # face matches closely follow (2x); the rest 1x (the 10-minute LoRA drifted
+        # when every image pulled equally, 2026-10-02).
+        weights: dict[str, tuple[int, float | None]] = {}
+        for image in [images[0], *crops, *images[1:]]:
+            name = Path(image).name
+            score = scores.get(image)
+            leads = image == images[0] or image in crops or any(f"-{token}" in name for token in SHEET_VIEW_TOKENS)
+            weights[name] = (3 if leads else 2 if score is not None and score >= STRONG_FACE else 1, score)
+        return self._training.set_item_weights(dataset.id, weights)
 
     def _source_crops(self, photo: Path, folder: Path, name: str) -> list[str]:
         """Crops around the face Florence finds in the photo; none when it finds none."""
@@ -1735,6 +1755,58 @@ class FilmGenerationHandler(StateHandlerBase):
                 crop.save(path)
                 out.append(str(path))
         return out
+
+    #: The views a LoRA preview renders, from the trigger alone.
+    PREVIEW_VIEWS = (
+        "close-up portrait, front view",
+        "medium shot, three-quarter view from the left",
+        "full body shot, front view",
+        "full body shot, profile view from the left",
+    )
+
+    def preview_lora(self, lora_id: str) -> LoraEntry:
+        """The standard views rendered with the LoRA from its trigger alone - what
+        the LoRA knows, with no description to lean on - each face scored against
+        the dataset's photo (user, 2026-10-02: "a preview of the LoRA where we can
+        see the different LoRA angle images in the software")."""
+        if self._training is None:  # pragma: no cover - wired in AppHandler
+            raise HTTPError(500, "Training is not available in this build")
+        handler = self._image_generation
+        if handler is None:  # pragma: no cover - wired in AppHandler
+            raise HTTPError(500, "Local image generation is not available in this build")
+        entry = self._training.get_lora(lora_id)
+        person = "person"
+        photo: Path | None = None
+        if entry.dataset_id:
+            try:
+                dataset = self._training.get_dataset(entry.dataset_id)
+            except HTTPError:
+                dataset = None
+            if dataset is not None and dataset.items:
+                first = dataset.items[0]
+                words = [w.strip() for w in first.caption.split(",")]
+                if len(words) >= 2 and words[1] in PERSON_WORDS:
+                    person = words[1]
+                photo = self._training.media_path(dataset.id, first.file)
+        identity_vector = self._face_vector(photo) if photo is not None and photo.is_file() else None
+        folder = self._training.preview_root() / entry.id
+        folder.mkdir(parents=True, exist_ok=True)
+        loras = [LoraUse(name=entry.file, multiplier=entry.default_multiplier or 1.0)]
+        paths: list[str] = []
+        scores: list[float | None] = []
+        for index, view in enumerate(self.PREVIEW_VIEWS):
+            prompt = ", ".join(p for p in (entry.trigger, person, view) if p)
+            response = handler.generate(GenerateImageRequest(prompt=prompt, width=768, height=1024, numImages=1, loras=loras), seed=PREVIEW_SEED + index)
+            out_paths = response.image_paths or []
+            if response.status != "complete" or not out_paths:
+                raise HTTPError(502, "The image model did not return a preview")
+            source = Path(out_paths[0])
+            target = folder / f"{index + 1:02d}{source.suffix.lower() or '.png'}"
+            shutil.copyfile(source, target)
+            paths.append(str(target))
+            vector = self._face_vector(target) if identity_vector else None
+            scores.append(round(similarity(identity_vector, vector), 4) if identity_vector and vector else None)
+        return self._training.set_lora_preview(entry.id, paths, scores)
 
     def attach_training(self, training: TrainingHandler, vision: VisionHandler | None = None, face_matcher: FaceMatcher | None = None) -> None:
         self._training = training

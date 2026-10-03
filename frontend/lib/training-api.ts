@@ -72,6 +72,8 @@ export const trainingApi = {
     request<{ job_id: string }>('/api/training/loras/download', { method: 'POST', body: JSON.stringify(data) }),
   updateLora: (id: string, data: { name?: string; trigger?: string; default_multiplier?: number }) =>
     request<LoraEntry>(`/api/training/loras/${enc(id)}`, { method: 'PUT', body: JSON.stringify(data) }),
+  /** Render the standard views with the LoRA (its trigger alone) and keep them on the entry. */
+  previewLora: (id: string) => request<LoraEntry>(`/api/training/loras/${enc(id)}/preview`, { method: 'POST' }),
   deleteLora: (id: string) => request<{ status: string }>(`/api/training/loras/${enc(id)}`, { method: 'DELETE' }),
 }
 
