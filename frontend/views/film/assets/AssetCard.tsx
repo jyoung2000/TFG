@@ -4,6 +4,9 @@ import { Lock, Trash2 } from 'lucide-react'
 import type { FilmAsset } from '../../../types/film'
 import { assetStatus, consistencyOf, sheetImages, type AssetStatus } from './consistency'
 import { KIND_META, ThumbError, paletteSwatch, useFilmMediaUrl } from './shared'
+import { HoverGallery } from '../../../components/HoverGallery'
+import { useFilm } from '../../../contexts/FilmContext'
+import { filmMediaUrl } from '../../../lib/film-api'
 
 const STATUS_META: Record<Exclude<AssetStatus, 'empty'>, { label: string; className: string; lock?: boolean }> = {
   locked: { label: 'Locked', className: 'bg-emerald-900/60 text-emerald-300', lock: true },
@@ -33,6 +36,7 @@ export function AssetCard({ asset, selected, onSelect, onRemove }: {
   asset: FilmAsset; selected: boolean; onSelect: () => void; onRemove: () => void
 }) {
   const thumb = useFilmMediaUrl(asset.reference_images[0])
+  const { film } = useFilm()
   const meta = KIND_META[asset.kind]
   const status = assetStatus(asset)
   const badge = status === 'empty' ? null : STATUS_META[status]
@@ -43,7 +47,9 @@ export function AssetCard({ asset, selected, onSelect, onRemove }: {
       title={asset.name}>
       <div className="aspect-[4/3] bg-zinc-950 relative">
         {thumb.status === 'ready'
-          ? <img src={thumb.url} alt="" loading="lazy" className="w-full h-full object-cover" />
+          // Under the mouse: every reference image the asset has, like a gallery.
+          ? <HoverGallery items={asset.reference_images.map(path => ({ kind: 'image' as const, path }))} resolve={ref => filmMediaUrl(film?.id ?? '', ref.path)}
+              alt="" className="w-full h-full" testId="asset-gallery" />
           : thumb.status === 'error' && asset.reference_images.length > 0
             ? <ThumbError className="w-full h-full" message={thumb.message} />
             : (

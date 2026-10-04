@@ -2,7 +2,9 @@ import { nextDatasetName } from './datasetName'
 import { WEIGHT_LABELS, trainerChip, weightStatus, type WeightRow } from './trainerWeights'
 import { estimateMinutes, estimateVramMb, maxBlocksToSwap } from './vramEstimate'
 import { PREVIEW_LABELS, weightBadge } from './itemWeight'
-import { loraThumb, newestFirst, runThumb, whenLabel, type ListThumb } from './loraList'
+import { newestFirst, whenLabel } from './loraList'
+import { HoverGallery, MediaLightbox, type MediaResolver } from '../../components/HoverGallery'
+import { loraGallery, runGallery, type MediaRef } from '../../lib/hoverGallery'
 import { ThumbVote } from '../../components/ThumbVote'
 import { speedForTaste, tasteApi, type TasteSummary } from '../../lib/taste'
 import { faceSummary } from '../film/assets/faceMatch'
@@ -33,6 +35,17 @@ async function runMediaUrl(runId: string, path: string): Promise<string> {
   return `${url}/api/training/runs/${encodeURIComponent(runId)}/media?path=${encodeURIComponent(path)}&token=${encodeURIComponent(token)}`
 }
 
+const resolveMedia: MediaResolver = ref =>
+  ref.datasetId ? datasetMediaUrl(ref.datasetId, ref.path) : ref.runId ? runMediaUrl(ref.runId, ref.path) : filmOutputUrl(ref.path)
+
+/** The full-screen viewer over some of Train's pictures, opened at one of them. */
+type Viewer = { items: MediaRef[]; index: number }
+
+function TrainLightbox({ viewer, onChange }: { viewer: Viewer | null; onChange: (next: Viewer | null) => void }) {
+  if (!viewer) return null
+  return <MediaLightbox items={viewer.items} resolve={resolveMedia} index={viewer.index} onClose={() => onChange(null)} onIndexChange={index => onChange({ ...viewer, index })} />
+}
+
 function useUrl(resolve: () => Promise<string>, deps: unknown[]): string {
   const [url, setUrl] = useState('')
   useEffect(() => {
@@ -44,27 +57,36 @@ function useUrl(resolve: () => Promise<string>, deps: unknown[]): string {
   return url
 }
 
-function DatasetThumb({ datasetId, file, alt }: { datasetId: string; file: string; alt: string }) {
+function DatasetThumb({ datasetId, file, alt, onOpen }: { datasetId: string; file: string; alt: string; onOpen?: () => void }) {
   const url = useUrl(() => datasetMediaUrl(datasetId, file), [datasetId, file])
-  return url ? <img src={url} alt={alt} className="w-full h-28 object-cover rounded bg-zinc-900" /> : <div className="w-full h-28 rounded bg-zinc-900" />
+  if (!url) return <div className="w-full h-28 rounded bg-zinc-900" />
+  const image = <img src={url} alt={alt} className="w-full h-28 object-cover rounded bg-zinc-900" />
+  return onOpen ? <button type="button" onClick={onOpen} className="block w-full cursor-zoom-in" aria-label={`Open ${alt || file} full screen`}>{image}</button> : image
 }
 
-function SampleThumb({ runId, path, step }: { runId: string; path: string; step: number }) {
+function SampleThumb({ runId, path, step, onOpen }: { runId: string; path: string; step: number; onOpen: () => void }) {
   const url = useUrl(() => runMediaUrl(runId, path), [runId, path])
   return (
     <figure className="m-0 w-28 shrink-0">
-      {url ? <img src={url} alt={`Sample at step ${step}`} className="w-28 h-28 object-cover rounded bg-zinc-900" /> : <div className="w-28 h-28 rounded bg-zinc-900" />}
+      {url
+        ? <button type="button" onClick={onOpen} className="block cursor-zoom-in" aria-label={`Open the sample at step ${step} full screen`}><img src={url} alt={`Sample at step ${step}`} className="w-28 h-28 object-cover rounded bg-zinc-900" /></button>
+        : <div className="w-28 h-28 rounded bg-zinc-900" />}
       <figcaption className="text-[10px] text-zinc-500 text-center">step {step}</figcaption>
     </figure>
   )
 }
 
-/** A list row's square thumbnail: the LoRA's rendered close-up or the run's last sample. */
-function RowThumb({ thumb, alt }: { thumb: ListThumb; alt: string }) {
-  const url = useUrl(() => (thumb.kind === 'preview' ? filmOutputUrl(thumb.path) : thumb.kind === 'sample' ? runMediaUrl(thumb.runId, thumb.path) : Promise.resolve('')), [thumb.kind, thumb.kind === 'none' ? '' : thumb.path])
-  return url
-    ? <img src={url} alt={alt} className="w-10 h-10 object-cover object-top rounded bg-zinc-900 shrink-0" data-testid="row-thumb" />
-    : <div className="w-10 h-10 rounded bg-zinc-900 shrink-0 flex items-center justify-center" aria-hidden="true"><Layers className="h-3.5 w-3.5 text-zinc-700" /></div>
+/**
+ * A list row's square thumbnail: the LoRA's rendered close-up or the run's last
+ * sample at rest; under the mouse it walks every picture the row has
+ * (lib/hoverGallery.ts). With `onOpen`, a click opens them full screen.
+ */
+function RowThumb({ items, alt, onOpen }: { items: MediaRef[]; alt: string; onOpen?: (index: number) => void }) {
+  return (
+    <HoverGallery items={items} resolve={resolveMedia} alt={alt} onOpen={onOpen} testId="row-thumb"
+      className="w-10 h-10 rounded bg-zinc-900 shrink-0" mediaClassName="object-cover object-top"
+      fallback={<div className="w-10 h-10 rounded bg-zinc-900 shrink-0 flex items-center justify-center" aria-hidden="true"><Layers className="h-3.5 w-3.5 text-zinc-700" /></div>} />
+  )
 }
 
 function HistoryThumb({ job }: { job: Job }) {
@@ -168,7 +190,7 @@ export function TrainView() {
             {runs.length === 0 && <p className="px-2 text-xs text-zinc-600">No runs yet.</p>}
             {newestFirst(runs).map(r => (
               <button key={r.id} onClick={() => setPanel({ kind: 'run', id: r.id })} className={`w-full text-left px-2 py-1.5 rounded text-xs hover:bg-zinc-800 flex items-center gap-2 ${panel.kind === 'run' && panel.id === r.id ? 'bg-zinc-800 text-white' : 'text-zinc-300'}`} data-testid="run-item">
-                <RowThumb thumb={runThumb(r, loras)} alt={`${r.name} preview`} />
+                <RowThumb items={runGallery(r, loras, PREVIEW_LABELS)} alt={`${r.name} preview`} />
                 <div className="min-w-0 flex-1">
                   <div className="truncate">{r.name}</div>
                   <div className="text-[10px] text-zinc-500 truncate">{r.status}{isRunActive(r) ? ` · ${r.step}/${r.total_steps}` : ''} · {r.config.target}</div>
@@ -421,10 +443,13 @@ function TrainerWeights({ target, rows, ready, onSaved, onError }: { target: str
 function ItemCard({ datasetId, item, disabled, onSave, onRemove }: { datasetId: string; item: Dataset['items'][number]; disabled: boolean; onSave: (caption: string) => void; onRemove: () => void }) {
   const [caption, setCaption] = useState(item.caption)
   useEffect(() => setCaption(item.caption), [item.caption])
+  const [viewer, setViewer] = useState<Viewer | null>(null)
   return (
     <div className="rounded border border-zinc-800 bg-zinc-900/40 p-1.5 space-y-1" data-testid="dataset-item-card">
+      <TrainLightbox viewer={viewer} onChange={setViewer} />
       <div className="relative">
-        <DatasetThumb datasetId={datasetId} file={item.file} alt={item.caption || item.file} />
+        <DatasetThumb datasetId={datasetId} file={item.file} alt={item.caption || item.file}
+          onOpen={() => setViewer({ items: [{ kind: 'image', path: item.file, datasetId, label: item.caption || item.file }], index: 0 })} />
         {weightBadge(item) && <span className="absolute top-1 left-1 px-1 py-0.5 rounded bg-black/70 text-[10px] text-fuchsia-200" title="How often an epoch trains on this image, and its face match to the photo" data-testid="item-weight">{weightBadge(item)}</span>}
         <span className="absolute top-1 left-1 text-[9px] px-1 rounded bg-black/60 text-zinc-300">{item.source}{item.edited ? ' · edited' : ''}</span>
         <button onClick={onRemove} disabled={disabled} aria-label={`Remove ${item.file}`} className="absolute top-1 right-1 p-0.5 rounded bg-black/60 text-zinc-400 hover:text-red-300"><Trash2 className="h-3 w-3" /></button>
@@ -441,6 +466,8 @@ function RunDetail({ run, dataset, onChanged, onDeleted, onResumed, onOpenHistor
   const pct = run.total_steps ? Math.round((100 * run.step) / run.total_steps) : 0
   const canResume = !active && run.checkpoints.length > 0 && run.status !== 'complete'
   const samples = useMemo(() => run.samples.slice(-8), [run.samples])
+  const [viewer, setViewer] = useState<Viewer | null>(null)
+  const sampleRefs = useMemo(() => samples.map((s): MediaRef => ({ kind: 'image', path: s.path, runId: run.id, label: `step ${s.step}` })), [samples, run.id])
   return (
     <div className="max-w-4xl space-y-4" data-testid="run-detail">
       <div className="flex items-center gap-2 flex-wrap">
@@ -468,7 +495,8 @@ function RunDetail({ run, dataset, onChanged, onDeleted, onResumed, onOpenHistor
       {samples.length > 0 && (
         <section>
           <h3 className="text-[10px] uppercase tracking-wide text-zinc-500 font-semibold mb-1">Samples</h3>
-          <div className="flex gap-2 overflow-x-auto pb-1" data-testid="sample-grid">{samples.map(s => <SampleThumb key={s.path} runId={run.id} path={s.path} step={s.step} />)}</div>
+          <div className="flex gap-2 overflow-x-auto pb-1" data-testid="sample-grid">{samples.map((s, i) => <SampleThumb key={s.path} runId={run.id} path={s.path} step={s.step} onOpen={() => setViewer({ items: sampleRefs, index: i })} />)}</div>
+          <TrainLightbox viewer={viewer} onChange={setViewer} />
         </section>
       )}
       {run.status === 'complete' && run.lora_path && (
@@ -580,6 +608,8 @@ function LoraRow({ entry, runs, onChanged, onError }: { entry: LoraEntry; runs: 
   // images the LoRA was trained on with their weights (user, 2026-10-02).
   const [open, setOpen] = useState(false)
   const [rendering, setRendering] = useState(false)
+  const [viewer, setViewer] = useState<Viewer | null>(null)
+  const gallery = loraGallery(entry, runs, PREVIEW_LABELS)
   const [items, setItems] = useState<DatasetItem[]>([])
   useEffect(() => {
     if (!open || !entry.dataset_id) { setItems([]); return }
@@ -595,9 +625,10 @@ function LoraRow({ entry, runs, onChanged, onError }: { entry: LoraEntry; runs: 
   }
   return (
     <div className="rounded border border-zinc-800 text-xs" data-testid="lora-row">
+    <TrainLightbox viewer={viewer} onChange={setViewer} />
     <div className="grid grid-cols-[1fr_auto_auto_auto_auto_auto_auto] items-center gap-2 px-2 py-1.5">
       <div className="min-w-0 flex items-center gap-1.5">
-        <RowThumb thumb={loraThumb(entry, runs)} alt={`${entry.name} preview`} />
+        <RowThumb items={gallery} alt={`${entry.name} preview`} onOpen={index => setViewer({ items: gallery, index })} />
         <Pencil className="h-3 w-3 text-zinc-600 shrink-0" aria-hidden="true" />
         <div className="min-w-0 flex-1">
         <input className="bg-transparent text-zinc-100 w-full focus:outline-none border-b border-dashed border-zinc-700 focus:border-violet-600" value={draft.name} onChange={e => setDraft(d => ({ ...d, name: e.target.value }))} onBlur={save} onKeyDown={onEnter} aria-label={`Name of ${entry.name}`} title="Click to rename; Enter or click away saves" data-testid="lora-name" />
@@ -620,16 +651,17 @@ function LoraRow({ entry, runs, onChanged, onError }: { entry: LoraEntry; runs: 
         </div>
         {entry.preview_paths?.length ? (
           <div className="flex gap-2 overflow-x-auto">
-            {entry.preview_paths.map((path, i) => <PreviewThumb key={path} path={path} label={PREVIEW_LABELS[i] ?? `View ${i + 1}`} score={entry.preview_scores?.[i] ?? null} />)}
+            {entry.preview_paths.map((path, i) => <PreviewThumb key={path} path={path} label={PREVIEW_LABELS[i] ?? `View ${i + 1}`} score={entry.preview_scores?.[i] ?? null} onOpen={() => setViewer({ items: gallery, index: i })} />)}
           </div>
         ) : <p className="text-[10px] text-zinc-600">Nothing rendered yet - Render preview makes a close-up, a medium shot and two full-body views with only the trigger word.</p>}
         {items.length > 0 && (
           <>
             <span className="text-[10px] uppercase tracking-wide text-zinc-500 font-semibold">Trained on {items.length} images</span>
             <div className="flex gap-1.5 overflow-x-auto" data-testid="lora-training-images">
-              {items.map(item => (
+              {items.map((item, i) => (
                 <figure key={item.id} className="m-0 w-20 shrink-0 relative">
-                  <DatasetThumb datasetId={entry.dataset_id} file={item.file} alt={item.caption} />
+                  <DatasetThumb datasetId={entry.dataset_id} file={item.file} alt={item.caption}
+                    onOpen={() => setViewer({ items: items.map((each): MediaRef => ({ kind: 'image', path: each.file, datasetId: entry.dataset_id, label: each.caption || each.file })), index: i })} />
                   {weightBadge(item) && <figcaption className="text-[9px] text-fuchsia-200 text-center truncate">{weightBadge(item)}</figcaption>}
                 </figure>
               ))}
@@ -642,11 +674,13 @@ function LoraRow({ entry, runs, onChanged, onError }: { entry: LoraEntry; runs: 
   )
 }
 
-function PreviewThumb({ path, label, score }: { path: string; label: string; score: number | null }) {
+function PreviewThumb({ path, label, score, onOpen }: { path: string; label: string; score: number | null; onOpen: () => void }) {
   const url = useUrl(() => filmOutputUrl(path), [path])
   return (
     <figure className="m-0 w-28 shrink-0">
-      {url ? <img src={url} alt={label} className="w-28 h-36 object-cover object-top rounded bg-zinc-900" /> : <div className="w-28 h-36 rounded bg-zinc-900" />}
+      {url
+        ? <button type="button" onClick={onOpen} className="block cursor-zoom-in" aria-label={`Open the ${label} preview full screen`} data-testid="lora-preview-image"><img src={url} alt={label} className="w-28 h-36 object-cover object-top rounded bg-zinc-900" /></button>
+        : <div className="w-28 h-36 rounded bg-zinc-900" />}
       <figcaption className="text-[10px] text-zinc-500 text-center">{label}{score !== null ? ` · ${score.toFixed(2)}` : ''}</figcaption>
     </figure>
   )

@@ -5,6 +5,8 @@ import { JOB_KIND_LABEL, isActive, type Job, type JobKind } from '../../types/jo
 import { jobPreview } from './jobPreview'
 import { ThumbVote } from '../../components/ThumbVote'
 import { jobTasteTarget } from '../../lib/taste'
+import { HoverGallery } from '../../components/HoverGallery'
+import { jobGallery } from '../../lib/hoverGallery'
 
 export const KIND_ICON: Record<JobKind, React.ReactNode> = {
   image_gen: <ImageIcon className="h-3.5 w-3.5" />,
@@ -76,6 +78,7 @@ export function JobCard({ job, selected, onOpen, onCancel }: JobCardProps) {
   const active = isActive(job)
   const label = job.title || job.prompt || JOB_KIND_LABEL[job.kind]
   const taste = jobTasteTarget(job)
+  const gallery = jobGallery(job)
 
   return (
     <div
@@ -93,7 +96,10 @@ export function JobCard({ job, selected, onOpen, onCancel }: JobCardProps) {
       }
     >
       <div className="aspect-video bg-zinc-950 relative flex items-center justify-center">
-        {url && !imgFailed ? (
+        {url && !imgFailed && gallery.length > 0 ? (
+          // Under the mouse: every picture the job made, or its video playing silently.
+          <HoverGallery items={gallery} resolve={ref => filmOutputUrl(ref.path)} alt="" className="w-full h-full" mediaClassName="object-cover object-top" testId="job-gallery" />
+        ) : url && !imgFailed ? (
           <img
             src={url}
             alt=""
