@@ -335,3 +335,12 @@ def test_qwen_image_renders_use_sdpa_attention() -> None:
     bridge.generate_images(**common)  # type: ignore[arg-type]
     assert captured[0]["override_attention"] == "sdpa"
     assert "override_attention" not in captured[1], "other models keep the fastest attention"
+
+
+def test_a_1024_square_qwen_edit_render_stays_at_1_megapixel() -> None:
+    """The LoRA dataset's angles: Qwen-Image-Edit fits the output to the photo's
+    shape at this budget (MEASURED 2026-10-04: 1024x1024 asked, 1360x768 out, clean)."""
+    bridge = _make_bridge(image_model_type="z_image")
+    assert bridge._map_image_resolution(1024, 1024, "qwen_image_edit_plus2_20B") == (1024, 1024)
+    assert bridge._map_image_resolution(768, 1344, "qwen_image_edit_plus2_20B") == (928, 1664), "the style sheet keeps its native size"
+

@@ -165,6 +165,13 @@ class AngleShot(BaseModel):
     guide_base64: str = ""
 
 
+class AssetDatasetRequest(BaseModel):
+    """A LoRA dataset from an asset's images. `angles`: first render the angles a
+    LoRA needs that the asset lacks (Qwen for characters, Zero123++ for objects)."""
+
+    angles: bool = False
+
+
 class AngleSetRequest(BaseModel):
     """Multi-angle shots of a character for consistency and LoRA training,
     each composed from the asset's reference image (and the angle's guide)."""

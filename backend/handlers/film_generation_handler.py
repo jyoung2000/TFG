@@ -13,6 +13,7 @@ from __future__ import annotations
 import base64
 import logging
 import os
+import re
 import shutil
 import tempfile
 import time
@@ -44,6 +45,7 @@ from film.film_api_types import (
     QueueShotResponse,
     ReplaceProjectRequest,
     AngleSetRequest,
+    AngleShot,
     FramesRequest,
     FramesResponse,
     PreviewRenderRequest,
@@ -54,7 +56,7 @@ from film.film_api_types import (
 )
 from film.multi_angle import (
     ANGLES_LORA_FILE, ANGLES_LORA_FOLDER, ANGLES_LORA_STRENGTH, LIGHTNING_LORA_FILE, QWEN_ANGLES_LABEL, QWEN_EDIT_2511, ZERO123PP, ZERO123PP_LABEL,
-    AngleEngine, angle_prompt, sheet_angle_prompt,
+    LORA_ANGLE_SHOTS, LORA_ANGLE_SIZE, AngleEngine, angle_prompt, sheet_angle_prompt,
 )
 from services.multiview import MultiViewGenerator
 from film.face_lock import FRONT_YAW, MAX_YAW_SHIFT, PROFILE_YAW, blend_face, fit_size, framing_kept, head_square, is_close_up, yaw
@@ -293,6 +295,12 @@ ANGLE_SET_MAX = 24
 def _decode_image(data: str) -> bytes:
     payload = data.split(",", 1)[1] if data.startswith("data:") else data
     return base64.b64decode(payload)
+
+
+def _saved_as(relative: str, name_hint: str) -> bool:
+    """Whether a reference image was saved under `name_hint` (FilmStore keeps
+    [A-Za-z0-9._-] and turns the rest into "-": "Raven QA (x)" -> "Raven-QA--x-")."""
+    return Path(relative).stem.endswith("-" + re.sub(r"[^A-Za-z0-9._-]", "-", name_hint))
 
 
 class FilmGenerationHandler(StateHandlerBase):
@@ -1404,6 +1412,10 @@ class FilmGenerationHandler(StateHandlerBase):
         reference_model = handler.reference_model() if identity is not None else None
         engine = self._angle_engine(asset.kind) if identity is not None else None
         qwen = engine if engine is not None and engine.kind == "qwen" and engine.lora is not None else None
+        if identity is not None and engine is not None and engine.kind == "zero123":
+            # An object's style sheet is Zero123++'s turnaround of its photo (user,
+            # 2026-10-04: "use zero123 for object styleguide and loras").
+            return self._object_turnaround(project_id, asset, identity, seed)
         # A re-render replaces each view it renders (QA 2026-10-02: they piled
         # up among the references and in the LoRA dataset); never the identity.
         before = list(asset.reference_images)
@@ -1526,7 +1538,7 @@ class FilmGenerationHandler(StateHandlerBase):
                 return path
         return None
 
-    def generate_angle_set(self, project_id: str, asset_id: str, req: AngleSetRequest) -> ReferenceSheetResponse:
+    def generate_angle_set(self, project_id: str, asset_id: str, req: AngleSetRequest, size: tuple[int, int] | None = None) -> ReferenceSheetResponse:
         """Multi-angle shots of an asset for consistency and LoRA training. Each
         angle is composed by FLUX.2 from the asset's reference image (identity)
         and, from the 3D composer, the posed mannequin at that angle (pose,
@@ -1560,7 +1572,7 @@ class FilmGenerationHandler(StateHandlerBase):
         base = self._reference_prompt(asset, project.settings.style_prompt, framing="").replace(f"Character reference sheet of {asset.name}", asset.name)
         before = list(asset.reference_images)
         identity_ref = req.identity_path if req.identity_path in before else (before[0] if before else "")
-        width, height = self._REFERENCE_SIZES.get(asset.kind, (1024, 1024))
+        width, height = size or self._REFERENCE_SIZES.get(asset.kind, (1024, 1024))
         guides = self._film.store.captures_dir(project_id) / "angle-guides"
         face = self._identity_face(project_id, asset, identity)
         identity_vector = self._face_vector(identity)
@@ -1600,7 +1612,7 @@ class FilmGenerationHandler(StateHandlerBase):
             paths.append(updated.reference_images[-1])
             # A re-generated angle replaces its earlier image, as the sheet does.
             for stale in before:
-                if stale != identity_ref and Path(stale).stem.endswith(f"-{asset.name}-{name}") and stale in updated.reference_images:
+                if stale != identity_ref and _saved_as(stale, f"{asset.name}-{name}") and stale in updated.reference_images:
                     updated = self._film.delete_asset_reference(project_id, asset_id, stale)
         asset = self._film.get_project(project_id).asset(asset_id)
         assert asset is not None
@@ -1730,15 +1742,20 @@ class FilmGenerationHandler(StateHandlerBase):
             Path(leftover).unlink(missing_ok=True)
         return PreviewRenderResponse(image=f"data:{mime};base64,{encoded}", seconds=round(time.perf_counter() - started, 2), model=model)
 
-    def asset_dataset(self, project_id: str, asset_id: str) -> Dataset:
+    def asset_dataset(self, project_id: str, asset_id: str, *, angles: bool = False) -> Dataset:
         """The asset's images as a LoRA training dataset (character preset for
-        people), its trigger the asset's LoRA trigger or its name."""
+        people), its trigger the asset's LoRA trigger or its name. With `angles`,
+        the angles a LoRA needs that the asset lacks are rendered first."""
         if self._training is None:  # pragma: no cover - wired in AppHandler
             raise HTTPError(500, "Training is not available in this build")
         project = self._film.get_project(project_id)
         asset = project.asset(asset_id)
         if asset is None:
             raise HTTPError(404, f"Asset not found: {asset_id}")
+        if angles and asset.kind != "style":
+            self._lora_angles(project_id, asset)
+            asset = self._film.get_project(project_id).asset(asset_id)
+            assert asset is not None
         images: list[str] = []
         for relative in asset.reference_images:
             try:
@@ -1801,6 +1818,27 @@ class FilmGenerationHandler(StateHandlerBase):
             Path(image).name: (2 if "-full-" in Path(image).name else 1, scores.get(image)) for image in [images[0], *crops, *images[1:], *face_crops]
         }
         return self._training.set_item_weights(dataset.id, weights)
+
+    def _lora_angles(self, project_id: str, asset: FilmAsset) -> None:
+        """Render the LoRA angles the asset lacks (user, 2026-10-04: "use qwen to make
+        multiple angles ... for z-image turbo LoRA's ... use zero123 for object
+        styleguide and loras"): Zero123++'s turnaround, or Qwen's LORA_ANGLE_SHOTS at
+        ~1 MP. FLUX.2 without the composer's guides only turned in words: no angles."""
+        identity = self._identity_image(project_id, asset, "")
+        engine = self._angle_engine(asset.kind) if identity is not None else None
+        if identity is None or engine is None:
+            return
+        seed = asset.seed_lock if asset.seed_lock is not None else int(time.time()) % 2_000_000_000
+        if engine.kind == "zero123":
+            if not any("-z123-" in Path(r).stem for r in asset.reference_images):
+                self._object_turnaround(project_id, asset, identity, seed)
+            return
+        if engine.kind != "qwen":
+            return
+        missing = [s for s in LORA_ANGLE_SHOTS if not any(_saved_as(r, f"{asset.name}-{s}") for r in asset.reference_images)]
+        if missing:
+            shots = [AngleShot(name=s, view=s.replace("-", " ")) for s in missing]
+            self.generate_angle_set(project_id, asset.id, AngleSetRequest(shots=shots, seed=seed), size=LORA_ANGLE_SIZE)
 
     def _face_crops(self, images: list[str], scores: dict[str, float | None], reference: list[float] | None, folder: Path) -> dict[str, float | None]:
         """Head-and-shoulders crops of the generated views whose face matches the
@@ -2164,7 +2202,7 @@ class FilmGenerationHandler(StateHandlerBase):
             updated = self._film.add_asset_reference(project_id, asset.id, AddAssetReferenceRequest(image_base64=encoded, name_hint=f"{asset.name}-z123-{slug}"))
             paths.append(updated.reference_images[-1])
             for stale in before:
-                if Path(stale).stem.endswith(f"-{asset.name}-z123-{slug}") and stale in updated.reference_images:
+                if _saved_as(stale, f"{asset.name}-z123-{slug}") and stale in updated.reference_images:
                     updated = self._film.delete_asset_reference(project_id, asset.id, stale)
         fresh = self._film.get_project(project_id).asset(asset.id)
         assert fresh is not None

@@ -94,14 +94,16 @@ export function AssetDetail({ asset, onBack, onOpenLightbox, onOpenStudio }: {
   // The asset's images (e.g. a multi-angle set) as a LoRA dataset, opened in Train.
   const makeDataset = useCallback(async () => {
     if (!film) return
-    setBusyDataset(true); setNote('')
+    setBusyDataset(true)
+    setNote(asset.kind === 'style' ? '' : 'Rendering the angles the LoRA still needs, then building the dataset (a few minutes per angle)…')
     try {
-      const dataset = await filmApi.assetDataset(film.id, asset.id)
+      const dataset = await filmApi.assetDataset(film.id, asset.id, { angles: true })
+      await refresh()
       setNote(`Dataset "${dataset.name}": ${dataset.items.length} images, trigger "${dataset.trigger}"`)
       openTrain(dataset.id)
     } catch (e) { setNote('Failed: ' + (e instanceof Error ? e.message : String(e))) }
     finally { setBusyDataset(false) }
-  }, [film, asset.id, openTrain])
+  }, [film, asset.id, asset.kind, openTrain, refresh])
 
   const deleteReference = useCallback(async (path: string) => {
     if (!film || !window.confirm('Remove this reference image? The file is deleted.')) return
@@ -131,7 +133,7 @@ export function AssetDetail({ asset, onBack, onOpenLightbox, onOpenStudio }: {
           <button onClick={onOpenStudio} data-testid="asset-open-studio" title="Pose it in 3D and render multi-angle shots for consistency / a LoRA" className="flex items-center gap-1 px-2 py-1 rounded bg-sky-800/70 hover:bg-sky-700 text-[10px] text-sky-100"><Box className="h-3 w-3" /> 3D studio</button>
         )}
         {asset.kind !== 'style' && (
-          <button onClick={() => void makeDataset()} disabled={busyDataset || asset.reference_images.length === 0} data-testid="asset-make-dataset" title="Turn this asset's images into a LoRA training dataset" className="flex items-center gap-1 px-2 py-1 rounded bg-emerald-800/70 hover:bg-emerald-700 disabled:opacity-40 text-[10px] text-emerald-100">{busyDataset ? <Loader2 className="h-3 w-3 animate-spin" /> : <GraduationCap className="h-3 w-3" />} LoRA dataset</button>
+          <button onClick={() => void makeDataset()} disabled={busyDataset || asset.reference_images.length === 0} data-testid="asset-make-dataset" title="Render the angles a LoRA needs (Qwen for characters, Zero123++ for objects), then turn the images into a LoRA training dataset" className="flex items-center gap-1 px-2 py-1 rounded bg-emerald-800/70 hover:bg-emerald-700 disabled:opacity-40 text-[10px] text-emerald-100">{busyDataset ? <Loader2 className="h-3 w-3 animate-spin" /> : <GraduationCap className="h-3 w-3" />} LoRA dataset</button>
         )}
         <button onClick={() => void addReference()} className="flex items-center gap-1 px-2 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-[10px] text-zinc-300"><ImagePlus className="h-3 w-3" /> Add image</button>
         <button onClick={() => void generateReference()} disabled={generating} className="flex items-center gap-1 px-2 py-1 rounded bg-violet-800/70 hover:bg-violet-700 disabled:opacity-40 text-[10px] text-violet-100">{generating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />} Generate image</button>

@@ -11,6 +11,7 @@ from _routes._errors import HTTPError
 from api_types import StatusResponse
 from film.film_api_types import (
     AddAssetReferenceRequest,
+    AssetDatasetRequest,
     AssetResponse,
     ContinuityResponse,
     CreateAssetRequest,
@@ -197,10 +198,11 @@ def route_angle_set(
 def route_asset_dataset(
     project_id: str,
     asset_id: str,
+    req: AssetDatasetRequest | None = None,
     handler: AppHandler = Depends(get_state_service),
 ) -> Dataset:
-    """The asset's images as a LoRA training dataset."""
-    return handler.film_generation.asset_dataset(project_id, asset_id)
+    """The asset's images as a LoRA training dataset (with `angles`, its LoRA angles rendered first)."""
+    return handler.film_generation.asset_dataset(project_id, asset_id, angles=req.angles if req is not None else False)
 
 
 @router.put("/projects/{project_id}/assets/{asset_id}", response_model=AssetResponse)

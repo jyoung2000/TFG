@@ -35,6 +35,8 @@ _QWEN_IMAGE_RESOLUTIONS: tuple[tuple[int, int], ...] = (
     (928, 1664),
     (1472, 1140),
     (1140, 1472),
+    # ~1 MP: Qwen-Image-Edit fits it to the reference's shape (LoRA dataset angles).
+    (1024, 1024),
 )
 #: Image models WanGP can run img2img with: FLUX.2's "Masked Denoising"
 #: inpaint mode starts from the guide image's latents when

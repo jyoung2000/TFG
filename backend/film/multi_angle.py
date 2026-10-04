@@ -25,6 +25,18 @@ ANGLES_LORA_STRENGTH = 0.9
 #: without it, 30 steps at CFG 4 came back black (NaN) after ~10 minutes an angle;
 #: with it, a clean angle in 148 s. The bridge renders 8 steps at CFG 1 when present.
 LIGHTNING_LORA_FILE = "Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors"
+#: The angles a character's LoRA dataset gets from Qwen (user, 2026-10-04: "use qwen
+#: to make multiple angles ... for z-image turbo LoRA's"): both sides at full length
+#: (the outfit; "-full-" shots train twice) and close-ups (the face). The photo is
+#: the front view.
+LORA_ANGLE_SHOTS: tuple[str, ...] = (
+    "full-34-left", "full-34-right", "full-profile-left", "full-profile-right", "full-back",
+    "closeup-front", "closeup-34-left", "closeup-34-right",
+)
+#: The size a dataset angle is asked at: ~1 MP, which Qwen-Image-Edit fits to the
+#: photo's shape. Training runs at 384-512 px; the sheet's 1664x928 doubled the time.
+LORA_ANGLE_SIZE = (1024, 1024)
+
 #: The WanGP model type of Qwen-Image-Edit-2511.
 QWEN_EDIT_2511 = "qwen_image_edit_plus2_20B"
 #: The setting value that picks Zero123++ (not a WanGP model).

@@ -174,11 +174,12 @@ export const filmApi = {
       body: JSON.stringify(data),
     }),
 
-  /** The asset's images as a LoRA training dataset. */
-  assetDataset: (projectId: string, assetId: string) =>
+  /** The asset's images as a LoRA training dataset; `angles` first renders the
+   *  angles a LoRA needs that the asset lacks (Qwen for characters, Zero123++ for objects). */
+  assetDataset: (projectId: string, assetId: string, opts: { angles?: boolean } = {}) =>
     request<{ id: string; name: string; trigger: string; items: unknown[] }>(
       `/api/film/projects/${enc(projectId)}/assets/${enc(assetId)}/dataset`,
-      { method: 'POST', body: '{}' },
+      { method: 'POST', body: JSON.stringify({ angles: !!opts.angles }) },
     ),
 
   addAssetReference: (projectId: string, assetId: string, imageBase64: string, nameHint: string) =>
