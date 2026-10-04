@@ -19,6 +19,8 @@ def route_generate_image(
     """POST /api/generate-image."""
     response = handler.image_generation.generate(req)
     if req.faceLock and req.loras and response.status == "complete" and response.image_paths:
-        response.face_scores = handler.film_generation.face_lock(response.image_paths, req.loras)
+        locked = handler.film_generation.sheet_lock(response.image_paths, req.loras, outfit=req.outfitLock)
+        if locked is not None:
+            response.face_scores, response.outfit_locked = locked
     return response
 

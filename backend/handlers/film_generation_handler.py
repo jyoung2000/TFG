@@ -52,7 +52,7 @@ from film.film_api_types import (
     ReferenceSheetResponse,
     UpdateAssetRequest,
 )
-from film.face_lock import FRONT_YAW, MAX_YAW_SHIFT, PROFILE_YAW, blend_face, head_square, yaw
+from film.face_lock import FRONT_YAW, MAX_YAW_SHIFT, PROFILE_YAW, blend_face, fit_size, framing_kept, head_square, is_close_up, yaw
 from film.identity_dataset import PERSON_WORDS, face_crop, face_crop_name, rare_trigger, source_crops
 from services.face_match import SAME_PERSON, FaceMatcher, similarity
 from film.training_api_types import ImportDatasetItemsRequest
@@ -265,6 +265,14 @@ FACE_LOCK_TURNED_PROMPT = (
     "the person from the second image with exactly the head angle, head turn, gaze direction and expression of the first image, "
     "exactly the face of the second image: same eyes, nose, lips, jaw, brows and skin"
 )
+#: The outfit pass (film.face_lock): the render is the scene, the style sheet's
+#: front view the person.
+OUTFIT_LOCK_PROMPT = (
+    "the person from the second image, in exactly the pose, camera angle, framing, setting, background and lighting of the first image, "
+    "wearing exactly the outfit of the second image: the same clothes, materials and details, same face, same hair, same body, "
+    "photo, sharp focus, detailed face"
+)
+OUTFIT_LOCK_SEED = 11
 FACE_LOCK_SEEDS = (11, 22)
 FACE_LOCK_SIZE = 768
 FACE_LOCK_REFERENCE_SCALE = 3.2
@@ -1863,26 +1871,78 @@ class FilmGenerationHandler(StateHandlerBase):
             shutil.copyfile(source, target)
             paths.append(str(target))
             if identity is not None:
-                scores.append(self._lock_face(target, *identity))
+                scores.append(self._lock_sheet(target, identity, outfit=True)[0])
                 continue
             vector = self._face_vector(target) if identity_vector else None
             scores.append(round(similarity(identity_vector, vector), 4) if identity_vector and vector else None)
         return self._training.set_lora_preview(entry.id, paths, scores)
 
-    def face_lock(self, paths: list[str], loras: list[LoraUse]) -> list[float | None] | None:
-        """Each image's face re-composed from the style sheet's front face of the
-        first character LoRA in `loras` that was trained here; each image keeps
-        the result only when its face then matches the photo better. Returns
-        each image's face score after; None when no LoRA has a character to lock to."""
+    def sheet_lock(self, paths: list[str], loras: list[LoraUse], *, outfit: bool = True) -> tuple[list[float | None], list[bool]] | None:
+        """Each image locked to the style sheet of the first character LoRA in
+        `loras` that was trained here (film.face_lock): the outfit re-composed
+        from the sheet's front view (medium and full shots, with `outfit`), then
+        the face from the sheet's head, kept only when it then matches the
+        photo better. Returns (each image's face score after, whether its
+        outfit was re-composed); None when no LoRA has a character to lock to."""
         identity = self._lora_identity(loras)
         if identity is None:
             return None
-        head, reference = identity
-        return [self._lock_face(Path(path), head, reference) for path in paths]
+        results = [self._lock_sheet(Path(path), identity, outfit=outfit) for path in paths]
+        return [score for score, _ in results], [dressed for _, dressed in results]
 
-    def _lora_identity(self, loras: list[LoraUse]) -> tuple[Path, list[float]] | None:
-        """(the style sheet's head, the photo's face vector) of the first LoRA
-        trained from a character dataset; None without the models to lock with."""
+    def _lock_sheet(self, path: Path, identity: tuple[Path, Path, list[float]], *, outfit: bool) -> tuple[float | None, bool]:
+        head, sheet, reference = identity
+        dressed = self._lock_outfit(path, sheet) if outfit else False
+        return self._lock_face(path, head, reference), dressed
+
+    def _lock_outfit(self, path: Path, sheet: Path) -> bool:
+        """One image's outfit pass: the whole character re-composed from the
+        style sheet's front view, the image as the scene. Kept only when the
+        shot stayed the shot; close-ups and profiles are left alone."""
+        matcher = self._faces()
+        handler = self._image_generation
+        model = handler.reference_model() if handler is not None else None
+        if matcher is None or handler is None or model is None:
+            return False
+        found = matcher.face_points(str(path))
+        if found is None:
+            return False  # no face to check the framing by (a back view)
+        box, points = found
+        with Image.open(path) as opened:
+            width, height = opened.size
+        turn = yaw(points)
+        if is_close_up(box, width) or abs(turn) > PROFILE_YAW:
+            return False
+        render_width, render_height = fit_size(width, height)
+        response = handler.generate(
+            GenerateImageRequest(prompt=OUTFIT_LOCK_PROMPT, width=render_width, height=render_height, numImages=1, model=model),
+            seed=OUTFIT_LOCK_SEED, reference_images=[str(path), str(sheet)], reference_mode="KI", record=False,
+        )
+        outs = response.image_paths or []
+        if response.status != "complete" or not outs:
+            return False
+        rendered = Path(outs[0])
+        with tempfile.TemporaryDirectory(prefix="outfitlock-") as folder:
+            candidate = Path(folder) / "outfit-candidate.png"
+            with Image.open(rendered) as made:
+                dressed = made.convert("RGB")
+                if dressed.size != (width, height):
+                    dressed = dressed.resize((width, height), Image.Resampling.LANCZOS)
+                dressed.save(candidate)
+            rendered.unlink(missing_ok=True)
+            after = matcher.face_points(str(candidate))
+            if after is None or not framing_kept(box, after[0]) or abs(yaw(after[1]) - turn) > MAX_YAW_SHIFT:
+                return False
+            if path.suffix.lower() in (".jpg", ".jpeg"):
+                dressed.save(path, quality=95)
+            else:
+                dressed.save(path)
+        return True
+
+    def _lora_identity(self, loras: list[LoraUse]) -> tuple[Path, Path, list[float]] | None:
+        """(the style sheet's head, its whole front view, the photo's face vector)
+        of the first LoRA trained from a character dataset; None without the
+        models to lock with."""
         matcher = self._faces()
         handler = self._image_generation
         if self._training is None or matcher is None or handler is None or handler.reference_model() is None:
@@ -1902,7 +1962,8 @@ class FilmGenerationHandler(StateHandlerBase):
             if not vector:
                 continue
             sheet = next((item for item in dataset.items if "front-view" in item.file), dataset.items[0])
-            return self._identity_head(entry.id, self._training.media_path(dataset.id, sheet.file)), vector
+            front = self._training.media_path(dataset.id, sheet.file)
+            return self._identity_head(entry.id, front), front, vector
         return None
 
     def _identity_head(self, lora_id: str, image: Path) -> Path:

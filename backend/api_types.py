@@ -205,6 +205,9 @@ class GenerateImageResponse(BaseModel):
     #: Face match of each image against the character's photo after face lock;
     #: None when no face lock ran.
     face_scores: list[float | None] | None = None
+    #: Whether each image's outfit was re-composed from the style sheet; None
+    #: when no lock ran.
+    outfit_locked: list[bool] | None = None
 
 
 class CancelResponse(BaseModel):
@@ -311,6 +314,9 @@ class GenerateImageRequest(BaseModel):
     #: With a character LoRA trained here: re-compose each render's face from the
     #: style sheet's front face (film.face_lock). Needs FLUX.2 Klein and the face models.
     faceLock: bool = True
+    #: With faceLock: first re-compose the character's outfit from the style
+    #: sheet's front view (medium and full shots; close-ups and profiles keep theirs).
+    outfitLock: bool = True
 
 
 class ModelDownloadRequest(BaseModel):

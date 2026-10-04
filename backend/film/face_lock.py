@@ -16,10 +16,22 @@ landmarks (`yaw`): profiles are left alone, turned heads get a prompt that
 keeps the angle, and a re-composed head that turned is dropped. MEASURED
 (yaw, Raven's views): front ~0, three-quarter +-0.17-0.26, profile +-0.45-0.68;
 the identity prompt moved -0.28 -> -0.10, the angle prompt -0.28 -> -0.26.
+
+The outfit (2026-10-04: "The womans outfit and face aren't consistent in the
+latest LoRA"): the LoRA alone gave a different jacket and neckline per render.
+Before the face pass, FLUX.2 re-composes the whole character from the style
+sheet's front view with the render as the scene. MEASURED on six renders: the
+sheet's jacket, corset and leggings in all six; medium and full shots (face
+0.10-0.17 of the frame) kept face size (x0.96-1.03), place (<= 0.12 face
+widths) and head turn (<= 0.02), close-ups (0.40-0.61) were zoomed out to
+medium shots (x0.24-0.38). So close-ups and profiles skip the outfit pass, and
+a pass that moves the face is dropped. Face match is unchanged by it (0.496 vs
+0.500): the face pass that follows is what locks the face.
 """
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
 import numpy as np
@@ -35,6 +47,17 @@ FRONT_YAW = 0.12
 #: A re-composed head whose yaw moved more than this changed the pose.
 MAX_YAW_SHIFT = 0.12
 
+#: A face this much of the frame's width is a close-up: the outfit pass zooms it out.
+CLOSE_UP_FACE = 0.28
+#: The outfit pass kept the framing when the face's size stayed within these
+#: ratios and its centre within this many face widths.
+FRAMING_SIZE = (0.8, 1.25)
+FRAMING_SHIFT = 0.35
+#: The outfit pass renders near the image's own size: about a megapixel at most,
+#: and never under this long edge.
+OUTFIT_MAX_PIXELS = 1024 * 1024 * 1.1
+OUTFIT_MIN_EDGE = 768
+
 Box = tuple[float, float, float, float]
 Points = list[tuple[float, float]]
 
@@ -49,6 +72,31 @@ def head_square(box: Box, width: int, height: int, *, scale: float = HEAD_SCALE)
     left = int(min(max(0.0, x + w / 2 - side / 2), width - side))
     top = int(min(max(0.0, y + 0.75 * h - side / 2), height - side))
     return left, top, side
+
+
+def is_close_up(box: Box, width: int) -> bool:
+    """Whether the face fills enough of the frame to be a close-up."""
+    return width > 0 and box[2] / width >= CLOSE_UP_FACE
+
+
+def framing_kept(before: Box, after: Box) -> bool:
+    """Whether a re-composed image kept the shot: the face about as large, about where it was."""
+    if before[2] <= 0 or after[2] <= 0:
+        return False
+    ratio = after[2] / before[2]
+    shift = math.hypot((after[0] + after[2] / 2) - (before[0] + before[2] / 2), (after[1] + after[3] / 2) - (before[1] + before[3] / 2)) / before[2]
+    return FRAMING_SIZE[0] <= ratio <= FRAMING_SIZE[1] and shift <= FRAMING_SHIFT
+
+
+def fit_size(width: int, height: int) -> tuple[int, int]:
+    """The size the outfit pass renders at for an image: its own size where the
+    model can (multiples of 16, about a megapixel at most), so nothing is
+    resized back up and blurred; small images are rendered larger."""
+    scale = OUTFIT_MIN_EDGE / max(width, height) if max(width, height) < OUTFIT_MIN_EDGE else 1.0
+    area = width * height * scale * scale
+    if area > OUTFIT_MAX_PIXELS:
+        scale *= math.sqrt(OUTFIT_MAX_PIXELS / area)
+    return max(256, int(width * scale) // 16 * 16), max(256, int(height * scale) // 16 * 16)
 
 
 def yaw(points: Points) -> float:

@@ -329,7 +329,7 @@ function ImageLoraButton({ loras, onLorasChange, faceLock, onFaceLockChange, fac
           <LoraPicker model="z_image" value={loras} onChange={onLorasChange} disabled={disabled} compact />
           <label className="flex items-start gap-2 text-xs text-zinc-300 border-t border-zinc-700 pt-2">
             <input type="checkbox" checked={faceLock} disabled={disabled} onChange={e => onFaceLockChange(e.target.checked)} className="mt-0.5" data-testid="face-lock" />
-            <span>Face lock<span className="block text-[10px] text-zinc-500">Re-composes a character LoRA's face from its style sheet after each render (about 20 s per image).</span></span>
+            <span>Style-sheet lock<span className="block text-[10px] text-zinc-500">After each render with a character LoRA, re-composes the outfit and then the face from its style sheet. Close-ups keep their framing and get the face only. Slower per image.</span></span>
           </label>
           {faceMatch && <p className="text-[10px] text-emerald-300" data-testid="face-match">Last render · {faceMatch}</p>}
         </div>

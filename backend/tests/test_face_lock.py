@@ -15,7 +15,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from film.face_lock import blend_face, head_square, yaw
+from film.face_lock import blend_face, fit_size, framing_kept, head_square, is_close_up, yaw
 from tests.test_asset_angles import FLUX2, _image_params
 from tests.test_training import _dataset
 
@@ -172,3 +172,89 @@ def test_a_turned_head_keeps_its_angle(client, test_state, fake_services, create
     passes = _image_params(fake_services)[before + 1:]
     assert passes and all("head angle" in p["prompt"] for p in passes), "the prompt that keeps the turn"
     assert body["face_scores"] == [0.5], "both re-composed heads faced the camera: dropped, the render kept"
+
+
+# ---- the outfit pass (user, 2026-10-04: "The womans outfit and face aren't
+# consistent in the latest LoRA. The LoRA and outfit should be accurate to the
+# face sheet and styleguide") -------------------------------------------------
+
+SMALL = (26.0, 8.0, 10.0, 12.0)  # a face 0.16 of a 64 px frame: a medium / full shot
+SMALL_POINTS = [(29.0, 12.0), (33.0, 12.0), (31.0, 14.0), (29.5, 17.0), (32.5, 17.0)]
+
+
+def test_a_close_up_is_told_from_a_wider_shot_by_its_face() -> None:
+    """MEASURED 2026-10-04 (Raven, 768 px wide): close-ups had faces 0.40-0.61 of
+    the frame and the outfit pass zoomed them out to medium shots (face size x0.24
+    - x0.38); medium and full shots (0.10-0.17) kept size, place and head turn."""
+    assert is_close_up((100.0, 100.0, 0.40 * 768, 300.0), 768)
+    assert is_close_up((100.0, 100.0, 0.61 * 768, 300.0), 768)
+    assert not is_close_up((300.0, 100.0, 0.17 * 768, 150.0), 768)
+    assert not is_close_up((300.0, 100.0, 0.10 * 768, 90.0), 768)
+
+
+def test_the_outfit_pass_is_kept_only_when_the_framing_held() -> None:
+    before = (300.0, 100.0, 100.0, 130.0)
+    assert framing_kept(before, (303.0, 101.0, 97.0, 128.0)), "size x0.97, a few pixels over: as measured on the shots that held"
+    assert not framing_kept(before, (330.0, 160.0, 38.0, 50.0)), "size x0.38: the close-up that became a medium shot"
+    assert not framing_kept(before, (360.0, 100.0, 100.0, 130.0)), "moved 0.6 of a face: a different composition"
+    assert not framing_kept(before, (300.0, 100.0, 0.0, 0.0))
+
+
+def test_the_outfit_pass_renders_near_the_images_own_size() -> None:
+    assert fit_size(768, 1024) == (768, 1024)
+    assert fit_size(1366, 768) == (1360, 768), "not shrunk: a smaller pass resized back up would blur the render"
+    assert fit_size(2048, 2048) == (1072, 1072), "about a megapixel is what the model renders well"
+    assert fit_size(64, 64) == (768, 768)
+
+
+def _medium_shot(fake_services) -> None:
+    matcher = fake_services.face_matcher
+    matcher.points = {"outfit-candidate": (SMALL, SMALL_POINTS), "wangp-fake": (SMALL, SMALL_POINTS), "front-view": (BOX, POINTS)}
+    matcher.vectors = {"wangp-fake": [0.5, 0.866]}
+
+
+def test_a_medium_shot_gets_the_style_sheet_outfit(client, test_state, fake_services, create_fake_model_files, tmp_path: Path) -> None:
+    create_fake_model_files(include_zit=True)
+    made = _lora_with_style_sheet(client, test_state, fake_services, tmp_path)
+    _medium_shot(fake_services)
+    before = len(_image_params(fake_services))
+    body = client.post("/api/generate-image", json={"prompt": "rvnx, woman, medium shot", "width": 64, "height": 64, "loras": [{"name": made["lora"], "multiplier": 1.0}]}).json()
+    assert body["outfit_locked"] == [True]
+    passes = _image_params(fake_services)[before + 1:]
+    assert len(passes) == 1, "the outfit pass; the face is too small here for a face pass"
+    refs = [str(r) for r in passes[0].get("image_refs", [])]
+    assert len(refs) == 2 and "wangp-fake" in refs[0], "the render is the scene: pose, framing, background"
+    assert "front-view" in refs[1] and "identity-" not in refs[1], "the whole style-sheet view is the person, not just its head"
+    assert "outfit" in passes[0]["prompt"] and "background" in passes[0]["prompt"]
+    with Image.open(body["image_paths"][0]) as locked:
+        assert locked.size == (64, 64), "the render keeps its size"
+
+
+def test_an_outfit_pass_that_changes_the_framing_is_dropped(client, test_state, fake_services, create_fake_model_files, tmp_path: Path) -> None:
+    create_fake_model_files(include_zit=True)
+    made = _lora_with_style_sheet(client, test_state, fake_services, tmp_path)
+    _medium_shot(fake_services)
+    fake_services.face_matcher.points["outfit-candidate"] = ((40.0, 30.0, 4.0, 5.0), SMALL_POINTS)
+    body = client.post("/api/generate-image", json={"prompt": "rvnx, woman, medium shot", "width": 64, "height": 64, "loras": [{"name": made["lora"], "multiplier": 1.0}]}).json()
+    assert body["outfit_locked"] == [False], "the render as it came"
+
+
+def test_a_close_up_keeps_its_framing_and_gets_the_face_only(client, test_state, fake_services, create_fake_model_files, tmp_path: Path) -> None:
+    create_fake_model_files(include_zit=True)
+    made = _lora_with_style_sheet(client, test_state, fake_services, tmp_path)
+    fake_services.face_matcher.vectors = {"facelock": [0.96, 0.28], "wangp-fake": [0.5, 0.866]}
+    before = len(_image_params(fake_services))
+    body = client.post("/api/generate-image", json={"prompt": "rvnx, woman, close-up portrait", "width": 64, "height": 64, "loras": [{"name": made["lora"], "multiplier": 1.0}]}).json()
+    assert body["outfit_locked"] == [False] and body["face_scores"] == [0.96]
+    passes = _image_params(fake_services)[before + 1:]
+    assert all("identity-" in str(p["image_refs"][1]) for p in passes), "only face passes: the style sheet's head"
+
+
+def test_the_outfit_pass_can_be_switched_off_alone(client, test_state, fake_services, create_fake_model_files, tmp_path: Path) -> None:
+    create_fake_model_files(include_zit=True)
+    made = _lora_with_style_sheet(client, test_state, fake_services, tmp_path)
+    _medium_shot(fake_services)
+    before = len(_image_params(fake_services))
+    body = client.post("/api/generate-image", json={"prompt": "rvnx, woman, medium shot", "width": 64, "height": 64, "outfitLock": False, "loras": [{"name": made["lora"], "multiplier": 1.0}]}).json()
+    assert len(_image_params(fake_services)) - before == 1 and body["outfit_locked"] == [False]
+

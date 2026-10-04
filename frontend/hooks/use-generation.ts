@@ -452,7 +452,7 @@ export function useGeneration(): UseGenerationReturn {
             imagePath: rawPaths[0],  // First image path
             imageUrls: fileUrls,    // All images
             imagePaths: rawPaths,   // All image paths
-            faceMatch: faceMatchNote(result.face_scores),
+            faceMatch: faceMatchNote(result.face_scores, result.outfit_locked),
             error: null,
           })
         }
