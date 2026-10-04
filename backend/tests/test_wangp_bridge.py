@@ -315,3 +315,23 @@ def test_qwen_edit_with_the_lightning_lora_renders_in_8_steps_without_cfg() -> N
     settings = captured["settings"]
     assert isinstance(settings, dict)
     assert settings["num_inference_steps"] == 8 and settings["guidance_scale"] == 1.0
+
+
+def test_qwen_image_renders_use_sdpa_attention() -> None:
+    """MEASURED 2026-10-04 on the RTX 4070, same inputs, seed and LoRAs: the app's
+    `--attention auto` (SageAttention) gave a NaN, all-black Qwen-Image-Edit-2511
+    image; SDPA gave a clean one. WanGP's own Qwen preset forces SDPA only below
+    Ada ("<89"), so the bridge overrides attention for Qwen tasks only."""
+    bridge = _make_bridge(image_model_type="z_image")
+    captured: list[dict[str, object]] = []
+
+    def fake_run_manifest(*, manifest, media_suffixes, on_progress, is_cancelled):  # type: ignore[no-untyped-def]
+        captured.append(manifest[0]["params"])
+        return ["E:/tmp/out.png"]
+
+    bridge._run_manifest = fake_run_manifest  # type: ignore[method-assign]
+    common = dict(prompt="x", width=1024, height=1024, num_steps=8, num_images=1, seed=1, on_progress=lambda *_a: None, is_cancelled=lambda: False)
+    bridge.generate_images(**common, model_type="qwen_image_edit_plus2_20B", reference_images=["E:/tmp/hero.png"])  # type: ignore[arg-type]
+    bridge.generate_images(**common)  # type: ignore[arg-type]
+    assert captured[0]["override_attention"] == "sdpa"
+    assert "override_attention" not in captured[1], "other models keep the fastest attention"

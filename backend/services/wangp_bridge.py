@@ -395,6 +395,10 @@ class WanGPBridge:
             "batch_size": max(1, num_images),
             "image_mode": 1,
         }
+        if chosen.startswith("qwen_image"):
+            # MEASURED 2026-10-04 (RTX 4070): SageAttention, which `--attention auto`
+            # picks, turned Qwen-Image-Edit-2511 into NaN (all black); SDPA renders it.
+            settings["override_attention"] = "sdpa"
         if seed is not None:
             settings["seed"] = seed
         if init_image:
