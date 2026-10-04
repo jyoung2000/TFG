@@ -174,3 +174,22 @@ def test_the_settings_screen_reaches_the_store(client, test_state) -> None:
     assert after.status_code == 200 and not (models_dir / "zero123plus-v1.2").exists()
     assert client.delete("/api/model-manager/installed/folder:../outputs").status_code == 404
 
+
+def test_hidden_folders_are_not_models_and_known_folders_have_names(tmp_path: Path) -> None:
+    """Live QA on r72: Hugging Face's download cache (`.cache`, 17.8 GB, a model
+    mid-download) was listed as a removable component, and the trainer's weights
+    folder showed as plain "training"."""
+    store = Store(tmp_path)
+    _write(store.ckpts / ".cache" / "huggingface" / "partial.incomplete", 500)
+    _write(store.ckpts / "training" / "z_image_de_turbo.safetensors", 400)
+    _write(store.ckpts / "umt5-xxl" / "te.safetensors", 100)
+    models = _by_id(store)
+    assert not any(".cache" in model_id for model_id in models), "a download in progress is not a model"
+    assert models["component:training"]["name"] == "LoRA training weights (Z-Image)"
+    assert models["component:umt5-xxl"]["name"] == "UMT5-XXL text encoder (Wan)"
+    assert models["component:Qwen2.5-VL-7B-Instruct"]["name"] == "Qwen2.5-VL 7B text encoder (Qwen-Image)"
+    import pytest as _pytest
+    from _routes._errors import HTTPError as _HTTPError
+    with _pytest.raises(_HTTPError):
+        store.handler.uninstall("component:.cache")
+

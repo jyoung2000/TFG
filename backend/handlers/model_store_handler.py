@@ -39,6 +39,18 @@ FOLDER_NAMES: dict[str, str] = {
     "face": "Face match - OpenCV SFace + YuNet",
     "ic-loras": "IC-LoRAs",
 }
+#: Friendly names for folders in WanGP's `ckpts` that no model json names.
+COMPONENT_NAMES: dict[str, str] = {
+    "training": "LoRA training weights (Z-Image)",
+    "umt5-xxl": "UMT5-XXL text encoder (Wan)",
+    "Qwen2.5-VL-7B-Instruct": "Qwen2.5-VL 7B text encoder (Qwen-Image)",
+    "Qwen3": "Qwen3 text encoder (Z-Image)",
+    "gemma-3-12b-it-qat-q4_0-unquantized": "Gemma 3 12B text encoder (LTX-2)",
+    "xlm-roberta-large": "XLM-RoBERTa text encoder",
+    "pose": "Pose detection (3D composer)",
+    "depth": "Depth estimation",
+    "rembg": "Background removal",
+}
 AREA_LABELS: dict[str, str] = {
     "checkpoints": "WanGP model checkpoints",
     "models": "App models (Zero123++, face match, LTX)",
@@ -188,6 +200,8 @@ class ModelStoreHandler:
             return []
         out: list[InstalledModel] = []
         for entry in sorted(root.iterdir()):
+            if entry.name.startswith("."):
+                continue  # caches and downloads in progress (Hugging Face's .cache) are not models
             if entry.is_file() and entry in claimed:
                 continue
             if entry.is_dir() and any(_inside(p, entry) for p in claimed):
@@ -196,7 +210,7 @@ class ModelStoreHandler:
             if size == 0:
                 continue
             out.append(InstalledModel(
-                id=f"component:{entry.name}", name=entry.name, kind="component", area="checkpoints", size_bytes=size,
+                id=f"component:{entry.name}", name=COMPONENT_NAMES.get(entry.name, entry.name), kind="component", area="checkpoints", size_bytes=size,
                 note="Shared component (text encoder, VAE or helper): models that need it download it again",
             ))
         return out
@@ -267,7 +281,7 @@ class ModelStoreHandler:
 
     def _child(self, area: str, relative: str) -> Path:
         root = self._areas.get(area)
-        if root is None or not relative or relative in (".", ".."):
+        if root is None or not relative or relative.startswith("."):
             raise HTTPError(404, "No such model")
         path = root / relative
         if not _inside(path, root) or not path.exists():

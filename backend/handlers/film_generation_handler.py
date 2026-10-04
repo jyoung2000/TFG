@@ -2102,7 +2102,7 @@ class FilmGenerationHandler(StateHandlerBase):
             engines[ZERO123PP] = AngleEngine("zero123", ZERO123PP, ZERO123PP_LABEL)
         flux = handler.reference_model() if handler is not None else None
         if flux is not None and flux != QWEN_EDIT_2511:
-            engines[flux] = AngleEngine("flux", flux, flux)
+            engines[flux] = AngleEngine("flux", flux, f"FLUX.2 Klein ({flux})")
         return engines
 
     def _angle_engine(self, asset_kind: str) -> AngleEngine | None:

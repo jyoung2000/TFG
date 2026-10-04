@@ -163,7 +163,7 @@ def test_settings_choose_the_angle_model_for_characters_and_objects(client, test
     fake_services.multiview.enabled = True
     assert client.post("/api/settings", json={"characterAngleModel": "flux2_klein_4b", "objectAngleModel": "qwen_image_edit_plus2_20B"}).status_code == 200
     status = client.get("/api/film/multi-angle/status").json()
-    assert (status["characters"], status["objects"]) == ("flux2_klein_4b", "Qwen-Image-Edit-2511 + Multiple-Angles LoRA")
+    assert (status["characters"], status["objects"]) == ("FLUX.2 Klein (flux2_klein_4b)", "Qwen-Image-Edit-2511 + Multiple-Angles LoRA")
     before = len(_image_params(fake_services))
     client.post(f"/api/film/projects/{PROJECT}/assets/{asset['id']}/angle-set", json={"shots": SHOTS, "seed": 5})
     assert [p["model_type"] for p in _image_params(fake_services)[before:]] == ["flux2_klein_4b", "flux2_klein_4b"]
@@ -180,5 +180,5 @@ def test_a_chosen_model_that_is_not_installed_falls_back(client, test_state, fak
     fake_services.wangp_bridge.available = True
     fake_services.wangp_bridge.definitions.append(FLUX2)
     client.post("/api/settings", json={"characterAngleModel": "qwen_image_edit_plus2_20B"})
-    assert client.get("/api/film/multi-angle/status").json()["characters"] == "flux2_klein_4b"
+    assert client.get("/api/film/multi-angle/status").json()["characters"] == "FLUX.2 Klein (flux2_klein_4b)"
 
