@@ -1,0 +1,184 @@
+"""Multi-angle model prompts (user, 2026-10-04: "Add support for these models to
+help make accurate multiple angles and to produce accurate styleguides and
+loras ... ensure both models are installed in the software and is the default
+model for multiple angles").
+
+Qwen-Image-Edit-2511 with fal's Multiple-Angles LoRA takes a camera position as
+`<sks> [azimuth] [elevation] [distance]` from fixed words (8 azimuths, 4
+elevations, 3 distances). Every angle-set shot name and style-sheet view maps
+onto them.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from film.multi_angle import ANGLES_LORA_FILE, ANGLES_LORA_FOLDER, QWEN_EDIT_2511, angle_prompt, sheet_angle_prompt
+from tests.test_asset_angles import FLUX2, _character, _image_params, _png
+from tests.test_training import PROJECT
+
+
+def test_each_angle_set_shot_names_its_camera() -> None:
+    assert angle_prompt("full-front") == "<sks> front view eye-level shot wide shot"
+    assert angle_prompt("full-34-left") == "<sks> front-left quarter view eye-level shot wide shot"
+    assert angle_prompt("full-profile-left") == "<sks> left side view eye-level shot wide shot"
+    assert angle_prompt("full-back-34-left") == "<sks> back-left quarter view eye-level shot wide shot"
+    assert angle_prompt("full-back") == "<sks> back view eye-level shot wide shot"
+    assert angle_prompt("full-back-34-right") == "<sks> back-right quarter view eye-level shot wide shot"
+    assert angle_prompt("full-profile-right") == "<sks> right side view eye-level shot wide shot"
+    assert angle_prompt("full-34-right") == "<sks> front-right quarter view eye-level shot wide shot"
+    assert angle_prompt("medium-34-left") == "<sks> front-left quarter view eye-level shot medium shot"
+    assert angle_prompt("closeup-profile-left") == "<sks> left side view eye-level shot close-up"
+    assert angle_prompt("full-high") == "<sks> front view elevated shot wide shot"
+    assert angle_prompt("full-low") == "<sks> front view low-angle shot wide shot"
+
+
+def test_an_unknown_shot_is_a_front_medium_shot() -> None:
+    assert angle_prompt("my-custom-angle") == "<sks> front view eye-level shot medium shot"
+
+
+def test_the_style_sheet_views_are_real_turns_at_full_length() -> None:
+    """The FLUX.2 sheet's "three-quarter" and "profile" views came back facing the
+    camera (2026-10-03); the LoRA names the camera position instead."""
+    assert sheet_angle_prompt("front view") == "<sks> front view eye-level shot wide shot"
+    assert sheet_angle_prompt("three-quarter view") == "<sks> front-left quarter view eye-level shot wide shot"
+    assert sheet_angle_prompt("profile view") == "<sks> left side view eye-level shot wide shot"
+    assert sheet_angle_prompt("back view") == "<sks> back view eye-level shot wide shot"
+    assert sheet_angle_prompt("something else") is None
+
+
+# ---- which model makes the angles ------------------------------------------------
+
+QWEN = {"id": QWEN_EDIT_2511, "name": "Qwen Image Edit Plus (2511) 20B", "installed": True}
+
+
+def _install_qwen_angles(test_state, fake_services) -> Path:
+    fake_services.wangp_bridge.definitions.append(QWEN)
+    lora = test_state.config.settings_file.parent / "loras" / ANGLES_LORA_FOLDER / ANGLES_LORA_FILE
+    lora.parent.mkdir(parents=True, exist_ok=True)
+    lora.write_bytes(b"0" * 64)
+    return lora
+
+
+SHOTS = [
+    {"name": "full-profile-left", "view": "seen in profile from their left side, full body", "guide_base64": _png((90, 90, 90))},
+    {"name": "full-back", "view": "seen from behind, full body", "guide_base64": _png((60, 60, 60))},
+]
+
+
+def test_qwen_2511_with_the_angles_lora_makes_a_characters_angle_set(client, test_state, fake_services, create_fake_model_files) -> None:
+    create_fake_model_files(include_zit=True)
+    asset = _character(client, test_state, fake_services)
+    lora = _install_qwen_angles(test_state, fake_services)
+    before = len(_image_params(fake_services))
+    response = client.post(f"/api/film/projects/{PROJECT}/assets/{asset['id']}/angle-set", json={"shots": SHOTS, "seed": 5})
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert result["prompts"] == ["<sks> left side view eye-level shot wide shot", "<sks> back view eye-level shot wide shot"]
+    params = _image_params(fake_services)[before:]
+    assert len(params) == 2 and all(p["model_type"] == QWEN_EDIT_2511 for p in params)
+    assert all(p["video_prompt_type"] == "KI" and len(p["image_refs"]) == 1 for p in params), "the photo alone: the LoRA turns the camera, no mannequin guide"
+    assert all(Path(p["activated_loras"][0]) == lora.resolve() and p["loras_multipliers"] == "0.9" for p in params)
+    assert all(p["num_inference_steps"] >= 20 for p in params)
+
+
+def test_without_the_angles_lora_the_angle_set_falls_back_to_flux2(client, test_state, fake_services, create_fake_model_files) -> None:
+    create_fake_model_files(include_zit=True)
+    asset = _character(client, test_state, fake_services)
+    fake_services.wangp_bridge.definitions.append(QWEN)  # the model, but not its LoRA
+    before = len(_image_params(fake_services))
+    client.post(f"/api/film/projects/{PROJECT}/assets/{asset['id']}/angle-set", json={"shots": SHOTS, "seed": 5})
+    params = _image_params(fake_services)[before:]
+    assert params and all(p["model_type"] == FLUX2["id"] for p in params)
+
+
+def test_the_style_sheet_turns_with_qwen_2511(client, test_state, fake_services, create_fake_model_files) -> None:
+    create_fake_model_files(include_zit=True)
+    asset = _character(client, test_state, fake_services)
+    _install_qwen_angles(test_state, fake_services)
+    before = len(_image_params(fake_services))
+    response = client.post(f"/api/film/projects/{PROJECT}/assets/{asset['id']}/reference-sheet",
+                           json={"views": ["front view", "three-quarter view", "profile view", "back view"], "seed": 9})
+    assert response.status_code == 200, response.text
+    assert response.json()["prompts"] == [
+        "<sks> front view eye-level shot wide shot", "<sks> front-left quarter view eye-level shot wide shot",
+        "<sks> left side view eye-level shot wide shot", "<sks> back view eye-level shot wide shot",
+    ]
+    params = _image_params(fake_services)[before:]
+    assert len(params) == 4 and all(p["model_type"] == QWEN_EDIT_2511 for p in params)
+
+
+def test_zero123pp_makes_an_objects_turnaround(client, test_state, fake_services, create_fake_model_files) -> None:
+    create_fake_model_files(include_zit=True)
+    test_state.config.wangp_enabled = True
+    fake_services.wangp_bridge.available = True
+    fake_services.wangp_bridge.definitions.append(FLUX2)
+    _install_qwen_angles(test_state, fake_services)
+    fake_services.multiview.enabled = True
+    prop = client.post(f"/api/film/projects/{PROJECT}/assets", json={"kind": "prop", "name": "Lantern"}).json()["asset"]
+    prop = client.post(f"/api/film/projects/{PROJECT}/assets/{prop['id']}/references", json={"image_base64": _png((10, 120, 200)), "name_hint": "front"}).json()["asset"]
+    before = len(_image_params(fake_services))
+    response = client.post(f"/api/film/projects/{PROJECT}/assets/{prop['id']}/angle-set", json={"shots": SHOTS, "seed": 5})
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert len(fake_services.multiview.calls) == 1 and len(result["reference_paths"]) == 6, "Zero123++'s six views, whatever shots were asked"
+    assert result["prompts"][0] == "Zero123++: front-right raised (azimuth 30, elevation 20)"
+    assert len(result["asset"]["reference_images"]) == 7
+    assert len(_image_params(fake_services)) == before, "no WanGP render for an object's turnaround"
+
+
+def test_an_object_without_zero123pp_uses_qwen_2511(client, test_state, fake_services, create_fake_model_files) -> None:
+    create_fake_model_files(include_zit=True)
+    test_state.config.wangp_enabled = True
+    fake_services.wangp_bridge.available = True
+    _install_qwen_angles(test_state, fake_services)
+    prop = client.post(f"/api/film/projects/{PROJECT}/assets", json={"kind": "prop", "name": "Lantern"}).json()["asset"]
+    prop = client.post(f"/api/film/projects/{PROJECT}/assets/{prop['id']}/references", json={"image_base64": _png((10, 120, 200)), "name_hint": "front"}).json()["asset"]
+    before = len(_image_params(fake_services))
+    client.post(f"/api/film/projects/{PROJECT}/assets/{prop['id']}/angle-set", json={"shots": SHOTS, "seed": 5})
+    assert [p["model_type"] for p in _image_params(fake_services)[before:]] == [QWEN_EDIT_2511, QWEN_EDIT_2511]
+
+
+def test_the_angle_models_report_what_is_installed(client, test_state, fake_services) -> None:
+    test_state.config.wangp_enabled = True
+    fake_services.wangp_bridge.available = True
+    status = client.get("/api/film/multi-angle/status").json()
+    assert (status["characters"], status["objects"]) == ("", "")
+    _install_qwen_angles(test_state, fake_services)
+    fake_services.wangp_bridge.definitions.append(FLUX2)
+    fake_services.multiview.enabled = True
+    status = client.get("/api/film/multi-angle/status").json()
+    assert status["characters"] == "Qwen-Image-Edit-2511 + Multiple-Angles LoRA"
+    assert status["objects"] == "Zero123++ v1.2"
+    assert [c["id"] for c in status["choices"]] == ["", "qwen_image_edit_plus2_20B", "zero123plus", "flux2_klein_4b"]
+    assert all(c["installed"] for c in status["choices"])
+
+
+def test_settings_choose_the_angle_model_for_characters_and_objects(client, test_state, fake_services, create_fake_model_files) -> None:
+    """User, 2026-10-04: "In the settings let the user choose which AI model renders
+    multiple angles for characters and which ai model renders multiple angles for objects"."""
+    create_fake_model_files(include_zit=True)
+    asset = _character(client, test_state, fake_services)
+    _install_qwen_angles(test_state, fake_services)
+    fake_services.multiview.enabled = True
+    assert client.post("/api/settings", json={"characterAngleModel": "flux2_klein_4b", "objectAngleModel": "qwen_image_edit_plus2_20B"}).status_code == 200
+    status = client.get("/api/film/multi-angle/status").json()
+    assert (status["characters"], status["objects"]) == ("flux2_klein_4b", "Qwen-Image-Edit-2511 + Multiple-Angles LoRA")
+    before = len(_image_params(fake_services))
+    client.post(f"/api/film/projects/{PROJECT}/assets/{asset['id']}/angle-set", json={"shots": SHOTS, "seed": 5})
+    assert [p["model_type"] for p in _image_params(fake_services)[before:]] == ["flux2_klein_4b", "flux2_klein_4b"]
+    prop = client.post(f"/api/film/projects/{PROJECT}/assets", json={"kind": "prop", "name": "Lantern"}).json()["asset"]
+    prop = client.post(f"/api/film/projects/{PROJECT}/assets/{prop['id']}/references", json={"image_base64": _png((10, 120, 200)), "name_hint": "front"}).json()["asset"]
+    before = len(_image_params(fake_services))
+    client.post(f"/api/film/projects/{PROJECT}/assets/{prop['id']}/angle-set", json={"shots": SHOTS, "seed": 5})
+    assert [p["model_type"] for p in _image_params(fake_services)[before:]] == [QWEN_EDIT_2511, QWEN_EDIT_2511]
+    assert fake_services.multiview.calls == [], "Zero123++ installed, but the user picked Qwen for objects"
+
+
+def test_a_chosen_model_that_is_not_installed_falls_back(client, test_state, fake_services) -> None:
+    test_state.config.wangp_enabled = True
+    fake_services.wangp_bridge.available = True
+    fake_services.wangp_bridge.definitions.append(FLUX2)
+    client.post("/api/settings", json={"characterAngleModel": "qwen_image_edit_plus2_20B"})
+    assert client.get("/api/film/multi-angle/status").json()["characters"] == "flux2_klein_4b"
+

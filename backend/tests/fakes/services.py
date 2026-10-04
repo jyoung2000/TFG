@@ -96,6 +96,30 @@ class FakeHTTPClient:
         self.calls.append(HttpCall("put", url, headers, None, data, timeout))
         return self._dequeue("put")
 
+    def download_to(
+        self,
+        url: str,
+        path: Path,
+        on_chunk: Any,
+        headers: dict[str, str] | None = None,
+        timeout: int = 60,
+        chunk_bytes: int = 1024 * 1024,
+    ) -> int:
+        """Serves a queued GET response in chunks, as the real client streams it."""
+        self.calls.append(HttpCall("download_to", url, headers, None, None, timeout))
+        response = self._dequeue("get")
+        if response.status_code != 200:
+            raise RuntimeError(f"Download failed: HTTP {response.status_code}")
+        body = response.content
+        written = 0
+        with path.open("wb") as handle:
+            while written < len(body):
+                chunk = body[written:written + chunk_bytes]
+                handle.write(chunk)
+                written += len(chunk)
+                on_chunk(written, len(body))
+        return written
+
 
 class FakeTaskRunner:
     def __init__(self) -> None:
@@ -822,6 +846,8 @@ class FakeServices:
     face_matcher: FakeFaceMatcher = field(default_factory=lambda: FakeFaceMatcher(enabled=False))
     #: Injected into the bundle by conftest (needs the outputs dir); None until then.
     wangp_bridge: FakeWanGPBridge | None = None
+    #: Zero123++ stand-in, off by default; conftest gives it a folder.
+    multiview: Any = None
 
     def __post_init__(self) -> None:
         FakeFastVideoPipeline.bind_singleton(self.fast_video_pipeline)

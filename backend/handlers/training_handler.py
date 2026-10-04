@@ -730,6 +730,10 @@ class TrainingHandler(StateHandlerBase):
             entries = [e for e in entries if e.target == target]
         return sorted(entries, key=lambda e: -e.created_at)
 
+    def lora_root(self) -> Path:
+        """The app's LoRA folder (loras/<target>/..., previews, helper LoRAs)."""
+        return self._lora_root
+
     def preview_root(self) -> Path:
         """Where LoRA previews live; the media route serves them."""
         return self._lora_root / "previews"

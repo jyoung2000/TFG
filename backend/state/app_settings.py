@@ -181,6 +181,10 @@ class AppSettings(SettingsBaseModel):
     # Default model ids used when a film project does not override them.
     default_video_model: str = ""
     default_image_model: str = ""
+    # Which model renders multiple angles (film.multi_angle): "" = the best one
+    # installed; else a WanGP reference model type or "zero123plus".
+    character_angle_model: str = ""
+    object_angle_model: str = ""
     # Model ids the user has typed or downloaded, newest first — the Model
     # Library shows them alongside the discovered catalogs.
     recent_model_ids: list[str] = Field(default_factory=list[str])
@@ -322,6 +326,8 @@ class SettingsResponse(SettingsBaseModel):
     media_tiers: dict[str, list[str]] = Field(default_factory=dict[str, list[str]])
     default_video_model: str = ""
     default_image_model: str = ""
+    character_angle_model: str = ""
+    object_angle_model: str = ""
     recent_model_ids: list[str] = Field(default_factory=list[str])
     vram_render_needs_mb: dict[str, int] = Field(default_factory=dict[str, int])
 

@@ -88,6 +88,8 @@ function normalizeAppSettings(data: Partial<AppSettings>): AppSettings {
     hasReplicateApiKey: data.hasReplicateApiKey ?? DEFAULT_APP_SETTINGS.hasReplicateApiKey,
     defaultVideoModel: data.defaultVideoModel ?? DEFAULT_APP_SETTINGS.defaultVideoModel,
     defaultImageModel: data.defaultImageModel ?? DEFAULT_APP_SETTINGS.defaultImageModel,
+    characterAngleModel: data.characterAngleModel ?? DEFAULT_APP_SETTINGS.characterAngleModel,
+    objectAngleModel: data.objectAngleModel ?? DEFAULT_APP_SETTINGS.objectAngleModel,
     recentModelIds: data.recentModelIds ?? DEFAULT_APP_SETTINGS.recentModelIds,
     useLocalTextEncoder: data.useLocalTextEncoder ?? DEFAULT_APP_SETTINGS.useLocalTextEncoder,
     fastModel: data.fastModel ?? DEFAULT_APP_SETTINGS.fastModel,

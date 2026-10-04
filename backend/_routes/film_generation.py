@@ -23,6 +23,12 @@ from app_handler import AppHandler
 router = APIRouter(prefix="/api/film", tags=["film-generation"])
 
 
+@router.get("/multi-angle/status")
+def route_multi_angle_status(handler: AppHandler = Depends(get_state_service)) -> dict[str, object]:
+    """Which model renders angles for characters and for objects, and the choices Settings offers."""
+    return handler.film_generation.multi_angle_status()
+
+
 @router.post(
     "/projects/{project_id}/scenes/{scene_id}/shots/{shot_id}/generate",
     response_model=QueueShotResponse,

@@ -524,6 +524,8 @@ export function seedSettings(): AppSettings {
     hasReplicateApiKey: false,
     defaultVideoModel: '',
     defaultImageModel: '',
+    characterAngleModel: '',
+    objectAngleModel: '',
     recentModelIds: [],
     useLocalTextEncoder: true,
     fastModel: { useUpscaler: true },

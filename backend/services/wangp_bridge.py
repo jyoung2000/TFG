@@ -46,8 +46,12 @@ IMG2IMG_MODEL_TYPES: tuple[str, ...] = ("flux2_klein_4b", "flux2_klein_9b", "flu
 #: with no resolution at all.
 IMG2IMG_MIN_STEPS = 24
 #: Image models that compose from ordered reference images (`image_refs`):
-#: FLUX.2 ("KI" = scene first, then people/objects; "I" = people/objects).
-REFERENCE_IMAGE_MODEL_TYPES: tuple[str, ...] = ("flux2_klein_4b", "flux2_klein_9b", "flux2_dev")
+#: FLUX.2 ("KI" = scene first, then people/objects; "I" = people/objects), and
+#: Qwen-Image-Edit-2511 (same letters; WanGP models/qwen/qwen_handler.py) - last,
+#: so the few-step FLUX.2 stays the fallback for general compositing.
+REFERENCE_IMAGE_MODEL_TYPES: tuple[str, ...] = ("flux2_klein_4b", "flux2_klein_9b", "flux2_dev", "qwen_image_edit_plus2_20B")
+#: Qwen-Image-Edit is not a few-step model: the app's default of 4 steps is noise.
+QWEN_EDIT_MIN_STEPS = 30
 #: A VACE render with a guide video needs no CFG and few steps (see `_vace_settings`).
 VACE_GUIDED_STEPS = 6
 
@@ -359,8 +363,8 @@ class WanGPBridge:
             raise RuntimeError(f"'{chosen}' cannot compose from reference images; that needs one of {', '.join(REFERENCE_IMAGE_MODEL_TYPES)}")
         if init_image and not self.supports_img2img(chosen):
             raise RuntimeError(f"'{chosen}' cannot render from a reference image; img2img needs one of {', '.join(IMG2IMG_MODEL_TYPES)}")
-        mapped_width, mapped_height = self._map_image_resolution(width, height)
-        normalized_steps = self._normalize_image_steps(num_steps)
+        mapped_width, mapped_height = self._map_image_resolution(width, height, chosen)
+        normalized_steps = self._normalize_image_steps(num_steps, chosen)
         settings: dict[str, object] = {
             "model_type": chosen,
             "prompt": prompt,
@@ -430,8 +434,10 @@ class WanGPBridge:
             raise RuntimeError(f"Unsupported WanGP aspect ratio: {aspect_ratio}")
         return mapped
 
-    def _map_image_resolution(self, width: int, height: int) -> tuple[int, int]:
-        if "qwen_image" not in self._image_model_type:
+    def _map_image_resolution(self, width: int, height: int, model_type: str | None = None) -> tuple[int, int]:
+        """Qwen renders at its native presets; the model rendering decides, not
+        the configured default (a Qwen angle render while Z-Image is the default)."""
+        if "qwen_image" not in (model_type or self._image_model_type):
             return width, height
 
         requested_ratio = width / max(height, 1)
@@ -453,9 +459,12 @@ class WanGPBridge:
             )
         return mapped
 
-    def _normalize_image_steps(self, num_steps: int) -> int:
+    def _normalize_image_steps(self, num_steps: int, model_type: str | None = None) -> int:
         normalized_steps = max(1, num_steps)
-        if not self._image_model_type.startswith("z_image"):
+        chosen = model_type or self._image_model_type
+        if chosen.startswith("qwen_image_edit"):
+            return max(QWEN_EDIT_MIN_STEPS, normalized_steps)
+        if not chosen.startswith("z_image"):
             return normalized_steps
 
         adjusted_steps = max(8, normalized_steps)

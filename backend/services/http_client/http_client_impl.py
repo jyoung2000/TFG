@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from pathlib import Path
 
 import requests
 
@@ -40,6 +41,34 @@ class HTTPClientImpl:
             return requests.get(url, headers=headers, timeout=timeout)
         except requests.exceptions.Timeout as exc:
             logger.error("HTTP GET timed out: %s", url, exc_info=True)
+            raise HttpTimeoutError(str(exc)) from exc
+
+    def download_to(
+        self,
+        url: str,
+        path: Path,
+        on_chunk: Callable[[int, int], None],
+        headers: dict[str, str] | None = None,
+        timeout: int = 60,
+        chunk_bytes: int = 1024 * 1024,
+    ) -> int:
+        """Stream to disk: a multi-GB model never sits in memory whole."""
+        try:
+            with requests.get(url, headers=headers, timeout=timeout, stream=True) as response:
+                if response.status_code != 200:
+                    raise RuntimeError(f"Download failed: HTTP {response.status_code}")
+                total = int(response.headers.get("Content-Length", "0") or 0)
+                written = 0
+                with path.open("wb") as handle:
+                    for chunk in response.iter_content(chunk_size=chunk_bytes):
+                        if not chunk:
+                            continue
+                        handle.write(chunk)
+                        written += len(chunk)
+                        on_chunk(written, total)
+                return written
+        except requests.exceptions.Timeout as exc:
+            logger.error("HTTP download timed out: %s", url, exc_info=True)
             raise HttpTimeoutError(str(exc)) from exc
 
     def put(

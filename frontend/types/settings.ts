@@ -126,6 +126,10 @@ export interface AppSettings {
   hasReplicateApiKey: boolean
   defaultVideoModel: string
   defaultImageModel: string
+  /** Model that renders multiple angles of characters / scenes ('' = automatic). */
+  characterAngleModel: string
+  /** Model that renders multiple angles of objects ('' = automatic). */
+  objectAngleModel: string
   recentModelIds: string[]
   useLocalTextEncoder: boolean
   fastModel: FastModelSettings
@@ -179,6 +183,8 @@ export const DEFAULT_APP_SETTINGS: AppSettings = {
   hasReplicateApiKey: false,
   defaultVideoModel: '',
   defaultImageModel: '',
+  characterAngleModel: '',
+  objectAngleModel: '',
   recentModelIds: [],
   useLocalTextEncoder: false,
   fastModel: { useUpscaler: true },

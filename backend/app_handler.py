@@ -42,6 +42,9 @@ from handlers.training_handler import TrainingHandler
 from handlers.taste_handler import TasteHandler
 from handlers.wangp_server_handler import WanGPServerHandler
 from services.face_match import FaceMatcher
+from services.multiview import MultiViewGenerator
+from handlers.model_store_handler import ModelStoreHandler
+from handlers.model_search_handler import ModelSearchHandler
 from services.lora_fetcher import LoraFetcher
 from services.trainer.trainer import LoraTrainer
 from services.vision.protocol import VisionService
@@ -105,6 +108,7 @@ class AppHandler:
         wangp_bridge: WanGPBridge | None = None,
         lora_fetcher: LoraFetcher | None = None,
         face_matcher: FaceMatcher | None = None,
+        multiview: MultiViewGenerator | None = None,
     ) -> None:
         self.config = config
 
@@ -270,6 +274,12 @@ class AppHandler:
 
             face_matcher = SFaceMatcher(config.models_dir / "face")
         self._face_matcher = face_matcher
+        if multiview is None:
+            from services.multiview.zero123plus import Zero123PlusGenerator
+
+            # Zero123++ v1.2 (CC-BY-NC weights; user-approved 2026-10-04): objects' turnarounds.
+            multiview = Zero123PlusGenerator(config.models_dir / "zero123plus-v1.2", config.outputs_dir / "multiview")
+        self._multiview = multiview
 
         # The unified job store: every handler below that does work reports
         # to it, and the History tab reads nothing else.
@@ -483,6 +493,7 @@ class AppHandler:
             film=self.film,
         )
         self.film_generation.attach_taste(self.taste)
+        self.film_generation.attach_multiview(self._multiview)
 
         self.film_director = FilmDirectorHandler(
             state=self.state,
@@ -545,6 +556,29 @@ class AppHandler:
             analysis_root=config.outputs_dir / "video_analyses",
         )
         self.film_generation.attach_training(self.training, self.vision, self._face_matcher)
+        # Settings → Models: what is installed, uninstall, where it is stored.
+        training = self.training
+        self.model_store = ModelStoreHandler(
+            checkpoints=(config.wangp_root / "ckpts") if config.wangp_root is not None else None,
+            models_dir=config.models_dir,
+            lora_root=training.lora_root(),
+            definitions=self.wangp_bridge.list_model_definitions,
+            lora_registry=lambda: [entry.model_dump() for entry in training.list_loras()],
+            delete_lora=training.delete_lora,
+            busy=self._busy_reason,
+            release_models=self._release_wangp_models,
+        )
+        # Settings → Models: add a model from a Hugging Face search or a direct link.
+        from services.http_client.http_client_impl import HTTPClientImpl
+        from services.hub_search import HuggingFaceHubApi
+
+        destinations = {"models": config.models_dir, "loras": training.lora_root()}
+        if config.wangp_root is not None:
+            destinations = {"checkpoints": config.wangp_root / "ckpts", **destinations}
+        self.model_search = ModelSearchHandler(
+            state=self.state, lock=self._lock, hub=HuggingFaceHubApi(), downloader=self.model_downloader,
+            http=HTTPClientImpl(), jobs=self.jobs, task_runner=self.task_runner, destinations=destinations,
+        )
         self.taste.attach_training(self.training)
         self.film_director.attach_taste(self.taste)
         self.wangp_server = WanGPServerHandler(
@@ -654,6 +688,27 @@ class AppHandler:
         self.film_generation.recover_interrupted_jobs()
 
 
+    def _busy_reason(self) -> str:
+        """Why model files may not be touched now ("" when they may)."""
+        if self.generation.is_generation_running():
+            return "A render is running"
+        if self.downloads.is_download_running():
+            return "A download is running"
+        if any(r.status in ("queued", "running") for r in self.training.list_runs()):
+            return "A LoRA is training"
+        return ""
+
+    def _release_wangp_models(self) -> None:
+        """Let WanGP close its model files (they are locked while loaded on Windows)."""
+        launcher = getattr(self.wangp_bridge, "launcher", None)
+        stop = getattr(launcher, "stop", None)
+        if callable(stop):
+            stop()
+            return
+        release = getattr(self.wangp_bridge, "release_models", None)
+        if callable(release):
+            release()
+
 @dataclass
 class ServiceBundle:
     http: HTTPClient
@@ -688,6 +743,8 @@ class ServiceBundle:
     lora_fetcher: LoraFetcher | None = None
     #: None → OpenCV SFace from <models>/face (unavailable without its files); tests inject FakeFaceMatcher.
     face_matcher: FaceMatcher | None = None
+    #: None → Zero123++ from <models>/zero123plus-v1.2; tests inject FakeMultiViewGenerator.
+    multiview: MultiViewGenerator | None = None
 
 
 def _default_nvml() -> NvmlProbe:
@@ -795,4 +852,5 @@ def build_initial_state(
         wangp_bridge=bundle.wangp_bridge,
         lora_fetcher=bundle.lora_fetcher,
         face_matcher=bundle.face_matcher,
+        multiview=bundle.multiview,
     )

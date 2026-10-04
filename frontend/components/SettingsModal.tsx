@@ -1,7 +1,7 @@
 import { APP_NAME } from "../lib/brand";
 import { HardwarePresetCard } from './settings/HardwarePresetCard'
 import { RemoteBackendCard } from './settings/RemoteBackendCard'
-import { AlertCircle, Boxes, Brain, Check, Cpu, Eye, Library, Download, Film, Folder, Info, KeyRound, RefreshCw, Settings, Sliders, Sparkles, X, Zap } from 'lucide-react'
+import { AlertCircle, Boxes, Brain, Check, Cpu, Eye, Library, Download, Film, Folder, HardDrive, Info, KeyRound, RefreshCw, Settings, Sliders, Sparkles, X, Zap } from 'lucide-react'
 import React, { useEffect, useRef, useState } from 'react'
 import { Button } from './ui/button'
 import { useAppSettings, type AppSettings } from '../contexts/AppSettingsContext'
@@ -11,6 +11,7 @@ import type { FilmCapabilities } from '../types/film'
 import { logger } from '../lib/logger'
 import { ApiKeyHelperRow, LtxApiKeyInput, LtxApiKeyHelperRow } from './LtxApiKeyInput'
 import { AiModelsSettings } from './AiModelsSettings'
+import { ModelsSettings } from './settings/ModelsSettings'
 import { KnowledgeSettings } from './KnowledgeSettings'
 import { VisionSettings } from './VisionSettings'
 import { ShotLibraryPanel } from '../views/film/ShotLibraryPanel'
@@ -27,7 +28,7 @@ interface SettingsModalProps {
   initialTab?: TabId
 }
 
-type TabId = 'general' | 'aiModels' | 'vision' | 'knowledge' | 'shotLibrary' | 'apiKeys' | 'inference' | 'promptEnhancer' | 'about'
+type TabId = 'general' | 'aiModels' | 'models' | 'vision' | 'knowledge' | 'shotLibrary' | 'apiKeys' | 'inference' | 'promptEnhancer' | 'about'
 
 export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProps) {
   const { settings, updateSettings, saveLtxApiKey, saveFalApiKey, forceApiGenerations } = useAppSettings()
@@ -304,6 +305,7 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
   const tabs = [
     { id: 'general' as TabId, label: 'General', icon: Settings },
     { id: 'aiModels' as TabId, label: 'AI Models', icon: Boxes },
+    { id: 'models' as TabId, label: 'Models', icon: HardDrive },
     { id: 'vision' as TabId, label: 'Vision', icon: Eye },
     { id: 'knowledge' as TabId, label: 'Knowledge', icon: Brain },
     { id: 'shotLibrary' as TabId, label: 'Shot Library', icon: Library },
@@ -990,6 +992,7 @@ export function SettingsModal({ isOpen, onClose, initialTab }: SettingsModalProp
           )}
 
           {activeTab === 'aiModels' && <AiModelsSettings />}
+          {activeTab === 'models' && <ModelsSettings />}
 
           {activeTab === 'vision' && <VisionSettings />}
 

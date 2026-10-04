@@ -138,6 +138,10 @@ class ImageGenerationHandler(StateHandlerBase):
             return preferred
         return next((m for m in IMG2IMG_MODEL_TYPES if self._wangp_bridge.weights_installed(m) is True), None)
 
+    def model_installed(self, model_type: str) -> bool:
+        """Whether WanGP is on and the model's weights are on disk."""
+        return self._config.wangp_enabled and self._wangp_bridge.weights_installed(model_type) is True
+
     def reference_model(self, preferred: str = "") -> str | None:
         """The installed model that composes from reference images (FLUX.2),
         `preferred` first. None when WanGP is off or none is installed."""

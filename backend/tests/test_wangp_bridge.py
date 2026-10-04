@@ -244,3 +244,31 @@ def test_a_model_without_reference_images_refuses_them() -> None:
     with pytest.raises(RuntimeError, match="reference images"):
         bridge.generate_images(prompt="x", width=512, height=512, num_steps=8, num_images=1, seed=1, on_progress=lambda *_a: None,
                                is_cancelled=lambda: False, reference_images=["E:/tmp/hero.png"])
+
+
+def test_qwen_edit_2511_renders_the_angles_with_its_own_steps_and_sizes() -> None:
+    """User, 2026-10-04: Qwen-Image-Edit-2511 with the Multiple-Angles LoRA as the
+    default for multiple angles. It composes from reference images like FLUX.2,
+    but it is not a few-step model: the app's default of 4 steps would be noise,
+    and its resolution presets apply to the model rendering, not to the app's
+    configured default image model (z_image here)."""
+    bridge = _make_bridge(image_model_type="z_image")
+    captured: dict[str, object] = {}
+
+    def fake_run_manifest(*, manifest, media_suffixes, on_progress, is_cancelled):  # type: ignore[no-untyped-def]
+        captured["settings"] = manifest[0]["params"]
+        return ["E:/tmp/out.png"]
+
+    bridge._run_manifest = fake_run_manifest  # type: ignore[method-assign]
+    bridge.generate_images(prompt="<sks> left side view eye-level shot wide shot", width=768, height=1024, num_steps=4, num_images=1, seed=7,
+                           on_progress=lambda *_a: None, is_cancelled=lambda: False,
+                           model_type="qwen_image_edit_plus2_20B", reference_images=["E:/tmp/hero.png"], reference_mode="KI")  # type: ignore[arg-type]
+    settings = captured["settings"]
+    assert isinstance(settings, dict)
+    assert settings["model_type"] == "qwen_image_edit_plus2_20B"
+    assert settings["video_prompt_type"] == "KI" and [Path(p).name for p in settings["image_refs"]] == ["hero.png"]
+    assert settings["num_inference_steps"] >= 20
+    assert settings["resolution"] != "768x1024", "a Qwen native preset of the same shape"
+    width, height = (int(v) for v in str(settings["resolution"]).split("x"))
+    assert abs(width / height - 768 / 1024) < 0.05
+

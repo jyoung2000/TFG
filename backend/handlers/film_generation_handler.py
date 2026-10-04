@@ -52,6 +52,11 @@ from film.film_api_types import (
     ReferenceSheetResponse,
     UpdateAssetRequest,
 )
+from film.multi_angle import (
+    ANGLES_LORA_FILE, ANGLES_LORA_FOLDER, ANGLES_LORA_STRENGTH, QWEN_ANGLES_LABEL, QWEN_EDIT_2511, ZERO123PP, ZERO123PP_LABEL,
+    AngleEngine, angle_prompt, sheet_angle_prompt,
+)
+from services.multiview import MultiViewGenerator
 from film.face_lock import FRONT_YAW, MAX_YAW_SHIFT, PROFILE_YAW, blend_face, fit_size, framing_kept, head_square, is_close_up, yaw
 from film.identity_dataset import PERSON_WORDS, face_crop, face_crop_name, rare_trigger, source_crops
 from services.face_match import SAME_PERSON, FaceMatcher, similarity
@@ -328,6 +333,8 @@ class FilmGenerationHandler(StateHandlerBase):
         self._face_matcher_service: FaceMatcher | None = None
         #: Thumbs up / down (film/taste.py): what a character's LoRA learns from.
         self._taste: TasteHandler | None = None
+        #: Zero123++ (services.multiview): an object's six-view turnaround.
+        self._multiview: MultiViewGenerator | None = None
         # Set while a hosted job runs, so the queue can report and cancel it.
         self._hosted_cancel = False
         self._hosted_progress: tuple[int, str] | None = None
@@ -1395,6 +1402,8 @@ class FilmGenerationHandler(StateHandlerBase):
         # view keeps that person; text alone drifted between views.
         identity = self._identity_image(project_id, asset, "")
         reference_model = handler.reference_model() if identity is not None else None
+        engine = self._angle_engine(asset.kind) if identity is not None else None
+        qwen = engine if engine is not None and engine.kind == "qwen" and engine.lora is not None else None
         # A re-render replaces each view it renders (QA 2026-10-02: they piled
         # up among the references and in the LoRA dataset); never the identity.
         before = list(asset.reference_images)
@@ -1406,8 +1415,16 @@ class FilmGenerationHandler(StateHandlerBase):
         scores: list[float | None] = []
         for view in views:
             prompt = ", ".join(p for p in (trigger, base, SHEET_VIEW_WORDS.get(view, view), "consistent character sheet, same person, same outfit") if p)
-            prompts.append(prompt)
-            if identity is not None and reference_model:
+            turn = sheet_angle_prompt(view) if qwen is not None else None
+            prompts.append(turn or prompt)
+            if identity is not None and qwen is not None and qwen.lora is not None and turn:
+                # FLUX.2's sheet turned only in words (its profile faced the camera, 2026-10-03).
+                chosen, score = self._best_render(
+                    handler, GenerateImageRequest(prompt=turn, width=width, height=height, numImages=1, model=qwen.model,
+                                                  loras=[LoraUse(name=str(qwen.lora), multiplier=ANGLES_LORA_STRENGTH)]),
+                    seed=seed, references=[str(identity)], mode="KI", identity_vector=identity_vector,
+                )
+            elif identity is not None and reference_model:
                 lead = f"{ANGLE_SUBJECT}, {FACE_FROM.format(nth='second')}" if face else ANGLE_SUBJECT
                 chosen, score = self._best_render(
                     handler, GenerateImageRequest(prompt=f"{lead}, {prompt}", width=width, height=height, numImages=1, model=reference_model),
@@ -1529,12 +1546,15 @@ class FilmGenerationHandler(StateHandlerBase):
         identity = self._identity_image(project_id, asset, req.identity_path)
         if identity is None:
             raise HTTPError(400, "Give the asset a reference image first (upload or generate one): every angle is composed from it")
-        model = handler.reference_model()
-        if model is None:
-            raise HTTPError(400, "Multi-angle shots need FLUX.2 Klein installed (Settings → AI Models)")
+        engine = self._angle_engine(asset.kind)
+        if engine is None:
+            raise HTTPError(400, "Multi-angle shots need Qwen-Image-Edit-2511, Zero123++ or FLUX.2 Klein installed (Settings → AI Models)")
         seed = req.seed if req.seed is not None else asset.seed_lock
         if seed is None:
             seed = int(time.time()) % 2_000_000_000
+        if engine.kind == "zero123":
+            return self._object_turnaround(project_id, asset, identity, seed)
+        model = engine.model
         # Each angle says its own framing (full / medium / close-up); the sheet's
         # "full body ... head to feet" made every close-up a full shot (QA 2026-10-02).
         base = self._reference_prompt(asset, project.settings.style_prompt, framing="").replace(f"Character reference sheet of {asset.name}", asset.name)
@@ -1549,20 +1569,26 @@ class FilmGenerationHandler(StateHandlerBase):
         paths: list[str] = []
         scores: list[float | None] = []
         for index, shot in enumerate(shots):
-            references = people
-            mode = "I"
-            lead = f"{ANGLE_SUBJECT}, {FACE_FROM.format(nth='second')}" if face else ANGLE_SUBJECT
-            if shot.guide_base64.strip():
-                guides.mkdir(parents=True, exist_ok=True)
-                guide = guides / f"{asset.id}-{index:02d}.png"
-                guide.write_bytes(_decode_image(shot.guide_base64))
-                references = [str(guide), *people]
-                mode = "KI"
-                lead = f"{ANGLE_SUBJECT_POSED}, {FACE_FROM.format(nth='third')}" if face else ANGLE_SUBJECT_POSED
-            prompt = ", ".join(p for p in (lead, shot.view.strip(), base, ANGLE_QUALITY) if p)
+            loras: list[LoraUse] = []
+            if engine.kind == "qwen" and engine.lora is not None:
+                # The LoRA turns the camera around the photo: no mannequin guide, no description.
+                prompt, references, mode = angle_prompt(shot.name), [str(identity)], "KI"
+                loras = [LoraUse(name=str(engine.lora), multiplier=ANGLES_LORA_STRENGTH)]
+            else:
+                references = people
+                mode = "I"
+                lead = f"{ANGLE_SUBJECT}, {FACE_FROM.format(nth='second')}" if face else ANGLE_SUBJECT
+                if shot.guide_base64.strip():
+                    guides.mkdir(parents=True, exist_ok=True)
+                    guide = guides / f"{asset.id}-{index:02d}.png"
+                    guide.write_bytes(_decode_image(shot.guide_base64))
+                    references = [str(guide), *people]
+                    mode = "KI"
+                    lead = f"{ANGLE_SUBJECT_POSED}, {FACE_FROM.format(nth='third')}" if face else ANGLE_SUBJECT_POSED
+                prompt = ", ".join(p for p in (lead, shot.view.strip(), base, ANGLE_QUALITY) if p)
             prompts.append(prompt)
             chosen, score = self._best_render(
-                handler, GenerateImageRequest(prompt=prompt, width=width, height=height, numImages=1, model=model),
+                handler, GenerateImageRequest(prompt=prompt, width=width, height=height, numImages=1, model=model, loras=loras),
                 seed=seed, references=references, mode=mode, identity_vector=identity_vector,
             )
             scores.append(score)
@@ -2053,6 +2079,86 @@ class FilmGenerationHandler(StateHandlerBase):
 
     def attach_taste(self, taste: TasteHandler) -> None:
         self._taste = taste
+
+    def attach_multiview(self, multiview: MultiViewGenerator) -> None:
+        self._multiview = multiview
+
+    # ---- multi-angle engines (film.multi_angle) -------------------------------
+
+    def _qwen_angles_lora(self) -> Path | None:
+        if self._training is None:
+            return None
+        path = self._training.lora_root() / ANGLES_LORA_FOLDER / ANGLES_LORA_FILE
+        return path if path.is_file() else None
+
+    def _angle_engines(self) -> dict[str, AngleEngine]:
+        """Every multi-angle engine installed here, by its settings id."""
+        handler = self._image_generation
+        engines: dict[str, AngleEngine] = {}
+        lora = self._qwen_angles_lora()
+        if handler is not None and lora is not None and handler.model_installed(QWEN_EDIT_2511):
+            engines[QWEN_EDIT_2511] = AngleEngine("qwen", QWEN_EDIT_2511, QWEN_ANGLES_LABEL, lora)
+        if self._multiview is not None and self._multiview.available():
+            engines[ZERO123PP] = AngleEngine("zero123", ZERO123PP, ZERO123PP_LABEL)
+        flux = handler.reference_model() if handler is not None else None
+        if flux is not None and flux != QWEN_EDIT_2511:
+            engines[flux] = AngleEngine("flux", flux, flux)
+        return engines
+
+    def _angle_engine(self, asset_kind: str) -> AngleEngine | None:
+        """The engine for an asset's angles: the one chosen in Settings when it is
+        installed, else the best installed - Zero123++ then Qwen for objects
+        (props), Qwen for characters and scenes, FLUX.2 last."""
+        engines = self._angle_engines()
+        with self.lock:
+            settings = self.state.app_settings
+            chosen = settings.object_angle_model if asset_kind == "prop" else settings.character_angle_model
+        if chosen in engines:
+            return engines[chosen]
+        order = [ZERO123PP, QWEN_EDIT_2511] if asset_kind == "prop" else [QWEN_EDIT_2511]
+        for engine_id in order:
+            if engine_id in engines:
+                return engines[engine_id]
+        return next((e for e in engines.values() if e.kind == "flux"), None)
+
+    def multi_angle_status(self) -> dict[str, object]:
+        """What renders angles for characters and for objects now, and every
+        choice Settings can offer (installed or not)."""
+        engines = self._angle_engines()
+        character = self._angle_engine("character")
+        obj = self._angle_engine("prop")
+        flux = next((e.model for e in engines.values() if e.kind == "flux"), "flux2_klein_4b")
+        choices = [
+            {"id": "", "label": "Best installed (automatic)", "installed": True},
+            {"id": QWEN_EDIT_2511, "label": QWEN_ANGLES_LABEL, "installed": QWEN_EDIT_2511 in engines},
+            {"id": ZERO123PP, "label": f"{ZERO123PP_LABEL} (objects; non-commercial licence)", "installed": ZERO123PP in engines},
+            {"id": flux, "label": f"FLUX.2 Klein ({flux})", "installed": flux in engines},
+        ]
+        return {"characters": character.label if character else "", "objects": obj.label if obj else "", "choices": choices}
+
+    def _object_turnaround(self, project_id: str, asset: FilmAsset, identity: Path, seed: int) -> ReferenceSheetResponse:
+        """Zero123++'s six views of an object around its photo, added to the asset."""
+        assert self._multiview is not None
+        try:
+            views = self._multiview.generate(str(identity), seed=seed)
+        finally:
+            self._multiview.unload()  # give the GPU back to WanGP
+        prompts: list[str] = []
+        paths: list[str] = []
+        before = list(asset.reference_images)
+        updated = asset
+        for view in views:
+            slug = "".join(ch if ch.isalnum() else "-" for ch in view.label.lower())
+            prompts.append(f"Zero123++: {view.label} (azimuth {view.azimuth}, elevation {view.elevation})")
+            encoded = base64.b64encode(Path(view.path).read_bytes()).decode("ascii")
+            updated = self._film.add_asset_reference(project_id, asset.id, AddAssetReferenceRequest(image_base64=encoded, name_hint=f"{asset.name}-z123-{slug}"))
+            paths.append(updated.reference_images[-1])
+            for stale in before:
+                if Path(stale).stem.endswith(f"-{asset.name}-z123-{slug}") and stale in updated.reference_images:
+                    updated = self._film.delete_asset_reference(project_id, asset.id, stale)
+        fresh = self._film.get_project(project_id).asset(asset.id)
+        assert fresh is not None
+        return ReferenceSheetResponse(asset=fresh, prompts=prompts, seed=seed, reference_paths=paths, face_scores=[None] * len(paths))
 
     def attach_training(self, training: TrainingHandler, vision: VisionHandler | None = None, face_matcher: FaceMatcher | None = None) -> None:
         self._training = training
