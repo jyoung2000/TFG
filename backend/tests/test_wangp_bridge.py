@@ -272,3 +272,46 @@ def test_qwen_edit_2511_renders_the_angles_with_its_own_steps_and_sizes() -> Non
     width, height = (int(v) for v in str(settings["resolution"]).split("x"))
     assert abs(width / height - 768 / 1024) < 0.05
 
+
+def test_int8_kernels_on_auto_are_pinned_to_triton(tmp_path: Path) -> None:
+    """Live QA 2026-10-04: WanGP's "auto" INT8 kernels chose Comfy Kitchen after a
+    256x256 probe that never reaches its cuBLASLt path, and the first real Qwen-Image
+    text-encoder matmul failed ("cuBLASLt 13.x library not found (requires CUDA
+    13+)"). Triton works and measured 12.4 s vs 14.0 s warm on Z-Image."""
+    import json
+
+    from services.wangp_bridge import pin_int8_kernels
+
+    config = tmp_path / "wgp_config.json"
+    config.write_text(json.dumps({"int8_kernels": "auto", "profile": 4}), encoding="utf-8")
+    assert pin_int8_kernels(config) is True
+    assert json.loads(config.read_text(encoding="utf-8")) == {"int8_kernels": "triton", "profile": 4}
+    for chosen in ("disabled", "kitchen", "triton"):
+        config.write_text(json.dumps({"int8_kernels": chosen}), encoding="utf-8")
+        assert pin_int8_kernels(config) is False and json.loads(config.read_text(encoding="utf-8"))["int8_kernels"] == chosen, "a deliberate choice is kept"
+    assert pin_int8_kernels(tmp_path / "missing.json") is False
+    (tmp_path / "broken.json").write_text("{not json", encoding="utf-8")
+    assert pin_int8_kernels(tmp_path / "broken.json") is False
+
+
+
+def test_qwen_edit_with_the_lightning_lora_renders_in_8_steps_without_cfg() -> None:
+    """MEASURED 2026-10-04 on the RTX 4070: Qwen-Image-Edit-2511 int8 at 30 steps and
+    CFG 4 came back solid black (NaN, every pixel 0) after ~10 minutes; with the
+    Lightning 8-step LoRA at CFG 1 the same angle rendered cleanly in 148 s."""
+    bridge = _make_bridge(image_model_type="z_image")
+    captured: dict[str, object] = {}
+
+    def fake_run_manifest(*, manifest, media_suffixes, on_progress, is_cancelled):  # type: ignore[no-untyped-def]
+        captured["settings"] = manifest[0]["params"]
+        return ["E:/tmp/out.png"]
+
+    bridge._run_manifest = fake_run_manifest  # type: ignore[method-assign]
+    loras = [("E:/loras/qwen_image_edit/angles.safetensors", 0.9),
+             ("E:/loras/qwen_image_edit/Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors", 1.0)]
+    bridge.generate_images(prompt="<sks> back view eye-level shot wide shot", width=768, height=1024, num_steps=4, num_images=1, seed=7,
+                           on_progress=lambda *_a: None, is_cancelled=lambda: False, loras=loras,
+                           model_type="qwen_image_edit_plus2_20B", reference_images=["E:/tmp/hero.png"], reference_mode="KI")  # type: ignore[arg-type]
+    settings = captured["settings"]
+    assert isinstance(settings, dict)
+    assert settings["num_inference_steps"] == 8 and settings["guidance_scale"] == 1.0

@@ -21,6 +21,10 @@ from typing import Literal
 ANGLES_LORA_FOLDER = "qwen_image_edit"
 ANGLES_LORA_FILE = "qwen-image-edit-2511-multiple-angles-lora.safetensors"
 ANGLES_LORA_STRENGTH = 0.9
+#: lightx2v's 8-step distillation (Apache-2.0). MEASURED 2026-10-04 on the RTX 4070:
+#: without it, 30 steps at CFG 4 came back black (NaN) after ~10 minutes an angle;
+#: with it, a clean angle in 148 s. The bridge renders 8 steps at CFG 1 when present.
+LIGHTNING_LORA_FILE = "Qwen-Image-Edit-2511-Lightning-8steps-V1.0-bf16.safetensors"
 #: The WanGP model type of Qwen-Image-Edit-2511.
 QWEN_EDIT_2511 = "qwen_image_edit_plus2_20B"
 #: The setting value that picks Zero123++ (not a WanGP model).

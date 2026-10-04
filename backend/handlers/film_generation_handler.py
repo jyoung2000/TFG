@@ -53,7 +53,7 @@ from film.film_api_types import (
     UpdateAssetRequest,
 )
 from film.multi_angle import (
-    ANGLES_LORA_FILE, ANGLES_LORA_FOLDER, ANGLES_LORA_STRENGTH, QWEN_ANGLES_LABEL, QWEN_EDIT_2511, ZERO123PP, ZERO123PP_LABEL,
+    ANGLES_LORA_FILE, ANGLES_LORA_FOLDER, ANGLES_LORA_STRENGTH, LIGHTNING_LORA_FILE, QWEN_ANGLES_LABEL, QWEN_EDIT_2511, ZERO123PP, ZERO123PP_LABEL,
     AngleEngine, angle_prompt, sheet_angle_prompt,
 )
 from services.multiview import MultiViewGenerator
@@ -1421,8 +1421,8 @@ class FilmGenerationHandler(StateHandlerBase):
                 # FLUX.2's sheet turned only in words (its profile faced the camera, 2026-10-03).
                 chosen, score = self._best_render(
                     handler, GenerateImageRequest(prompt=turn, width=width, height=height, numImages=1, model=qwen.model,
-                                                  loras=[LoraUse(name=str(qwen.lora), multiplier=ANGLES_LORA_STRENGTH)]),
-                    seed=seed, references=[str(identity)], mode="KI", identity_vector=identity_vector,
+                                                  loras=self._qwen_loras(qwen.lora)),
+                    seed=seed, references=[str(identity)], mode="KI", identity_vector=identity_vector, candidates=1,
                 )
             elif identity is not None and reference_model:
                 lead = f"{ANGLE_SUBJECT}, {FACE_FROM.format(nth='second')}" if face else ANGLE_SUBJECT
@@ -1484,13 +1484,13 @@ class FilmGenerationHandler(StateHandlerBase):
 
     def _best_render(
         self, handler: ImageGenerationHandler, request: GenerateImageRequest, *, seed: int,
-        references: list[str] | None, mode: str, identity_vector: list[float] | None,
+        references: list[str] | None, mode: str, identity_vector: list[float] | None, candidates: int = FACE_CANDIDATES,
     ) -> tuple[Path, float | None]:
         """Render a view; with a face matcher, up to FACE_CANDIDATES seeds and keep
         the one whose face is closest to the identity photo (one close enough ends
         the search). A view with no face (a back view) keeps the first render."""
         matcher = self._faces()
-        count = FACE_CANDIDATES if matcher is not None and identity_vector else 1
+        count = candidates if matcher is not None and identity_vector else 1
         best: Path | None = None
         best_score: float | None = None
         for attempt in range(count):
@@ -1573,7 +1573,7 @@ class FilmGenerationHandler(StateHandlerBase):
             if engine.kind == "qwen" and engine.lora is not None:
                 # The LoRA turns the camera around the photo: no mannequin guide, no description.
                 prompt, references, mode = angle_prompt(shot.name), [str(identity)], "KI"
-                loras = [LoraUse(name=str(engine.lora), multiplier=ANGLES_LORA_STRENGTH)]
+                loras = self._qwen_loras(engine.lora)
             else:
                 references = people
                 mode = "I"
@@ -1590,6 +1590,8 @@ class FilmGenerationHandler(StateHandlerBase):
             chosen, score = self._best_render(
                 handler, GenerateImageRequest(prompt=prompt, width=width, height=height, numImages=1, model=model, loras=loras),
                 seed=seed, references=references, mode=mode, identity_vector=identity_vector,
+                # MEASURED 2026-10-04: Qwen 2511 int8 ~8 min an image at 30 steps (148 s with Lightning); one seed per angle.
+                candidates=1 if engine.kind == "qwen" else FACE_CANDIDATES,
             )
             scores.append(score)
             encoded = base64.b64encode(chosen.read_bytes()).decode("ascii")
@@ -2090,6 +2092,14 @@ class FilmGenerationHandler(StateHandlerBase):
             return None
         path = self._training.lora_root() / ANGLES_LORA_FOLDER / ANGLES_LORA_FILE
         return path if path.is_file() else None
+
+    def _qwen_loras(self, angles: Path) -> list[LoraUse]:
+        """The Multiple-Angles LoRA, plus the Lightning 8-step LoRA when it sits beside it."""
+        loras = [LoraUse(name=str(angles), multiplier=ANGLES_LORA_STRENGTH)]
+        lightning = angles.parent / LIGHTNING_LORA_FILE
+        if lightning.is_file():
+            loras.append(LoraUse(name=str(lightning), multiplier=1.0))
+        return loras
 
     def _angle_engines(self) -> dict[str, AngleEngine]:
         """Every multi-angle engine installed here, by its settings id."""

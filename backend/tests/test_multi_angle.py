@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from film.multi_angle import ANGLES_LORA_FILE, ANGLES_LORA_FOLDER, QWEN_EDIT_2511, angle_prompt, sheet_angle_prompt
+from film.multi_angle import ANGLES_LORA_FILE, ANGLES_LORA_FOLDER, LIGHTNING_LORA_FILE, QWEN_EDIT_2511, angle_prompt, sheet_angle_prompt
 from tests.test_asset_angles import FLUX2, _character, _image_params, _png
 from tests.test_training import PROJECT
 
@@ -181,4 +181,37 @@ def test_a_chosen_model_that_is_not_installed_falls_back(client, test_state, fak
     fake_services.wangp_bridge.definitions.append(FLUX2)
     client.post("/api/settings", json={"characterAngleModel": "qwen_image_edit_plus2_20B"})
     assert client.get("/api/film/multi-angle/status").json()["characters"] == "FLUX.2 Klein (flux2_klein_4b)"
+
+
+def test_qwen_renders_each_angle_once(client, test_state, fake_services, create_fake_model_files) -> None:
+    """MEASURED 2026-10-04 on the RTX 4070 (32 GB RAM): Qwen-Image-Edit-2511 int8 at
+    30 steps takes ~8 minutes an image; three seeds per angle (FLUX.2's face
+    re-roll) made four angles run past 90 minutes. Qwen renders each angle once."""
+    create_fake_model_files(include_zit=True)
+    asset = _character(client, test_state, fake_services)
+    _install_qwen_angles(test_state, fake_services)
+    matcher = fake_services.face_matcher
+    matcher.enabled = True
+    matcher.vectors = {"-front": [1.0, 0.0]}  # the identity photo
+    matcher.default = [0.3, 0.954]  # every render a weak match (0.3): FLUX.2 would try 3 seeds
+    before = len(_image_params(fake_services))
+    client.post(f"/api/film/projects/{PROJECT}/assets/{asset['id']}/angle-set", json={"shots": SHOTS, "seed": 5})
+    assert len(_image_params(fake_services)) - before == 2, "two angles, one render each"
+
+
+def test_with_the_lightning_lora_qwen_renders_each_angle_in_8_steps(client, test_state, fake_services, create_fake_model_files) -> None:
+    """MEASURED 2026-10-04: 30 steps at CFG 4 came back black (NaN) after ~10 minutes
+    an angle; the Lightning 8-step LoRA rendered a clean side view in 148 s."""
+    create_fake_model_files(include_zit=True)
+    asset = _character(client, test_state, fake_services)
+    angles = _install_qwen_angles(test_state, fake_services)
+    lightning = angles.parent / LIGHTNING_LORA_FILE
+    lightning.write_bytes(b"0" * 64)
+    before = len(_image_params(fake_services))
+    response = client.post(f"/api/film/projects/{PROJECT}/assets/{asset['id']}/angle-set", json={"shots": SHOTS, "seed": 5})
+    assert response.status_code == 200, response.text
+    params = _image_params(fake_services)[before:]
+    assert len(params) == 2
+    assert all([Path(p).resolve() for p in q["activated_loras"]] == [angles.resolve(), lightning.resolve()] for q in params)
+    assert all(q["num_inference_steps"] == 8 and q["guidance_scale"] == 1.0 for q in params)
 

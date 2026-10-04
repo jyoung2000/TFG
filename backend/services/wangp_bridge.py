@@ -52,8 +52,30 @@ IMG2IMG_MIN_STEPS = 24
 REFERENCE_IMAGE_MODEL_TYPES: tuple[str, ...] = ("flux2_klein_4b", "flux2_klein_9b", "flux2_dev", "qwen_image_edit_plus2_20B")
 #: Qwen-Image-Edit is not a few-step model: the app's default of 4 steps is noise.
 QWEN_EDIT_MIN_STEPS = 30
+#: Qwen-Image-Edit with a Lightning LoRA: its distilled step count, CFG off.
+QWEN_LIGHTNING_STEPS = 8
 #: A VACE render with a guide video needs no CFG and few steps (see `_vace_settings`).
 VACE_GUIDED_STEPS = 6
+
+def pin_int8_kernels(config_path: Path) -> bool:
+    """Use Triton when WanGP's INT8 math kernels are on "auto". WanGP's "auto"
+    picks Comfy Kitchen after a 256x256 probe that never reaches Kitchen's
+    cuBLASLt path; on this app's CUDA 12 torch the first real Qwen-Image
+    text-encoder matmul then failed: "cuBLASLt 13.x library not found (requires
+    CUDA 13+)" (2026-10-04). Triton worked and was faster on Z-Image (12.4 s vs
+    14.0 s warm). A deliberate choice (disabled / kitchen / triton) is kept."""
+    try:
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(data, dict) or cast(dict[str, object], data).get("int8_kernels", "auto") != "auto":
+        return False
+    config = cast(dict[str, object], data)
+    config["int8_kernels"] = "triton"
+    config_path.write_text(json.dumps(config, indent=4), encoding="utf-8")
+    logger.info("WanGP INT8 kernels: auto -> triton (%s)", config_path)
+    return True
+
 
 def _with_default_attention(args: tuple[str, ...]) -> tuple[str, ...]:
     """`--attention auto` unless the caller chose one: WanGP's saved config can
@@ -382,6 +404,9 @@ class WanGPBridge:
             settings["image_refs"] = [str(Path(p).resolve()) for p in reference_images]
 
         self._apply_loras(settings, loras)
+        if chosen.startswith("qwen_image_edit") and any("lightning" in Path(path).name.lower() for path, _ in loras):
+            settings["num_inference_steps"] = QWEN_LIGHTNING_STEPS
+            settings["guidance_scale"] = 1.0
         outputs = self._run_manifest(
             manifest=[{"id": 1, "params": settings, "plugin_data": {}}],
             media_suffixes={".png", ".jpg", ".jpeg", ".webp"},
@@ -571,9 +596,11 @@ class WanGPBridge:
         with self._session_lock:
             if self._session is None:
                 api_module = self._load_api_module()
+                config_path = self._resolve_session_config_path()
+                pin_int8_kernels(config_path)
                 self._session = api_module.WanGPSession(
                     root=status.root,
-                    config_path=self._resolve_session_config_path(),
+                    config_path=config_path,
                     output_dir=self._output_dir,
                     cli_args=self._extra_args,
                 )
