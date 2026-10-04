@@ -146,3 +146,30 @@ def test_the_lora_dataset_adds_a_face_close_up_of_each_matching_view(client, tes
     assert set(crops) == {"front-view-facecrop"}, "34-left's crop no longer matches; the profile is under 0.6; medium-front's face is too small"
     assert crops["front-view-facecrop"]["face_score"] == 0.96, "the crop's own match, shown on the Train screen"
     assert sum("front-view" in i["file"] for i in dataset["items"]) == 2, "the view itself stays: it carries the outfit"
+
+
+def test_the_lora_dataset_judges_a_side_face_by_its_view(client, test_state, fake_services, create_fake_model_files):
+    """MEASURED 2026-10-04 (r75, Qwen-Image-Edit-2511 angles of one photo, all
+    visibly the same woman): SFace scored the profiles 0.25 and 0.28 and two
+    three-quarter views 0.355/0.356 against SAME_PERSON 0.363, so the dataset lost
+    four of eight angles. SFace is a frontal-face matcher: a profile keeps its
+    score but is not filtered (as a back view); a three-quarter view needs 0.30."""
+    create_fake_model_files(include_zit=True)
+    asset = _raven(client, test_state, fake_services)
+    base = f"/api/film/projects/{PROJECT}/assets/{asset['id']}"
+    for name in ("Raven-full-profile-left", "Raven-full-34-left", "Raven-closeup-34-right", "Raven-full-34-right", "Raven-closeup-front"):
+        client.post(f"{base}/references", json={"image_base64": _png((1, 2, 3)), "name_hint": name})
+    matcher = fake_services.face_matcher
+    matcher.enabled = True
+    matcher.vectors = {
+        "full-profile-left": [0.25, 0.968],  # 0.25: a side face
+        "full-34-left": [0.355, 0.935],
+        "closeup-34-right": [0.1, 0.995],  # a stranger even for a three-quarter view
+        "full-34-right": [0.416, 0.909],
+        "closeup-front": [0.33, 0.944],  # a front view below SAME_PERSON: left out
+    }
+    files = [i["file"] for i in client.post(f"{base}/dataset", json={}).json()["items"]]
+    assert any("full-profile-left" in f for f in files)
+    assert any("full-34-left" in f for f in files) and any("full-34-right" in f for f in files)
+    assert not any("closeup-34-right" in f for f in files)
+    assert not any("closeup-front" in f for f in files)

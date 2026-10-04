@@ -297,6 +297,23 @@ def _decode_image(data: str) -> bytes:
     return base64.b64decode(payload)
 
 
+#: SFace matches frontal faces. MEASURED 2026-10-04 (r75): Qwen angles of one photo,
+#: all visibly the same woman, scored 0.25/0.28 in profile and 0.355/0.356 at three
+#: quarters against SAME_PERSON 0.363; strangers from FLUX.2 angles scored 0.1-0.25.
+THREE_QUARTER_SAME_PERSON = 0.30
+
+
+def _same_person_floor(image: str) -> float:
+    """The face score a generated view needs to stay in a LoRA dataset, by its view:
+    a profile is not judged (its score is kept, like a back view's absence)."""
+    stem = f"-{Path(image).stem.lower()}-"
+    if "-profile-" in stem:
+        return -1.0
+    if "-34-" in stem:
+        return THREE_QUARTER_SAME_PERSON
+    return SAME_PERSON
+
+
 def _saved_as(relative: str, name_hint: str) -> bool:
     """Whether a reference image was saved under `name_hint` (FilmStore keeps
     [A-Za-z0-9._-] and turns the rest into "-": "Raven QA (x)" -> "Raven-QA--x-")."""
@@ -1795,7 +1812,7 @@ class FilmGenerationHandler(StateHandlerBase):
             for image in images[1:]:
                 vector = self._face_vector(Path(image))
                 score = round(similarity(reference, vector), 4) if vector else None
-                if score is None or score >= SAME_PERSON:
+                if score is None or score >= _same_person_floor(image):
                     kept.append(image)
                     scores[image] = score
             images = kept
