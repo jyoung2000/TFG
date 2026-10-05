@@ -54,8 +54,14 @@ IMG2IMG_MIN_STEPS = 24
 #: Image models that compose from ordered reference images (`image_refs`):
 #: FLUX.2 ("KI" = scene first, then people/objects; "I" = people/objects), and
 #: Qwen-Image-Edit-2511 (same letters; WanGP models/qwen/qwen_handler.py) - last,
-#: so the few-step FLUX.2 stays the fallback for general compositing.
-REFERENCE_IMAGE_MODEL_TYPES: tuple[str, ...] = ("flux2_klein_4b", "flux2_klein_9b", "flux2_dev", "qwen_image_edit_plus2_20B")
+#: so the few-step FLUX.2 stays the fallback for general compositing. FLUX.1 USO Dev
+#: (style transfer, film/style_transfer.py) is last: it only redraws in a style.
+REFERENCE_IMAGE_MODEL_TYPES: tuple[str, ...] = ("flux2_klein_4b", "flux2_klein_9b", "flux2_dev", "qwen_image_edit_plus2_20B", "flux_dev_uso")
+#: `video_prompt_type` letters of a reference render: "KI" scene then people (USO:
+#: the content picture, then style pictures), "I" people only, "KIJ" (USO) styles only.
+REFERENCE_MODES: tuple[str, ...] = ("KI", "I", "KIJ")
+#: FLUX.1 Dev models (USO) are not few-step models: the app's default 4 steps is noise.
+FLUX1_DEV_MIN_STEPS = 28
 #: Qwen-Image-Edit is not a few-step model: the app's default of 4 steps is noise.
 QWEN_EDIT_MIN_STEPS = 30
 #: Qwen-Image-Edit with a Lightning LoRA: its distilled step count, CFG off.
@@ -188,6 +194,26 @@ class WanGPBridge:
             python_executable=self._python,
         )
 
+    def _checkpoint_roots(self) -> list[Path]:
+        """Where WanGP finds weights: ``ckpts``, then the config's other
+        ``checkpoints_paths`` (FLUX.1 USO lives on D: since 2026-10-05, C: is full)."""
+        assert self._root is not None
+        roots = [self._root / "ckpts"]
+        listed: object = []
+        try:
+            config: object = json.loads(self._resolve_session_config_path().read_text(encoding="utf-8"))
+            if isinstance(config, dict):
+                listed = cast(dict[str, object], config).get("checkpoints_paths", [])
+        except (OSError, ValueError):
+            pass
+        for entry in cast(list[object], listed) if isinstance(listed, list) else []:
+            if isinstance(entry, str) and entry.strip() not in ("", "."):
+                path = Path(entry.strip())
+                path = path if path.is_absolute() else self._root / path
+                if path.is_dir() and all(path.resolve() != r.resolve() for r in roots):
+                    roots.append(path)
+        return [r for r in roots if r.is_dir()]
+
     def list_model_definitions(self) -> list[dict[str, object]]:
         """Model definitions from the WanGP checkout (``defaults/*.json``) —
         the same files WanGP itself loads — plus whether their weights are
@@ -197,13 +223,12 @@ class WanGPBridge:
         defaults = self._root / "defaults"
         if not defaults.is_dir():
             return []
-        ckpts = self._root / "ckpts"
         existing: set[str] = set()
-        if ckpts.is_dir():
+        for ckpts in self._checkpoint_roots():
             try:
-                existing = {p.name for p in ckpts.rglob("*") if p.is_file()}
+                existing |= {p.name for p in ckpts.rglob("*") if p.is_file()}
             except OSError:
-                existing = set()
+                continue
         definitions: list[dict[str, object]] = []
         # A definition may name another model instead of listing files
         # (FastWan 5B: "URLs": "ti2v_2_2"); it uses that model's weights.
@@ -414,7 +439,7 @@ class WanGPBridge:
         if init_image:
             settings.update(self._img2img_settings(Path(init_image), denoise_strength, normalized_steps))
         elif reference_images:
-            settings["video_prompt_type"] = reference_mode if reference_mode in ("KI", "I") else "KI"
+            settings["video_prompt_type"] = reference_mode if reference_mode in REFERENCE_MODES else "KI"
             settings["image_refs"] = [str(Path(p).resolve()) for p in reference_images]
 
         self._apply_loras(settings, loras)
@@ -505,6 +530,8 @@ class WanGPBridge:
         chosen = model_type or self._image_model_type
         if chosen.startswith("qwen_image_edit"):
             return max(QWEN_EDIT_MIN_STEPS, normalized_steps)
+        if chosen.startswith("flux_dev"):
+            return max(FLUX1_DEV_MIN_STEPS, normalized_steps)
         if not chosen.startswith("z_image"):
             return normalized_steps
 

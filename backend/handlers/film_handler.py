@@ -203,6 +203,22 @@ def sync_composition_and_cast(project: FilmProject, shot: FilmShot, *, cast_is_a
     shot.framing = composition.framing
 
 
+#: What a style is made of, read from its pictures (user, 2026-10-05: "reverse
+#: engineers artstyle from an image"); each becomes a labelled style-guide trait.
+STYLE_FACETS: tuple[str, ...] = ("medium", "line_work", "shading", "texture", "lighting", "composition", "influences")
+STYLE_EXTRACTION_PROMPT = (
+    "You are an art director reverse-engineering an art style so an image model can reproduce it on any subject. "
+    "Describe HOW the images are drawn or rendered, never WHAT they show (no characters, objects, places or story). "
+    "If several images are given, describe only what they share. Return JSON ONLY: "
+    "{medium: '...', line_work: '...', shading: '...', texture: '...', lighting: '...', composition: '...', "
+    "influences: '...', key_traits: [...], color_palette: ['#hex or colour name', ...], mood: '...', "
+    "recommended_prompt: '...', description: '...'}. "
+    "recommended_prompt is one reusable style prompt of 25-60 words with no subject in it, "
+    "e.g. 'flat cel-shaded anime illustration, thin clean ink outlines, two-tone shadows, pastel palette, soft rim light'. "
+    "Be specific: name the medium, stroke, edge quality, shading method and palette. Mark uncertain details."
+)
+
+
 class FilmHandler(StateHandlerBase):
     def __init__(self, state: AppState, lock: RLock, film_root: Path) -> None:
         super().__init__(state, lock)
@@ -1145,20 +1161,29 @@ class FilmHandler(StateHandlerBase):
                 raise HTTPError(404, f"Asset not found: {asset_id}")
             if not asset.reference_images:
                 raise HTTPError(400, "Asset has no reference image to analyze")
-            ref_relative = asset.reference_images[0]
-        try:
-            ref_path = self._store.resolve_media_path(project_id, ref_relative)
-        except FilmStoreError as exc:
-            raise HTTPError(400, str(exc)) from exc
-        if not ref_path.is_file():
-            raise HTTPError(400, f"Reference image not found: {ref_relative}")
-
-        raw = ref_path.read_bytes()
-        encoded = base64.b64encode(raw).decode("ascii")
-        mime = "image/png" if ref_path.suffix.lower() == ".png" else "image/jpeg"
-        data_url = f"data:{mime};base64,{encoded}"
+            # A style is read from up to three of its pictures: what they share is the style.
+            ref_relatives = asset.reference_images[:3] if asset.kind == "style" else asset.reference_images[:1]
+            kind = asset.kind
+        data_urls: list[str] = []
+        for ref_relative in ref_relatives:
+            try:
+                ref_path = self._store.resolve_media_path(project_id, ref_relative)
+            except FilmStoreError as exc:
+                raise HTTPError(400, str(exc)) from exc
+            if not ref_path.is_file():
+                raise HTTPError(400, f"Reference image not found: {ref_relative}")
+            encoded = base64.b64encode(ref_path.read_bytes()).decode("ascii")
+            mime = "image/png" if ref_path.suffix.lower() == ".png" else "image/jpeg"
+            data_urls.append(f"data:{mime};base64,{encoded}")
 
         messages = [
+            LLMMessage(role="system", content=STYLE_EXTRACTION_PROMPT),
+            LLMMessage(
+                role="user",
+                content=f"Reverse-engineer the art style of {'these images' if len(data_urls) > 1 else 'this image'}.",
+                images=data_urls,
+            ),
+        ] if kind == "style" else [
             LLMMessage(
                 role="system",
                 content=(
@@ -1171,7 +1196,7 @@ class FilmHandler(StateHandlerBase):
             LLMMessage(
                 role="user",
                 content="Analyze this reference image.",
-                images=[data_url],
+                images=data_urls,
             ),
         ]
 
@@ -1209,6 +1234,8 @@ class FilmHandler(StateHandlerBase):
         key_traits: list[str] = []
         raw_traits = parsed.get("key_traits", [])
         key_traits = clean_list(raw_traits)
+        # A style's anatomy (STYLE_EXTRACTION_PROMPT) leads its traits, labelled.
+        key_traits = [f"{label}: {text}" for label, text in ((k.replace("_", " "), clean_text(parsed.get(k, ""))) for k in STYLE_FACETS) if text] + key_traits
 
         color_palette: list[str] = []
         raw_palette = parsed.get("color_palette", [])

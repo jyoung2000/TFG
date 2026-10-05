@@ -64,6 +64,17 @@ def strip_mentions(text: str, assets: Sequence[FilmAsset]) -> str:
     return "".join(parts)
 
 
+def mentioned_styles(project: FilmProject, shot: FilmShot) -> list[FilmAsset]:
+    """The style assets the shot's text mentions, in order: the art style its
+    frame is drawn in (film/style_transfer.py)."""
+    out: list[FilmAsset] = []
+    for field in ("description", "action", "visual_prompt", "dialogue"):
+        for asset in mentioned_assets(getattr(shot, field), project.assets):
+            if asset.kind == "style" and all(a.id != asset.id for a in out):
+                out.append(asset)
+    return out
+
+
 def with_mentions(project: FilmProject, shot: FilmShot) -> FilmShot:
     """A copy of `shot` with every asset its text mentions in its cast (characters,
     props; the location when it has none) and its text read without the `@`."""

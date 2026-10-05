@@ -428,6 +428,14 @@ export const filmApi = {
           { method: 'POST', body: JSON.stringify({}) },
         ).then(r => r.asset),
 
+  /** Redraw a shot's frame (and end frame) or a project image in a style asset's art style:
+   *  FLUX.1 USO Dev when installed, else FLUX.2 Klein. `targetAssetId` keeps the result as that asset's image. */
+  applyStyle: (projectId: string, styleId: string, body: { shot_id?: string; image_path?: string; subject?: string; target_asset_id?: string }) =>
+    request<{ image_path: string; model: string; style_images: string[]; shot: FilmShot | null; asset: FilmAsset | null }>(
+      `/api/film/projects/${enc(projectId)}/assets/${enc(styleId)}/apply-style`,
+      { method: 'POST', body: JSON.stringify(body) },
+    ),
+
   /** Render a reference image for an asset with the project's image model. */
   generateAssetReference: (projectId: string, assetId: string, prompt = '', view = '') =>
     request<{ asset: FilmAsset; prompt: string; provider: string; model: string; reference_path: string }>(

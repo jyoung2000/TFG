@@ -127,6 +127,12 @@ class TasteHandler(StateHandlerBase):
             return False
         return any(v.vote < 0 and _same_file(v.file, path) for v in self._store.all())
 
+    def liked(self, path: str) -> bool:
+        """Whether the user graded this file up (and learning is on)."""
+        if not self.learning():
+            return False
+        return any(v.vote > 0 and _same_file(v.file, path) for v in self._store.all())
+
     def liked_renders(self, lora_file: str) -> list[str]:
         """Images the user graded up that were made with this LoRA."""
         if not self.learning() or not lora_file:

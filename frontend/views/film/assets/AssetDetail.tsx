@@ -38,6 +38,7 @@ export function AssetDetail({ asset, onBack, onOpenLightbox, onOpenStudio }: {
   const [generating, setGenerating] = useState(false)
   const [generatingGuide, setGeneratingGuide] = useState(false)
   const [busySheet, setBusySheet] = useState(false)
+  const [styling, setStyling] = useState(false)
   useEffect(() => { setDraft({}) }, [asset.id])
   const c = consistencyOf(asset)
   const meta = KIND_META[asset.kind]
@@ -80,6 +81,21 @@ export function AssetDetail({ asset, onBack, onOpenLightbox, onOpenStudio }: {
     catch (e) { setNote('Style guide failed: ' + (e instanceof Error ? e.message : String(e))) }
     finally { setGeneratingGuide(false) }
   }, [film, asset, refresh])
+
+  // A style asset redraws another asset's picture or a shot's frame in its art style.
+  const applyStyle = useCallback(async (target: string) => {
+    if (!film || !target) return
+    const [kind, id] = target.split(':')
+    const other = kind === 'asset' ? film.assets.find(a => a.id === id) : undefined
+    setStyling(true); setNote(`Redrawing in ${asset.name}…`)
+    try {
+      const result = await filmApi.applyStyle(film.id, asset.id, kind === 'shot'
+        ? { shot_id: id }
+        : { image_path: other?.reference_images[0] ?? '', target_asset_id: id, subject: other?.name ?? '' })
+      await refresh(); setNote(`Restyled with ${result.model === 'flux_dev_uso' ? 'FLUX.1 USO' : 'FLUX.2 Klein'}`)
+    } catch (e) { setNote('Failed: ' + (e instanceof Error ? e.message : String(e))) }
+    finally { setStyling(false) }
+  }, [film, asset.id, asset.name, refresh])
 
   const sheet = useCallback(async () => {
     if (!film) return
@@ -135,9 +151,22 @@ export function AssetDetail({ asset, onBack, onOpenLightbox, onOpenStudio }: {
         {asset.kind !== 'style' && (
           <button onClick={() => void makeDataset()} disabled={busyDataset || asset.reference_images.length === 0} data-testid="asset-make-dataset" title="Render the angles a LoRA needs (Qwen for characters, Zero123++ for objects), then turn the images into a LoRA training dataset" className="flex items-center gap-1 px-2 py-1 rounded bg-emerald-800/70 hover:bg-emerald-700 disabled:opacity-40 text-[10px] text-emerald-100">{busyDataset ? <Loader2 className="h-3 w-3 animate-spin" /> : <GraduationCap className="h-3 w-3" />} LoRA dataset</button>
         )}
+        {asset.kind === 'style' && (
+          <select value="" disabled={styling || asset.reference_images.length === 0} onChange={e => void applyStyle(e.target.value)} data-testid="apply-style"
+            title="Redraw a character, prop or location image, or a shot's frame, in this art style (FLUX.1 USO, else FLUX.2 Klein)"
+            className="px-2 py-1 rounded bg-fuchsia-900/70 text-[10px] text-fuchsia-100 disabled:opacity-40">
+            <option value="">{styling ? 'Restyling…' : 'Apply style to…'}</option>
+            <optgroup label="Assets (the result is added to them)">
+              {film.assets.filter(a => a.kind !== 'style' && a.reference_images.length > 0).map(a => <option key={a.id} value={`asset:${a.id}`}>{a.name}</option>)}
+            </optgroup>
+            <optgroup label="Shot frames">
+              {film.scenes.flatMap(sc => sc.shots.filter(s => s.frame_path).map(s => <option key={s.id} value={`shot:${s.id}`}>{sc.title} — {s.title || s.id}</option>))}
+            </optgroup>
+          </select>
+        )}
         <button onClick={() => void addReference()} className="flex items-center gap-1 px-2 py-1 rounded bg-zinc-800 hover:bg-zinc-700 text-[10px] text-zinc-300"><ImagePlus className="h-3 w-3" /> Add image</button>
         <button onClick={() => void generateReference()} disabled={generating} className="flex items-center gap-1 px-2 py-1 rounded bg-violet-800/70 hover:bg-violet-700 disabled:opacity-40 text-[10px] text-violet-100">{generating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Sparkles className="h-3 w-3" />} Generate image</button>
-        <button onClick={() => void generateStyleGuide()} disabled={generatingGuide || asset.reference_images.length === 0} title="Analyze reference image with vision AI" className="flex items-center gap-1 px-2 py-1 rounded bg-amber-800/70 hover:bg-amber-700 disabled:opacity-40 text-[10px] text-amber-100">{generatingGuide ? <Loader2 className="h-3 w-3 animate-spin" /> : <Wand2 className="h-3 w-3" />} {asset.style_guide ? 'Regenerate style guide' : 'Generate style guide'}</button>
+        <button onClick={() => void generateStyleGuide()} disabled={generatingGuide || asset.reference_images.length === 0} title={asset.kind === 'style' ? 'Reverse-engineer the art style from its images (medium, line work, shading, palette) with vision AI' : 'Analyze reference image with vision AI'} className="flex items-center gap-1 px-2 py-1 rounded bg-amber-800/70 hover:bg-amber-700 disabled:opacity-40 text-[10px] text-amber-100">{generatingGuide ? <Loader2 className="h-3 w-3 animate-spin" /> : <Wand2 className="h-3 w-3" />} {asset.style_guide ? 'Regenerate style guide' : 'Generate style guide'}</button>
       </div>
 
       <div className="flex flex-1 min-h-0 overflow-y-auto">

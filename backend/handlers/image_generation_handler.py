@@ -150,7 +150,8 @@ class ImageGenerationHandler(StateHandlerBase):
         preferred = preferred.strip() or self._config.wangp_image_model_type
         if preferred in REFERENCE_IMAGE_MODEL_TYPES and self._wangp_bridge.weights_installed(preferred) is not False:
             return preferred
-        return next((m for m in REFERENCE_IMAGE_MODEL_TYPES if self._wangp_bridge.weights_installed(m) is True), None)
+        # USO only redraws in a style (film/style_transfer.py); it composes no cast.
+        return next((m for m in REFERENCE_IMAGE_MODEL_TYPES if m != "flux_dev_uso" and self._wangp_bridge.weights_installed(m) is True), None)
 
     def cancel_current(self) -> None:
         """Cancel whatever image generation is running (used by the Reproduce loop)."""

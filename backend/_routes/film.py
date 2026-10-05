@@ -10,6 +10,8 @@ from fastapi.responses import FileResponse
 from _routes._errors import HTTPError
 from api_types import StatusResponse
 from film.film_api_types import (
+    ApplyStyleRequest,
+    ApplyStyleResponse,
     AddAssetReferenceRequest,
     AssetDatasetRequest,
     AssetResponse,
@@ -508,6 +510,20 @@ def route_film_media(
 
 
 # ---- Style guide ---------------------------------------------------------
+
+
+@router.post(
+    "/projects/{project_id}/assets/{asset_id}/apply-style",
+    response_model=ApplyStyleResponse,
+)
+def route_apply_style(
+    project_id: str,
+    asset_id: str,
+    req: ApplyStyleRequest,
+    handler: AppHandler = Depends(get_state_service),
+) -> ApplyStyleResponse:
+    """Redraw a shot's frame or a project image in this style asset's art style."""
+    return handler.film_generation.apply_style(project_id, asset_id, req)
 
 
 @router.post(

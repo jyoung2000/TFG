@@ -31,6 +31,8 @@ from PIL import Image
 
 from film.film_api_types import (
     AddAssetReferenceRequest,
+    ApplyStyleRequest,
+    ApplyStyleResponse,
     BatchGenerateRequest,
     BatchGenerateResponse,
     SkippedShot,
@@ -76,7 +78,8 @@ from film.film_models import (
     VersionKind,
     now_ms,
 )
-from film.asset_mentions import with_mentions
+from film.asset_mentions import mentioned_styles, with_mentions
+from film.style_transfer import STYLE_TRANSFER_MODELS, USO_MODEL, USO_STEPS, pick_style_images, style_slots, style_text, transfer_mode, transfer_prompt
 from film.film_prompt import synthesize_negative_prompt, synthesize_prompt
 from handlers.base import StateHandlerBase
 from handlers.film_handler import FilmHandler
@@ -1711,20 +1714,23 @@ class FilmGenerationHandler(StateHandlerBase):
         frame_file = captures / f"{shot.id}-frame.png"
         end_relative = ""
         cast = self._style_cast(project, shot)
+        # `@Style` in the shot: the frame is drawn in that saved art style.
+        styles = mentioned_styles(project, stored)
+        look = style_text(styles[0]) if styles else ""
         style = self._style_composer() if cast else None
         if cast and style is not None:
             # Qwen-Image-Edit composes the cast from their style-guide images (user,
             # 2026-10-04: "ensure the videos are accurate to the styleguide"): the
             # image-to-video model takes its people from this frame.
             size = (1360, 768) if landscape else (768, 1360)
-            frame_file.write_bytes(self._compose_frame(handler, style, prompt, cast, size).read_bytes())
+            frame_file.write_bytes(self._compose_frame(handler, style, prompt, cast, size, look=look).read_bytes())
             if shot.action.strip():
                 # The end of the shot, from the start frame and the same people: the
                 # video ends on the style guide too.
                 end_prompt = (f"The same shot a few seconds later, at the end of: {shot.action.strip()}. "
                               "The same place, camera angle, framing and lighting as picture 1")
                 end_file = captures / f"{shot.id}-frame-end.png"
-                end_file.write_bytes(self._compose_frame(handler, style, end_prompt, cast[:2], size, scene=frame_file).read_bytes())
+                end_file.write_bytes(self._compose_frame(handler, style, end_prompt, cast[:2], size, scene=frame_file, look=look).read_bytes())
                 end_relative = f"captures/{shot.id}-frame-end.png"
         else:
             references = self._cast_references(project, shot)
@@ -1740,6 +1746,14 @@ class FilmGenerationHandler(StateHandlerBase):
             if response.status != "complete" or not paths:
                 raise HTTPError(502, "The image model did not return a frame")
             frame_file.write_bytes(Path(paths[0]).read_bytes())
+        if styles and styles[0].reference_images:
+            # Then redrawn in the style from its pictures (USO, else Klein): the words
+            # alone gave a photo whatever the style said.
+            model = self._style_model()
+            if model is not None:
+                for file in [frame_file, *([captures / f"{shot.id}-frame-end.png"] if end_relative else [])]:
+                    out, _ = self._restyle(handler, model, project_id, styles[0], file)
+                    file.write_bytes(out.read_bytes())
         with self.lock:
             project = self._film.store.load(project_id)
             found = project.find_shot(shot_id)
@@ -1775,7 +1789,7 @@ class FilmGenerationHandler(StateHandlerBase):
 
     def _compose_frame(
         self, handler: ImageGenerationHandler, loras: list[LoraUse], prompt: str, cast: list[tuple[str, str, Path]],
-        size: tuple[int, int], *, scene: Path | None = None,
+        size: tuple[int, int], *, scene: Path | None = None, look: str = "",
     ) -> Path:
         """One Qwen-Image-Edit frame of `prompt` with the cast from their pictures
         (after `scene`, the picture of the place, when given)."""
@@ -1787,7 +1801,7 @@ class FilmGenerationHandler(StateHandlerBase):
         )
         references = ([str(scene)] if scene is not None else []) + [str(path) for _, _, path in cast]
         response = handler.generate(
-            GenerateImageRequest(prompt=f"{prompt.rstrip('. ')}. {who}. A photorealistic film still.", width=size[0], height=size[1],
+            GenerateImageRequest(prompt=f"{prompt.rstrip('. ')}. {who}. {f'A film still in this art style: {look}' if look else 'A photorealistic film still'}.", width=size[0], height=size[1],
                                  numImages=1, model=QWEN_EDIT_2511, loras=loras),
             reference_images=references, reference_mode="KI" if scene is not None else "I",
         )
@@ -1795,6 +1809,120 @@ class FilmGenerationHandler(StateHandlerBase):
         if response.status != "complete" or not paths:
             raise HTTPError(502, "The image model did not return a frame")
         return Path(paths[0])
+
+    def _style_model(self) -> str | None:
+        """The installed style-transfer model, best first (film/style_transfer.py)."""
+        handler = self._image_generation
+        if handler is None:
+            return None
+        return next((m for m in STYLE_TRANSFER_MODELS if handler.model_installed(m)), None)
+
+    def _style_images(self, project_id: str, style: FilmAsset, count: int) -> list[str]:
+        """`count` of the style's pictures on disk, the user's grades deciding which."""
+        paths: list[str] = []
+        for relative in style.reference_images:
+            try:
+                path = self._film.store.resolve_media_path(project_id, relative)
+            except Exception:  # noqa: BLE001 - a stale path is simply not a style picture
+                continue
+            if path.is_file():
+                paths.append(str(path))
+        taste = self._taste
+        return pick_style_images(
+            paths, count=count,
+            rejected=taste.rejected if taste is not None else (lambda _: False),
+            liked=taste.liked if taste is not None else (lambda _: False),
+        )
+
+    def _restyle(
+        self, handler: ImageGenerationHandler, model: str, project_id: str, style: FilmAsset, source: Path,
+        *, subject: str = "", seed: int | None = None,
+    ) -> tuple[Path, list[str]]:
+        """`source` redrawn in `style` by `model`: the picture first, then the style's."""
+        images = self._style_images(project_id, style, style_slots(model))
+        if not images:
+            raise HTTPError(400, f"The style {style.name} has no pictures: add an image of the art style first")
+        with Image.open(source) as opened:
+            width, height = opened.size
+        scale = min(1.0, 1360 / max(width, height))
+        width, height = max(256, int(width * scale) // 16 * 16), max(256, int(height * scale) // 16 * 16)
+        request = GenerateImageRequest(
+            prompt=transfer_prompt(model, style_text(style), subject=subject, styles=len(images)),
+            width=width, height=height, numImages=1, model=model, faceLock=False, outfitLock=False,
+            numSteps=USO_STEPS if model == USO_MODEL else 4,
+        )
+        response = handler.generate(
+            request, seed=seed, reference_images=[str(source), *images], reference_mode=transfer_mode(model, has_content=True),
+        )
+        paths = response.image_paths or []
+        if response.status != "complete" or not paths:
+            raise HTTPError(502, "The image model did not return the restyled picture")
+        return Path(paths[0]), images
+
+    def apply_style(self, project_id: str, style_id: str, req: ApplyStyleRequest) -> ApplyStyleResponse:
+        """A picture redrawn in a saved style: a shot's frame (and end frame), or a
+        project image, kept in captures; the original stays on disk."""
+        handler = self._image_generation
+        if handler is None:  # pragma: no cover - wired in AppHandler
+            raise HTTPError(500, "Local image generation is not available in this build")
+        project = self._film.get_project(project_id)
+        style = project.asset(style_id)
+        if style is None:
+            raise HTTPError(404, f"Asset not found: {style_id}")
+        if style.kind != "style":
+            raise HTTPError(400, f"{style.name} is a {style.kind}, not a style")
+        model = self._style_model()
+        if model is None:
+            raise HTTPError(400, "No style-transfer model is installed: download FLUX.1 USO Dev or FLUX.2 Klein in the Models tab")
+        relatives: list[str] = []
+        if req.shot_id:
+            found = project.find_shot(req.shot_id)
+            if found is None:
+                raise HTTPError(404, f"Shot not found: {req.shot_id}")
+            if not found[1].frame_path:
+                raise HTTPError(400, "The shot has no frame yet: generate its frame first")
+            relatives = [found[1].frame_path, *([found[1].end_frame_path] if found[1].end_frame_path else [])]
+        elif req.image_path.strip():
+            relatives = [req.image_path.strip()]
+        else:
+            raise HTTPError(400, "Pick a shot or an image to restyle")
+        if req.target_asset_id and project.asset(req.target_asset_id) is None:
+            raise HTTPError(404, f"Asset not found: {req.target_asset_id}")
+        captures = self._film.store.captures_dir(project_id)
+        captures.mkdir(parents=True, exist_ok=True)
+        slug = re.sub(r"[^a-z0-9]+", "-", style.name.lower()).strip("-") or "style"
+        made: list[str] = []
+        used: list[str] = []
+        for relative in relatives:
+            try:
+                source = self._film.store.resolve_media_path(project_id, relative)
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPError(400, f"Image not found: {relative}") from exc
+            if not source.is_file():
+                raise HTTPError(400, f"Image not found: {relative}")
+            out, used = self._restyle(handler, model, project_id, style, source, subject=req.subject, seed=req.seed)
+            name = f"{Path(relative).stem}-{slug}-{now_ms()}.png"
+            (captures / name).write_bytes(out.read_bytes())
+            made.append(f"captures/{name}")
+        with self.lock:
+            project = self._film.store.load(project_id)
+            shot: FilmShot | None = None
+            asset: FilmAsset | None = None
+            if req.shot_id:
+                found = project.find_shot(req.shot_id)
+                if found is not None:
+                    shot = found[1]
+                    shot.frame_path = made[0]
+                    if len(made) > 1:
+                        shot.end_frame_path = made[1]
+                    shot.updated_at = now_ms()
+            if req.target_asset_id:
+                asset = project.asset(req.target_asset_id)
+                if asset is not None:
+                    asset.reference_images.append(made[0])
+                    asset.updated_at = now_ms()
+            self._film.store.save(project)
+        return ApplyStyleResponse(image_path=made[0], model=model, style_images=used, shot=shot, asset=asset)
 
     def generate_frames(self, project_id: str, req: FramesRequest) -> FramesResponse:
         """Storyboard frames for every shot (by default only those with no

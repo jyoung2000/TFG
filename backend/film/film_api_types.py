@@ -811,3 +811,28 @@ class VisualReviewResponse(BaseModel):
     previous_frame_path: str = ""
     current_frame_path: str = ""
     context: DirectorContextDetails | None = None
+
+
+class ApplyStyleRequest(BaseModel):
+    """Redraw a picture in a saved style asset's art style (film/style_transfer.py).
+    The picture is a shot's storyboard frame (`shot_id`; its end frame too) or a
+    project image (`image_path`, relative to the project)."""
+
+    shot_id: str = ""
+    image_path: str = ""
+    #: What the picture shows, for the prompt ("" = keep whatever it shows).
+    subject: str = ""
+    #: Add the result to this asset's reference images (e.g. a character drawn in the style).
+    target_asset_id: str = ""
+    seed: int | None = None
+
+
+class ApplyStyleResponse(BaseModel):
+    #: The restyled picture, relative to the project.
+    image_path: str
+    #: The image model that drew it (FLUX.1 USO Dev, else FLUX.2 Klein).
+    model: str
+    #: The style's pictures it was given (graded-up first, graded-down never).
+    style_images: list[str] = Field(default_factory=list[str])
+    shot: FilmShot | None = None
+    asset: FilmAsset | None = None
