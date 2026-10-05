@@ -58,8 +58,8 @@ IMG2IMG_MIN_STEPS = 24
 #: (style transfer, film/style_transfer.py) is last: it only redraws in a style.
 REFERENCE_IMAGE_MODEL_TYPES: tuple[str, ...] = ("flux2_klein_4b", "flux2_klein_9b", "flux2_dev", "qwen_image_edit_plus2_20B", "flux_dev_uso")
 #: `video_prompt_type` letters of a reference render: "KI" scene then people (USO:
-#: the content picture, then style pictures), "I" people only, "KIJ" (USO) styles only.
-REFERENCE_MODES: tuple[str, ...] = ("KI", "I", "KIJ")
+#: the content picture, then the style picture), "I" people only, "IJ" (USO) styles only.
+REFERENCE_MODES: tuple[str, ...] = ("KI", "I", "IJ")
 #: FLUX.1 Dev models (USO) are not few-step models: the app's default 4 steps is noise.
 FLUX1_DEV_MIN_STEPS = 28
 #: Qwen-Image-Edit is not a few-step model: the app's default of 4 steps is noise.

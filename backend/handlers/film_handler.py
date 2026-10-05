@@ -51,7 +51,7 @@ from film.film_continuity import (
     continuity_level,
     shot_continuity_report,
 )
-from film.style_extraction import STYLE_EXTRACTION_PROMPT, STYLE_FACETS
+from film.style_extraction import STYLE_EXTRACTION_PROMPT, STYLE_FACETS, style_prompt_of
 from film.film_models import (
     CompositionObject,
     CompositionTransform,
@@ -1250,7 +1250,7 @@ class FilmHandler(StateHandlerBase):
             if description:
                 asset.description = description
             if asset.kind == "style" and recommended_prompt:
-                asset.style_prompt = recommended_prompt
+                asset.style_prompt = style_prompt_of(asset.style_guide)
             asset.updated_at = now_ms()
             self._save(project)
             return asset

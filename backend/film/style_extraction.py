@@ -71,6 +71,22 @@ def style_guide_of(parsed: dict[str, object]) -> FilmAssetStyleGuide:
     )
 
 
+#: The facets a style prompt is made of: how it is drawn, not how a picture is framed.
+PROMPT_FACETS: tuple[str, ...] = ("medium", "line work", "shading", "texture", "lighting", "influences")
+
+
+def style_prompt_of(guide: FilmAssetStyleGuide) -> str:
+    """A subject-free style prompt from the guide's facets and palette. MEASURED
+    2026-10-05: qwen2.5vl:7b's own recommended_prompt named the picture's subject
+    ("a figure holding an umbrella") and every render in the style drew one."""
+    facets = [t.split(":", 1)[1].strip() for t in guide.key_traits
+              if ":" in t and t.split(":", 1)[0].strip().lower() in PROMPT_FACETS and t.split(":", 1)[1].strip()]
+    if not facets:
+        return guide.recommended_prompt
+    palette = f"palette of {', '.join(guide.color_palette[:5])}" if guide.color_palette else ""
+    return ", ".join([*facets, *([palette] if palette else [])])
+
+
 def read_style(provider: LLMProvider, data_urls: list[str]) -> FilmAssetStyleGuide:
     """The art style the pictures (data URLs, up to three) share."""
     messages = [

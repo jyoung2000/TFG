@@ -6,9 +6,13 @@ consistently like a LoRA without being a lora").
 
 A style asset is its pictures plus the words the vision model read from them
 (`FilmAsset.style_prompt`, `style_guide`). A transfer gives the image model both:
-FLUX.1 USO Dev (built for style transfer: "KI" = the content picture, then up to two
-style pictures; "KIJ" = style pictures only) when installed, else FLUX.2 Klein
-("KI" = the picture to redraw, then the style picture).
+FLUX.1 USO Dev (built for style transfer) when installed, else FLUX.2 Klein ("KI" =
+the picture to redraw, then the style picture).
+
+USO's letters (WanGP models/flux/flux_main.py): with "J" every reference is a style
+picture; otherwise only the LAST one is, the others are content. "K" sizes the canvas
+from the first reference, so a render from style pictures alone is "IJ" (MEASURED
+2026-10-05: "KIJ" drew a 16:9 request at the 4:3 of the style picture).
 
 The user's grades steer which of a style's pictures are used: graded up first,
 graded down never (film/taste.py).
@@ -26,8 +30,6 @@ USO_MODEL = "flux_dev_uso"
 STYLE_TRANSFER_MODELS: tuple[str, ...] = (USO_MODEL, "flux2_klein_9b", "flux2_klein_4b")
 #: FLUX.1 Dev is not a few-step model: 4 steps is noise; ~28 is its usual count.
 USO_STEPS = 28
-#: Style pictures a model takes beside the content picture.
-_STYLE_SLOTS = {USO_MODEL: 2}
 
 
 def style_text(style: FilmAsset) -> str:
@@ -37,7 +39,9 @@ def style_text(style: FilmAsset) -> str:
     head = style.style_prompt.strip() or (guide.recommended_prompt.strip() if guide else "")
     bits = [head] if head else []
     if guide is not None:
-        bits += [t.strip() for t in guide.key_traits if t.strip() and t.strip().lower() not in head.lower()]
+        # "composition: a figure in the foreground" is what a picture shows, not its style.
+        bits += [t.strip() for t in guide.key_traits
+                 if t.strip() and t.strip().lower() not in head.lower() and not t.strip().lower().startswith("composition:")]
         if guide.color_palette:
             bits.append("palette: " + ", ".join(c.strip() for c in guide.color_palette if c.strip()))
         if guide.mood.strip():
@@ -45,8 +49,10 @@ def style_text(style: FilmAsset) -> str:
     return "; ".join(bits) or style.name.strip()
 
 
-def style_slots(model: str) -> int:
-    return _STYLE_SLOTS.get(model, 1)
+def style_slots(model: str, *, has_content: bool = True) -> int:
+    """Style pictures a render takes: USO reads two when they are all it gets,
+    one beside a content picture (the last reference); Klein one."""
+    return 2 if model == USO_MODEL and not has_content else 1
 
 
 def pick_style_images(
@@ -60,7 +66,7 @@ def pick_style_images(
 def transfer_mode(model: str, *, has_content: bool) -> str:
     """WanGP's `video_prompt_type` letters for a transfer."""
     if model == USO_MODEL:
-        return "KI" if has_content else "KIJ"
+        return "KI" if has_content else "IJ"
     return "KI" if has_content else "I"
 
 

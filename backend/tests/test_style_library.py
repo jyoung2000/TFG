@@ -44,7 +44,8 @@ def _local(test_state, fake_services, *models: dict) -> None:
 
 def test_a_style_is_saved_from_pictures_and_read_by_the_vision_ai(client, test_state, monkeypatch):
     style = _save(client, test_state, monkeypatch, pictures=4)
-    assert style["style_prompt"] == WATERCOLOR and style["style_guide"]["key_traits"][:2] == ["medium: watercolor", "line work: thin sepia ink"]
+    assert style["style_prompt"] == "watercolor, thin sepia ink, palette of sage", "built from the facets, never the subject"
+    assert style["style_guide"]["recommended_prompt"] == WATERCOLOR and style["style_guide"]["key_traits"][:2] == ["medium: watercolor", "line work: thin sepia ink"]
     assert len(style["images"]) == 4
     listed = client.get("/api/styles").json()["styles"]
     assert [s["id"] for s in listed] == [style["id"]]
@@ -71,9 +72,9 @@ def test_an_image_in_a_style_is_drawn_by_uso_from_its_pictures(client, test_stat
     response = client.post("/api/generate-image", json={"prompt": "a lighthouse at dusk", "width": 1024, "height": 576, "styleId": style["id"]})
     assert response.status_code == 200, response.text
     (params,) = _image_params(fake_services)[before:]
-    assert params["model_type"] == USO_MODEL and params["video_prompt_type"] == "KIJ", "style pictures only: no content picture"
+    assert params["model_type"] == USO_MODEL and params["video_prompt_type"] == "IJ", "style pictures only; the canvas is the request size"
     assert len(params["image_refs"]) == 2 and params["num_inference_steps"] == USO_STEPS
-    assert params["prompt"].startswith("a lighthouse at dusk. Art style: " + WATERCOLOR)
+    assert params["prompt"].startswith("a lighthouse at dusk. Art style: watercolor, thin sepia ink")
 
 
 def test_without_uso_the_image_is_rendered_then_redrawn_by_klein(client, test_state, fake_services, create_fake_model_files, monkeypatch):
@@ -84,7 +85,7 @@ def test_without_uso_the_image_is_rendered_then_redrawn_by_klein(client, test_st
     response = client.post("/api/generate-image", json={"prompt": "a lighthouse at dusk", "styleId": style["id"]})
     assert response.status_code == 200, response.text
     render, redraw = _image_params(fake_services)[before:]
-    assert "Art style: " + WATERCOLOR in render["prompt"]
+    assert "Art style: watercolor, thin sepia ink" in render["prompt"]
     assert redraw["model_type"] == "flux2_klein_4b" and redraw["video_prompt_type"] == "KI" and len(redraw["image_refs"]) == 2
 
 
@@ -106,7 +107,7 @@ def test_a_video_in_a_style_starts_on_a_frame_drawn_in_it(client, test_state, fa
     assert frame["model_type"] == USO_MODEL and frame["resolution"] == "576x1024"
     (req,) = seen
     assert req.imagePath and Path(req.imagePath).is_file(), "the video starts on the styled frame"
-    assert "Art style: " + WATERCOLOR in req.prompt and req.styleId == ""
+    assert "Art style: watercolor, thin sepia ink" in req.prompt and req.styleId == ""
 
 
 def test_a_video_from_an_image_starts_on_that_image_redrawn(client, test_state, fake_services, create_fake_model_files, monkeypatch, tmp_path: Path):

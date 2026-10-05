@@ -54,7 +54,7 @@ def test_the_style_in_words_is_its_prompt_then_its_guide() -> None:
 
 
 def test_uso_takes_the_picture_then_two_styles_klein_one() -> None:
-    assert transfer_mode(USO_MODEL, has_content=True) == "KI" and transfer_mode(USO_MODEL, has_content=False) == "KIJ"
+    assert transfer_mode(USO_MODEL, has_content=True) == "KI" and transfer_mode(USO_MODEL, has_content=False) == "IJ"
     assert transfer_mode("flux2_klein_4b", has_content=True) == "KI"
     klein = transfer_prompt("flux2_klein_4b", "pastel watercolor")
     assert "picture 1" in klein and "picture 2: pastel watercolor" in klein and "not its content" in klein
@@ -104,7 +104,7 @@ def test_a_picture_is_redrawn_in_the_style_by_uso_from_its_pictures(client, test
     assert params["model_type"] == USO_MODEL and params["video_prompt_type"] == "KI"
     assert params["num_inference_steps"] == USO_STEPS, "FLUX.1 Dev is not a 4-step model"
     refs = [Path(p).name for p in params["image_refs"]]
-    assert refs[0] == Path(raven["reference_images"][0]).name and len(refs) == 3, "the picture, then two style pictures"
+    assert refs[0] == Path(raven["reference_images"][0]).name and len(refs) == 2, "USO reads only the last reference as the style"
     assert "soft watercolor" in params["prompt"]
     assert body["model"] == USO_MODEL and body["image_path"].startswith("captures/") and "ghibli-watercolor" in body["image_path"]
     assert body["asset"]["reference_images"][-1] == body["image_path"], "kept as the character drawn in the style"
@@ -164,7 +164,7 @@ def test_a_mentioned_style_draws_the_shot_frame_in_it(client, test_state, fake_s
     assert Path(start["image_refs"][0]).name == Path(raven["reference_images"][0]).name
     for restyle, frame in ((restyle_start, "-frame.png"), (restyle_end, "-frame-end.png")):
         assert restyle["model_type"] == USO_MODEL and Path(restyle["image_refs"][0]).name.endswith(frame)
-        assert {Path(p).name for p in restyle["image_refs"][1:]} == {Path(p).name for p in style["reference_images"]}
+        assert [Path(p).name for p in restyle["image_refs"][1:]] == [Path(style["reference_images"][0]).name]
     assert _find_shot(client, shot_id)["frame_path"].endswith("-frame.png")
 
 
@@ -212,4 +212,5 @@ def test_a_style_is_reverse_engineered_from_its_pictures(client, test_state, mon
     traits = asset["style_guide"]["key_traits"]
     assert traits[:3] == ["medium: watercolor on cold-press paper", "line work: thin sepia ink outlines", "shading: soft wet-on-wet washes"]
     assert "visible paper grain" in traits and not any(t.startswith("texture") for t in traits)
-    assert asset["style_prompt"].startswith("watercolor illustration")
+    assert asset["style_prompt"] == "watercolor on cold-press paper, thin sepia ink outlines, soft wet-on-wet washes, palette of sage, sky blue"
+    assert asset["style_guide"]["recommended_prompt"].startswith("watercolor illustration")

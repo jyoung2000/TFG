@@ -26,7 +26,7 @@ from _routes._errors import HTTPError
 from api_types import GenerateImageRequest, GenerateImageResponse, GenerateVideoRequest
 from film.film_models import FilmAsset, FilmAssetStyleGuide, new_id, now_ms
 from film.llm_providers import LLMProvider
-from film.style_extraction import StyleReadError, read_style
+from film.style_extraction import StyleReadError, read_style, style_prompt_of
 from film.style_transfer import STYLE_TRANSFER_MODELS, USO_MODEL, USO_STEPS, pick_style_images, style_slots, style_text, transfer_mode, transfer_prompt
 from handlers.image_generation_handler import ImageGenerationHandler
 from handlers.taste_handler import TasteHandler
@@ -117,7 +117,7 @@ class StyleLibraryHandler:
                 style.style_guide = read_style(provider, data_urls)
             except StyleReadError as exc:
                 raise HTTPError(502, str(exc)) from exc
-            style.style_prompt = style.style_guide.recommended_prompt
+            style.style_prompt = style_prompt_of(style.style_guide)
         with self._lock:
             self._write([*self._read(), style])
         return style
@@ -156,7 +156,7 @@ class StyleLibraryHandler:
         look = style_text(self._asset(style))
         styled = req.model_copy(update={"prompt": f"{req.prompt.strip().rstrip('.')}. Art style: {look}", "styleId": ""})
         model = self._transfer_model()
-        if model == USO_MODEL and (pictures := self._pictures(style, style_slots(USO_MODEL))):
+        if model == USO_MODEL and (pictures := self._pictures(style, style_slots(USO_MODEL, has_content=False))):
             return self._images.generate(
                 styled.model_copy(update={"model": USO_MODEL, "numSteps": max(req.numSteps, USO_STEPS), "faceLock": False}),
                 reference_images=pictures, reference_mode=transfer_mode(USO_MODEL, has_content=False),
