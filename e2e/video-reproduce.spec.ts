@@ -55,9 +55,11 @@ test.describe('Video reproduce', () => {
     await other.click()
     await expect(other).toHaveAttribute('aria-pressed', 'true')
 
-    const before = await page.getByTestId('video-reproduce-stitched').locator('video').getAttribute('src')
+    // The panel shows the original beside the stitched take (aaeefbd): pick the take by its label.
+    const stitched = page.getByTestId('video-reproduce-stitched').getByLabel('Stitched reproduction')
+    const before = await stitched.getAttribute('src')
     await page.getByRole('button', { name: 'Stitch picks' }).click()
-    await expect.poll(async () => page.getByTestId('video-reproduce-stitched').locator('video').getAttribute('src')).not.toBe(before)
+    await expect.poll(async () => stitched.getAttribute('src')).not.toBe(before)
     await settle(page, 1200)
     await expectMediaIntact(page, guard, { minVideos: shotCount + 1 })
   })
