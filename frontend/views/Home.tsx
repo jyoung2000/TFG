@@ -1,6 +1,6 @@
 import { APP_NAME } from "../lib/brand";
 import { useState } from 'react'
-import { Clapperboard, FileVideo, Image as ImageIcon, Layers, Plus, Folder, MoreVertical, Trash2, Pencil, Sparkles, Zap, History } from 'lucide-react'
+import { Clapperboard, FileVideo, Image as ImageIcon, Layers, Palette, Plus, Folder, MoreVertical, Trash2, Pencil, Sparkles, Zap, History } from 'lucide-react'
 import { useProjects } from '../contexts/ProjectContext'
 import { LtxLogo } from '../components/LtxLogo'
 import { Button } from '../components/ui/button'
@@ -182,6 +182,7 @@ export function Home() {
               { label: 'Create', hint: 'Quick video', icon: <Zap className="h-4 w-4" />, onClick: openQuickMode },
               { label: 'Reproduce image', hint: '', icon: <ImageIcon className="h-4 w-4" />, onClick: () => setCurrentView('analyze-image') },
               { label: 'Reproduce video', hint: '', icon: <FileVideo className="h-4 w-4" />, onClick: openAnalyzeVideo },
+              { label: 'Save style', hint: 'from image', icon: <Palette className="h-4 w-4" />, onClick: () => setCurrentView('styles') },
               { label: 'Train', hint: 'LoRA', icon: <Layers className="h-4 w-4" />, onClick: () => openTrain() },
               { label: 'History', hint: '', icon: <History className="h-4 w-4" />, onClick: openHistory },
             ] as const).map(item => (

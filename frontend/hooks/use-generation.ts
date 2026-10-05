@@ -176,6 +176,9 @@ export function useGeneration(): UseGenerationReturn {
       if (settings.loras?.length) {
         body.loras = settings.loras
       }
+      if (settings.styleId) {
+        body.styleId = settings.styleId
+      }
 
       // Poll for real progress from backend with time-based interpolation
       let lastPhase = ''
@@ -413,6 +416,7 @@ export function useGeneration(): UseGenerationReturn {
           numImages,
           loras: settings.loras ?? [],
           faceLock: settings.faceLock ?? true,
+          styleId: settings.styleId ?? '',
         }),
         signal: abortControllerRef.current.signal,
       })

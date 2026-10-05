@@ -43,6 +43,7 @@ from _routes.suggest_gap_prompt import router as suggest_gap_prompt_router
 from _routes.retake import router as retake_router
 from _routes.runtime_policy import router as runtime_policy_router
 from _routes.settings import router as settings_router
+from _routes.styles import router as styles_router
 from logging_policy import install_secret_redaction, log_http_error, log_unhandled_exception, redact_secrets
 from state import init_state_service
 
@@ -168,6 +169,7 @@ def _include_all_routers(app: FastAPI) -> None:
         film_router, film_generation_router, film_director_router, video_analysis_router, video_reproduce_router,
         scene_router, training_router, wangp_router, knowledge_router, jobs_router, vision_router, reproduce_router,
         prompts_router, shot_library_router, timeline_router, taste_router, model_store_router, model_search_router,
+        styles_router,
     ):
         app.include_router(router)
 

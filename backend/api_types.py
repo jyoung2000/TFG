@@ -299,6 +299,8 @@ class GenerateVideoRequest(BaseModel):
     controlStrength: float | None = None
     #: WanGP video model to render with; None = chosen from `model` (fast/pro).
     wangpModel: str | None = None
+    #: A saved style (handlers/style_library_handler.py): the video starts on a frame in it.
+    styleId: str = ""
 
 
 class GenerateImageRequest(BaseModel):
@@ -317,6 +319,8 @@ class GenerateImageRequest(BaseModel):
     #: With faceLock: first re-compose the character's outfit from the style
     #: sheet's front view (medium and full shots; close-ups and profiles keep theirs).
     outfitLock: bool = True
+    #: A saved style (handlers/style_library_handler.py) to draw the image in.
+    styleId: str = ""
 
 
 class ModelDownloadRequest(BaseModel):

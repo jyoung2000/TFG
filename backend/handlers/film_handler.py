@@ -51,6 +51,7 @@ from film.film_continuity import (
     continuity_level,
     shot_continuity_report,
 )
+from film.style_extraction import STYLE_EXTRACTION_PROMPT, STYLE_FACETS
 from film.film_models import (
     CompositionObject,
     CompositionTransform,
@@ -201,22 +202,6 @@ def sync_composition_and_cast(project: FilmProject, shot: FilmShot, *, cast_is_a
     if composition.framing.ots_subject_id and composition.framing.ots_subject_id not in valid_ids:
         composition.framing.ots_subject_id = None
     shot.framing = composition.framing
-
-
-#: What a style is made of, read from its pictures (user, 2026-10-05: "reverse
-#: engineers artstyle from an image"); each becomes a labelled style-guide trait.
-STYLE_FACETS: tuple[str, ...] = ("medium", "line_work", "shading", "texture", "lighting", "composition", "influences")
-STYLE_EXTRACTION_PROMPT = (
-    "You are an art director reverse-engineering an art style so an image model can reproduce it on any subject. "
-    "Describe HOW the images are drawn or rendered, never WHAT they show (no characters, objects, places or story). "
-    "If several images are given, describe only what they share. Return JSON ONLY: "
-    "{medium: '...', line_work: '...', shading: '...', texture: '...', lighting: '...', composition: '...', "
-    "influences: '...', key_traits: [...], color_palette: ['#hex or colour name', ...], mood: '...', "
-    "recommended_prompt: '...', description: '...'}. "
-    "recommended_prompt is one reusable style prompt of 25-60 words with no subject in it, "
-    "e.g. 'flat cel-shaded anime illustration, thin clean ink outlines, two-tone shadows, pastel palette, soft rim light'. "
-    "Be specific: name the medium, stroke, edge quality, shading method and palette. Mark uncertain details."
-)
 
 
 class FilmHandler(StateHandlerBase):

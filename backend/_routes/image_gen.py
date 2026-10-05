@@ -17,7 +17,8 @@ def route_generate_image(
     handler: AppHandler = Depends(get_state_service),
 ) -> GenerateImageResponse:
     """POST /api/generate-image."""
-    response = handler.image_generation.generate(req)
+    # A saved style draws the image in it (handlers/style_library_handler.py).
+    response = handler.styles.generate_image(req) if req.styleId else handler.image_generation.generate(req)
     if req.faceLock and req.loras and response.status == "complete" and response.image_paths:
         locked = handler.film_generation.sheet_lock(response.image_paths, req.loras, outfit=req.outfitLock)
         if locked is not None:

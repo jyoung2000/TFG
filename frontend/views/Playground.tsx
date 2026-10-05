@@ -19,6 +19,7 @@ import { useAppSettings } from '../contexts/AppSettingsContext'
 import { fileUrlToPath } from '../lib/url-to-path'
 import { sanitizeForcedApiVideoSettings } from '../lib/api-video-options'
 import { RetakePanel } from '../components/RetakePanel'
+import { StylePicker } from '../components/StylePicker'
 
 const DEFAULT_SETTINGS: GenerationSettings = {
   model: 'fast',
@@ -36,6 +37,8 @@ const DEFAULT_SETTINGS: GenerationSettings = {
 
 export function Playground() {
   const { goHome } = useProjects()
+  // The generator's Settings | Style tabs (components/StylePicker.tsx).
+  const [panelTab, setPanelTab] = useState<'settings' | 'style'>('settings')
   const { forceApiGenerations, shouldVideoGenerateWithLtxApi } = useAppSettings()
   const [mode, setMode] = useState<GenerationMode>('text-to-video')
   const [prompt, setPrompt] = useState('')
@@ -253,16 +256,37 @@ export function Playground() {
               disabled={isBusy}
             />
 
-            {/* Settings */}
+            {/* Settings | Style */}
             {!isRetakeMode && (
-              <SettingsPanel
-                settings={settings}
-                onSettingsChange={setSettings}
-                disabled={isBusy}
-                mode={mode}
-                forceApiGenerations={shouldVideoGenerateWithLtxApi}
-                hasAudio={!!selectedAudio}
-              />
+              <div className="space-y-3">
+                <div className="flex gap-1 rounded-lg border border-zinc-800 bg-zinc-900 p-1" role="tablist" aria-label="Generator options">
+                  {(['settings', 'style'] as const).map(tab => (
+                    <button key={tab} role="tab" aria-selected={panelTab === tab} onClick={() => setPanelTab(tab)} data-testid={`panel-tab-${tab}`}
+                      className={`flex-1 rounded-md px-3 py-1.5 text-xs font-medium transition-colors ${panelTab === tab ? 'bg-white text-zinc-900' : 'text-zinc-500 hover:bg-zinc-800/50 hover:text-zinc-300'}`}>
+                      {tab === 'settings' ? 'Settings' : settings.styleId ? 'Style ●' : 'Style'}
+                    </button>
+                  ))}
+                </div>
+                {panelTab === 'settings' ? (
+                  <SettingsPanel
+                    settings={settings}
+                    onSettingsChange={setSettings}
+                    disabled={isBusy}
+                    mode={mode}
+                    forceApiGenerations={shouldVideoGenerateWithLtxApi}
+                    hasAudio={!!selectedAudio}
+                  />
+                ) : (
+                  <div className="space-y-2">
+                    <p className="text-xs text-zinc-400">
+                      {mode === 'text-to-image'
+                        ? 'The image is drawn in the style from its pictures.'
+                        : 'The video starts on a frame in the style (your image redrawn, or one drawn from the prompt).'}
+                    </p>
+                    <StylePicker value={settings.styleId ?? ''} onChange={id => setSettings({ ...settings, styleId: id || undefined })} disabled={isBusy} />
+                  </div>
+                )}
+              </div>
             )}
 
             {/* Error Display */}

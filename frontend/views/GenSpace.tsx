@@ -6,6 +6,7 @@ import {
   ChevronLeft, ChevronRight, Copy, Check, Layers
 } from 'lucide-react'
 import { LoraPicker } from '../components/LoraPicker'
+import { StyleButton } from '../components/StylePicker'
 import type { LoraUse } from '../types/training'
 import { imageLoraLabel } from '../lib/faceLock'
 import { ThumbVote } from '../components/ThumbVote'
@@ -390,6 +391,8 @@ function PromptBar({
   onFaceLockChange,
   faceMatch,
   likedPhrases,
+  styleId,
+  onStyleChange,
 }: {
   mode: 'image' | 'video' | 'retake'
   onModeChange: (mode: 'image' | 'video' | 'retake') => void
@@ -423,6 +426,9 @@ function PromptBar({
   faceMatch: string
   /** Prompt phrases the user's thumbs up favour (lib/taste.ts). */
   likedPhrases: TastePhrase[]
+  /** The saved style the image or video is drawn in ('' = none). */
+  styleId: string
+  onStyleChange: (styleId: string) => void
 }) {
   const inputRef = useRef<HTMLInputElement>(null)
   const audioInputRef = useRef<HTMLInputElement>(null)
@@ -636,6 +642,8 @@ function PromptBar({
         
         <div className="flex-1" />
         
+        {!isRetake && <StyleButton value={styleId} onChange={onStyleChange} disabled={isGenerating} />}
+
         {isRetake ? (
           <div className="text-[10px] text-zinc-500 pr-2">Trim in the panel above, then retake</div>
         ) : mode === 'image' ? (
@@ -920,6 +928,7 @@ export function GenSpace() {
   // Image mode: registry LoRAs and face lock (frontend/lib/faceLock.ts).
   const [imageLoras, setImageLoras] = useState<LoraUse[]>([])
   const [faceLock, setFaceLock] = useState(true)
+  const [styleId, setStyleId] = useState('')
   // What the user's thumbs up say they like, offered as one-click prompt phrases.
   const [likedPhrases, setLikedPhrases] = useState<TastePhrase[]>([])
   useEffect(() => {
@@ -1215,6 +1224,7 @@ export function GenSpace() {
           variations: settings.variations,
           loras: imageLoras,
           faceLock,
+          styleId,
         }
       )
     } else {
@@ -1239,6 +1249,7 @@ export function GenSpace() {
           imageResolution: videoSettings.imageResolution,
           imageAspectRatio: videoSettings.aspectRatio,
           imageSteps: videoSettings.imageSteps,
+          styleId,
         },
         audioPath,
       )
@@ -1528,6 +1539,8 @@ export function GenSpace() {
           onFaceLockChange={setFaceLock}
           faceMatch={faceMatch}
           likedPhrases={likedPhrases}
+          styleId={styleId}
+          onStyleChange={setStyleId}
         />
       </div>
       

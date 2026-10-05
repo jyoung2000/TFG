@@ -30,6 +30,7 @@ import { registerProjectOpsRoutes } from './routes/project-ops'
 import { registerQueueRoutes, tickQueue } from './routes/queue'
 import { registerJobRoutes, tickJobs } from './routes/jobs'
 import { registerVisionRoutes } from './routes/vision'
+import { registerStyleRoutes } from './routes/styles'
 import { registerReproduceRoutes, tickReproduce } from './routes/reproduce'
 import { registerVideoReproduceRoutes, tickVideoReproduce } from './routes/video-reproduce'
 import { registerSceneRoutes } from './routes/scene'
@@ -75,6 +76,7 @@ export function createMockBackend(options: MockBackendOptions = {}): MockBackend
   registerTimelineRoutes(router, store)
   registerJobRoutes(router, store)
   registerVisionRoutes(router, store)
+  registerStyleRoutes(router)
   registerReproduceRoutes(router, store)
   registerVideoReproduceRoutes(router, store, options.clipUrl ?? '')
   registerSceneRoutes(router)

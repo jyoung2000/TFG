@@ -19,6 +19,7 @@ const Project = lazy(() => import('./views/Project').then(m => ({ default: m.Pro
 const Playground = lazy(() => import('./views/Playground').then(m => ({ default: m.Playground })))
 const QuickMode = lazy(() => import('./views/QuickMode').then(m => ({ default: m.QuickMode })))
 const AnalyzeVideo = lazy(() => import('./views/AnalyzeVideo').then(m => ({ default: m.AnalyzeVideo })))
+const StyleLibrary = lazy(() => import('./views/StyleLibrary').then(m => ({ default: m.StyleLibrary })))
 const ImageReproduce = lazy(() => import('./views/reproduce/ImageReproduce').then(m => ({ default: m.ImageReproduce })))
 const TrainView = lazy(() => import('./views/train/TrainView').then(m => ({ default: m.TrainView })))
 const HistoryView = lazy(() => import('./views/history/HistoryView').then(m => ({ default: m.HistoryView })))
@@ -478,6 +479,8 @@ function AppContent() {
         return <AnalyzeVideo />
       case 'analyze-image':
         return <ImageReproduce />
+      case 'styles':
+        return <StyleLibrary />
       case 'history':
         return <HistoryView />
       case 'train':

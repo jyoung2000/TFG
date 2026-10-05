@@ -39,6 +39,7 @@ from handlers.reproduce_handler import ReproduceHandler
 from handlers.video_reproduce_handler import VideoReproduceHandler
 from handlers.scene_handler import SceneHandler
 from handlers.training_handler import TrainingHandler
+from handlers.style_library_handler import StyleLibraryHandler
 from handlers.taste_handler import TasteHandler
 from handlers.wangp_server_handler import WanGPServerHandler
 from services.face_match import FaceMatcher
@@ -493,6 +494,7 @@ class AppHandler:
             film=self.film,
         )
         self.film_generation.attach_taste(self.taste)
+        self.styles = StyleLibraryHandler(root=config.outputs_dir / "styles", image_generation=self.image_generation, taste=self.taste)
         self.film_generation.attach_multiview(self._multiview)
 
         self.film_director = FilmDirectorHandler(

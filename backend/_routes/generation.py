@@ -26,7 +26,8 @@ def route_generate(
     handler: AppHandler = Depends(get_state_service),
 ) -> GenerateVideoResponse:
     """POST /api/generate — video generation from JSON body."""
-    return handler.video_generation.generate(req)
+    # A saved style: the video starts on a frame drawn in it (handlers/style_library_handler.py).
+    return handler.video_generation.generate(handler.styles.styled_video(req) if req.styleId else req)
 
 
 @router.post("/generate/cancel", response_model=CancelResponse)
