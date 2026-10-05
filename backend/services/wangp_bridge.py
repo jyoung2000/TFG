@@ -356,7 +356,8 @@ class WanGPBridge:
         )
         if not outputs:
             raise RuntimeError("WanGP completed without producing a video")
-        return outputs[0]
+        # A sliding-window render saves each window as it ends; the last file is the whole video.
+        return outputs[-1]
 
     @staticmethod
     def _apply_loras(settings: dict[str, object], loras: Sequence[tuple[str, float]]) -> None:

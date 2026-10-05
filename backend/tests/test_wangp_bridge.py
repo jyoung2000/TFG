@@ -352,3 +352,17 @@ def test_a_storyboard_frame_renders_at_1360x768_with_qwen_edit() -> None:
     bridge = _make_bridge(image_model_type="z_image")
     assert bridge._map_image_resolution(1360, 768, "qwen_image_edit_plus2_20B") == (1360, 768)
     assert bridge._map_image_resolution(768, 1360, "qwen_image_edit_plus2_20B") == (768, 1360)
+
+
+def test_a_sliding_window_render_returns_the_whole_video_not_its_first_window() -> None:
+    """MEASURED 2026-10-04: a 10 s Wan 2.2 I2V render (161 frames, 2 windows of 129)
+    saved the first window (8.1 s) at 21:11:48 and the whole video at 21:17:26; the
+    app handed back the first file."""
+    bridge = _make_bridge()
+    bridge._run_manifest = lambda **_k: ["E:/tmp/window-1.mp4", "E:/tmp/whole.mp4"]  # type: ignore[method-assign]
+    output = bridge.generate_video(
+        prompt="a walk", resolution_label="540p", aspect_ratio="16:9", duration_seconds=10, fps=24, steps=4, seed=1,
+        camera_motion="none", negative_prompt="", image_path=None, audio_path=None,
+        on_progress=lambda *_args: None, is_cancelled=lambda: False, model_type="i2v_2_2_Enhanced_Lightning_v2",
+    )
+    assert output == "E:/tmp/whole.mp4"
