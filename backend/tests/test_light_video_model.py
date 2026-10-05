@@ -155,3 +155,36 @@ class TestVaceRendersAtItsNativeFps:
         params = _last_params(fake_services)
         assert params["model_type"] == "vace_1.3B"
         assert params["force_fps"] == 16 and params["video_length"] == 161
+
+
+class TestWan22Lightning:
+    """User, 2026-10-04: Wan 2.2 Image2video 14B "Enhanced Lightning v2" for fast,
+    consistent shots: 16 fps like every Wan 14B model, 4 steps from its definition,
+    and no more than 720p on the 12 GB card."""
+
+    _WAN = "i2v_2_2_Enhanced_Lightning_v2"
+
+    def _setup(self, test_state, fake_services) -> None:
+        _enable(test_state, fake_services)
+        fake_services.wangp_bridge.definitions.append({"id": self._WAN, "name": "Wan2.2 Image2video Enhanced Lightning v2 14B", "installed": True, "default_steps": 4})
+
+    def test_the_settings_video_model_renders_locally(self, client, test_state, fake_services, tmp_path):
+        self._setup(test_state, fake_services)
+        assert client.post("/api/settings", json={"defaultVideoModel": self._WAN}).status_code == 200
+        from PIL import Image
+
+        start = tmp_path / "start.png"
+        Image.new("RGB", (64, 36), (90, 60, 50)).save(start)
+        response = client.post("/api/generate", json={**_T2V, "model": "pro", "resolution": "1080p", "duration": "5", "imagePath": str(start)})
+        assert response.status_code == 200, response.text
+        params = _last_params(fake_services)
+        assert params["model_type"] == self._WAN
+        assert params["force_fps"] == 16 and params["video_length"] == 81
+        assert params["num_inference_steps"] == 4
+        assert params["resolution"] == "1280x704", "1080p capped at 720p for Wan 14B"
+
+    def test_a_settings_model_that_is_not_installed_is_ignored(self, client, test_state, fake_services):
+        _enable(test_state, fake_services)
+        client.post("/api/settings", json={"defaultVideoModel": "kling-v2"})
+        client.post("/api/generate", json={**_T2V, "model": "pro"})
+        assert _last_params(fake_services)["model_type"] == test_state.config.wangp_video_model_type

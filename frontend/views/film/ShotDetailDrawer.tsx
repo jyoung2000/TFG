@@ -35,6 +35,10 @@ import type {
 import { CAMERA_MOVES, CONTINUITY_LEVEL_META, SHOT_STATUS_META, VISUAL_REVIEW_META, framingLabel } from '../../types/film'
 import { useShotWorkflow } from './useShotWorkflow'
 import { ThumbVote } from '../../components/ThumbVote'
+import { AssetMentionTextarea } from '../../components/ui/AssetMentionTextarea'
+import { useMentionAssets } from './useMentionAssets'
+
+const MENTION_PLACEHOLDER = 'Type @ to reference a character, prop or location from your style guides'
 
 /** What the local host renders with. The quality profile varies; the family does not. */
 const LOCAL_VIDEO_MODEL = 'ltx-2'
@@ -62,6 +66,7 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
   const { film, refresh, capabilities, isGenerating, setShotContinuity } = useFilm()
   const workflow = useShotWorkflow(scene, shot)
   const projectId = film?.id ?? ''
+  const mentionAssets = useMentionAssets()
   // Only what this project could actually render with — a prompt for every
   // model in the catalog would be noise. `default_model` is deliberately absent:
   // it holds a quality profile ("fast", "pro"), not a model id, and the local
@@ -497,10 +502,13 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
             />
           </Row>
           <Row label="Action / what happens">
-            <textarea
+            <AssetMentionTextarea
               className={`${inputClass} resize-none h-14`}
               value={draft.action}
-              onChange={e => setDraft(d => ({ ...d, action: e.target.value }))}
+              onChange={action => setDraft(d => ({ ...d, action }))}
+              assets={mentionAssets}
+              placeholder={MENTION_PLACEHOLDER}
+              data-testid="shot-action"
             />
           </Row>
           <Row label="Dialogue">
@@ -550,10 +558,13 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
             </Row>
           </div>
           <Row label={shot.prompt_locked ? 'Visual prompt (edited — locked)' : 'Visual prompt (auto-synthesized)'}>
-            <textarea
+            <AssetMentionTextarea
               className={`${inputClass} resize-none h-20 font-mono text-[10px] leading-snug`}
               value={draft.visual_prompt}
-              onChange={e => setDraft(d => ({ ...d, visual_prompt: e.target.value }))}
+              onChange={visual_prompt => setDraft(d => ({ ...d, visual_prompt }))}
+              assets={mentionAssets}
+              placeholder={MENTION_PLACEHOLDER}
+              data-testid="shot-visual-prompt"
             />
           </Row>
           {/* Editable here too (QA 2026-10-01: nowhere in the storyboard edited them). */}

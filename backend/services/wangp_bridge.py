@@ -35,9 +35,13 @@ _QWEN_IMAGE_RESOLUTIONS: tuple[tuple[int, int], ...] = (
     (928, 1664),
     (1472, 1140),
     (1140, 1472),
-    # ~1 MP: Qwen-Image-Edit fits it to the reference's shape (LoRA dataset angles).
-    (1024, 1024),
 )
+#: ~1 MP sizes Qwen-Image-Edit renders as asked: LoRA dataset angles (1024x1024,
+#: fitted to the photo's shape) and style-guide storyboard frames (16:9 / 9:16).
+_QWEN_EDIT_EXACT: frozenset[tuple[int, int]] = frozenset({(1024, 1024), (1360, 768), (768, 1360)})
+#: Wan 14B models (2.1 and 2.2) are 16 fps models; on the 12 GB card they render
+#: at 720p at most (1080p would not fit their latents beside the weights).
+_WAN_14B_PREFIXES: tuple[str, ...] = ("i2v", "t2v", "vace_14B")
 #: Image models WanGP can run img2img with: FLUX.2's "Masked Denoising"
 #: inpaint mode starts from the guide image's latents when
 #: `denoising_strength` < 1 (models/flux/sampling.py:629-639). Z-Image has no
@@ -288,9 +292,12 @@ class WanGPBridge:
         model_type: str | None = None,
     ) -> str:
         chosen = (model_type or "").strip() or self._video_model_type
+        wan_14b = chosen.startswith(_WAN_14B_PREFIXES)
+        if wan_14b and resolution_label in ("1080p", "1440p", "2160p"):
+            resolution_label = "720p"
         resolution = self._map_video_resolution(resolution_label, aspect_ratio)
         merged_prompt = prompt + self._camera_motion_prompts.get(camera_motion, "")
-        if chosen.startswith("vace"):
+        if chosen.startswith("vace") or wan_14b:
             # A 16 fps model: at 24 fps a 10 s shot is 241 frames, at 16 it is 161.
             fps = 16
         video_length = self.compute_num_frames(duration_seconds, fps)
@@ -469,6 +476,8 @@ class WanGPBridge:
         """Qwen renders at its native presets; the model rendering decides, not
         the configured default (a Qwen angle render while Z-Image is the default)."""
         if "qwen_image" not in (model_type or self._image_model_type):
+            return width, height
+        if (width, height) in _QWEN_EDIT_EXACT and "qwen_image_edit" in (model_type or self._image_model_type):
             return width, height
 
         requested_ratio = width / max(height, 1)

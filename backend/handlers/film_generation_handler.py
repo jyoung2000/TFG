@@ -76,6 +76,7 @@ from film.film_models import (
     VersionKind,
     now_ms,
 )
+from film.asset_mentions import with_mentions
 from film.film_prompt import synthesize_negative_prompt, synthesize_prompt
 from handlers.base import StateHandlerBase
 from handlers.film_handler import FilmHandler
@@ -312,6 +313,21 @@ def _same_person_floor(image: str) -> float:
     if "-34-" in stem:
         return THREE_QUARTER_SAME_PERSON
     return SAME_PERSON
+
+
+def lora_fits(target: str, model_type: str) -> bool:
+    """Whether a LoRA trained for `target` (film/training_models.py LORA_TARGETS)
+    belongs on `model_type`: same model family only."""
+    model = model_type.lower()
+    family = (
+        "ltx2" if model.startswith("ltx2") else
+        "z_image" if model.startswith("z_image") else
+        "flux" if model.startswith("flux") else
+        "qwen_image" if model.startswith("qwen_image") else
+        "wan22" if "_2_2" in model else
+        ""
+    )
+    return bool(family) and family == target
 
 
 def _saved_as(relative: str, name_hint: str) -> bool:
@@ -632,6 +648,7 @@ class FilmGenerationHandler(StateHandlerBase):
         scene_and_shot = project.find_shot(shot.id)
         assert scene_and_shot is not None
         scene = scene_and_shot[0]
+        shot = with_mentions(project, shot)
 
         prompt = shot.visual_prompt if shot.prompt_locked and shot.visual_prompt else synthesize_prompt(project, scene, shot)
         negative = synthesize_negative_prompt(project, shot)
@@ -660,8 +677,14 @@ class FilmGenerationHandler(StateHandlerBase):
                 wardrobe_snapshot[asset.id] = asset.wardrobe
 
         capture_path = shot.capture_path if generation.use_capture_as_reference else ""
+        if not capture_path and shot.frame_path:
+            # The storyboard frame (composed from the style guide) starts the video.
+            capture_path = shot.frame_path
         if req is not None and req.capture_path:
             capture_path = req.capture_path
+        end_capture_path = req.end_capture_path if req is not None else ""
+        if not end_capture_path and shot.end_frame_path and capture_path == shot.frame_path:
+            end_capture_path = shot.end_frame_path
         seed = generation.seed
         if req is not None and req.seed is not None:
             seed = req.seed
@@ -694,7 +717,7 @@ class FilmGenerationHandler(StateHandlerBase):
             duration_seconds=float(duration_int),
             seed=seed,
             capture_path=capture_path,
-            end_capture_path=req.end_capture_path if req is not None else "",
+            end_capture_path=end_capture_path,
             control_video_path=req.control_video_path if req is not None else "",
             control_strength=req.control_strength if req is not None else None,
             wardrobe_snapshot=wardrobe_snapshot,
@@ -1151,7 +1174,7 @@ class FilmGenerationHandler(StateHandlerBase):
             found = project.find_shot(job.shot_id)
             if found is None:
                 return None
-            _, shot = found
+            scene_id, shot = found[0].id, found[1]
             version = shot.version(job.version_number)
             if version is None:
                 return None
@@ -1181,14 +1204,14 @@ class FilmGenerationHandler(StateHandlerBase):
                 # rung) replaces the shot's Deliver pass for this render only.
                 clip = self._film.store.resolve_media_path(job.project_id, version.control_video_path)
                 control_video = str(clip) if clip.is_file() else control_video
-            loras = self.asset_loras(project, shot)
-            seed_lock = self.asset_seed_lock(project, shot)
+            cast_shot = with_mentions(project, shot)
+            seed_lock = self.asset_seed_lock(project, cast_shot)
             if version.seed is None and seed_lock is not None:
                 version.seed = seed_lock
                 self._film.store.save(project)
             reference_images = [
                 str(self._film.store.resolve_media_path(job.project_id, asset.reference_images[0]))
-                for asset in (project.asset(c.asset_id) for c in shot.characters)
+                for asset in (project.asset(c.asset_id) for c in cast_shot.characters)
                 if asset is not None and asset.reference_images and asset.lora_id == ""
             ][:2]
 
@@ -1206,11 +1229,28 @@ class FilmGenerationHandler(StateHandlerBase):
             aspectRatio=aspect_ratio,
             controlVideoPath=control_video,
             depthVideoPath=depth_video,
-            loras=loras,
+            loras=[],
             referenceImagePaths=[p for p in reference_images if Path(p).is_file()],
             endFramePath=end_frame,
             controlStrength=version.control_strength if version.control_video_path else None,
         )
+        model_type = self._video_generation.render_model_for(request)
+        if image_path is None and "i2v" in model_type.lower():
+            # An image-to-video model takes its people from the first frame: compose
+            # one from the style guide first (and keep it on the storyboard).
+            try:
+                framed = self.generate_frame(job.project_id, scene_id, job.shot_id)
+                start = self._film.store.resolve_media_path(job.project_id, framed.frame_path)
+                end = self._film.store.resolve_media_path(job.project_id, framed.end_frame_path) if framed.end_frame_path else None
+                request = request.model_copy(update={
+                    "imagePath": str(start),
+                    "endFramePath": request.endFramePath or (str(end) if end is not None and end.is_file() else None),
+                })
+            except HTTPError as exc:
+                logger.warning("No start frame for shot %s: %s", job.shot_id, exc.detail)
+        # A LoRA goes only to the model family it was trained for: a Z-Image character
+        # LoRA does nothing good in LTX-2 or Wan (2026-10-04).
+        request = request.model_copy(update={"loras": self.asset_loras(project, cast_shot, model_type)})
         return request, version.seed
 
     def _deliver_pass(self, project_id: str, relative: str) -> str | None:
@@ -1660,33 +1700,101 @@ class FilmGenerationHandler(StateHandlerBase):
         found = project.find_shot(shot_id)
         if found is None or found[0].id != scene_id:
             raise HTTPError(404, f"Shot not found: {shot_id}")
-        scene, shot = found
+        scene, stored = found
+        # `@Name` in the shot's text puts that asset in the cast (film/asset_mentions.py).
+        shot = with_mentions(project, stored)
         prompt = shot.visual_prompt if shot.prompt_locked and shot.visual_prompt else synthesize_prompt(project, scene, shot)
-        width, height = (576, 1024) if shot.generation.aspect_ratio == "9:16" else (1024, 576)
-        references = self._cast_references(project, shot)
-        model = handler.reference_model() if references else None
-        if references and model:
-            response = handler.generate(
-                GenerateImageRequest(prompt=f"{FRAME_CAST}, {prompt}", width=width, height=height, numImages=1, model=model),
-                reference_images=references, reference_mode="I",
-            )
-        else:
-            response = handler.generate(GenerateImageRequest(prompt=prompt, width=width, height=height, numImages=1))
-        paths = response.image_paths or []
-        if response.status != "complete" or not paths:
-            raise HTTPError(502, "The image model did not return a frame")
+        landscape = shot.generation.aspect_ratio != "9:16"
+        width, height = (1024, 576) if landscape else (576, 1024)
         captures = self._film.store.captures_dir(project_id)
         captures.mkdir(parents=True, exist_ok=True)
-        (captures / f"{shot.id}-frame.png").write_bytes(Path(paths[0]).read_bytes())
+        frame_file = captures / f"{shot.id}-frame.png"
+        end_relative = ""
+        cast = self._style_cast(project, shot)
+        style = self._style_composer() if cast else None
+        if cast and style is not None:
+            # Qwen-Image-Edit composes the cast from their style-guide images (user,
+            # 2026-10-04: "ensure the videos are accurate to the styleguide"): the
+            # image-to-video model takes its people from this frame.
+            size = (1360, 768) if landscape else (768, 1360)
+            frame_file.write_bytes(self._compose_frame(handler, style, prompt, cast, size).read_bytes())
+            if shot.action.strip():
+                # The end of the shot, from the start frame and the same people: the
+                # video ends on the style guide too.
+                end_prompt = (f"The same shot a few seconds later, at the end of: {shot.action.strip()}. "
+                              "The same place, camera angle, framing and lighting as picture 1")
+                end_file = captures / f"{shot.id}-frame-end.png"
+                end_file.write_bytes(self._compose_frame(handler, style, end_prompt, cast[:2], size, scene=frame_file).read_bytes())
+                end_relative = f"captures/{shot.id}-frame-end.png"
+        else:
+            references = self._cast_references(project, shot)
+            model = handler.reference_model() if references else None
+            if references and model:
+                response = handler.generate(
+                    GenerateImageRequest(prompt=f"{FRAME_CAST}, {prompt}", width=width, height=height, numImages=1, model=model),
+                    reference_images=references, reference_mode="I",
+                )
+            else:
+                response = handler.generate(GenerateImageRequest(prompt=prompt, width=width, height=height, numImages=1))
+            paths = response.image_paths or []
+            if response.status != "complete" or not paths:
+                raise HTTPError(502, "The image model did not return a frame")
+            frame_file.write_bytes(Path(paths[0]).read_bytes())
         with self.lock:
             project = self._film.store.load(project_id)
             found = project.find_shot(shot_id)
             if found is None:
                 raise HTTPError(404, f"Shot not found: {shot_id}")
             found[1].frame_path = f"captures/{shot.id}-frame.png"
+            found[1].end_frame_path = end_relative
             found[1].updated_at = now_ms()
             self._film.store.save(project)
             return found[1]
+
+    def _style_cast(self, project: FilmProject, shot: FilmShot) -> list[tuple[str, str, Path]]:
+        """(name, kind, style-guide image) of the shot's cast for a composed frame:
+        its characters (two at most), then its props; three pictures at most."""
+        out: list[tuple[str, str, Path]] = []
+        assets = [project.asset(c.asset_id) for c in shot.characters][:2] + [project.asset(p) for p in shot.prop_ids]
+        for asset in assets:
+            if asset is None or len(out) >= 3:
+                continue
+            image = self._identity_image(project.id, asset, "")
+            if image is not None:
+                out.append((asset.name.strip() or asset.kind, asset.kind, image))
+        return out
+
+    def _style_composer(self) -> list[LoraUse] | None:
+        """Qwen-Image-Edit-2511's LoRAs for a composed frame when it can make one: the
+        Lightning 8-step LoRA (without it 30 steps took ~10 minutes; 2026-10-04)."""
+        handler = self._image_generation
+        if handler is None or self._training is None or not handler.model_installed(QWEN_EDIT_2511):
+            return None
+        lightning = self._training.lora_root() / ANGLES_LORA_FOLDER / LIGHTNING_LORA_FILE
+        return [LoraUse(name=str(lightning), multiplier=1.0)] if lightning.is_file() else None
+
+    def _compose_frame(
+        self, handler: ImageGenerationHandler, loras: list[LoraUse], prompt: str, cast: list[tuple[str, str, Path]],
+        size: tuple[int, int], *, scene: Path | None = None,
+    ) -> Path:
+        """One Qwen-Image-Edit frame of `prompt` with the cast from their pictures
+        (after `scene`, the picture of the place, when given)."""
+        first = 2 if scene is not None else 1
+        who = "; ".join(
+            f"{name} is the person in picture {first + i}, with exactly that face, hair, body and outfit" if kind == "character"
+            else f"the {name} is the object in picture {first + i}, exactly as it looks there"
+            for i, (name, kind, _) in enumerate(cast)
+        )
+        references = ([str(scene)] if scene is not None else []) + [str(path) for _, _, path in cast]
+        response = handler.generate(
+            GenerateImageRequest(prompt=f"{prompt.rstrip('. ')}. {who}. A photorealistic film still.", width=size[0], height=size[1],
+                                 numImages=1, model=QWEN_EDIT_2511, loras=loras),
+            reference_images=references, reference_mode="KI" if scene is not None else "I",
+        )
+        paths = response.image_paths or []
+        if response.status != "complete" or not paths:
+            raise HTTPError(502, "The image model did not return a frame")
+        return Path(paths[0])
 
     def generate_frames(self, project_id: str, req: FramesRequest) -> FramesResponse:
         """Storyboard frames for every shot (by default only those with no
@@ -2235,8 +2343,9 @@ class FilmGenerationHandler(StateHandlerBase):
         matcher = self._face_matcher_service
         return matcher if matcher is not None and matcher.available() else None
 
-    def asset_loras(self, project: FilmProject, shot: FilmShot) -> list[LoraUse]:
-        """Every LoRA bound to an asset the shot references, deduplicated."""
+    def asset_loras(self, project: FilmProject, shot: FilmShot, model_type: str | None = None) -> list[LoraUse]:
+        """Every LoRA bound to an asset the shot references, deduplicated; with a
+        `model_type`, only those trained for that model's family."""
         if self._training is None:
             return []
         out: list[LoraUse] = []
@@ -2250,6 +2359,8 @@ class FilmGenerationHandler(StateHandlerBase):
             try:
                 entry = self._training.get_lora(asset.lora_id)
             except HTTPError:
+                continue
+            if model_type is not None and not lora_fits(entry.target, model_type):
                 continue
             out.append(LoraUse(name=entry.file, multiplier=asset.lora_multiplier if asset.lora_multiplier > 0 else entry.default_multiplier))
         return out

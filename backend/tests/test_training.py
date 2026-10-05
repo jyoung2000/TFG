@@ -444,10 +444,10 @@ class TestWangpSettings:
 
 
 class TestConsistencyKit:
-    def _lora(self, client, tmp_path: Path, *, trigger: str = "mara_v1") -> dict:
-        path = tmp_path / "mara.safetensors"
+    def _lora(self, client, tmp_path: Path, *, trigger: str = "mara_v1", target: str = "z_image") -> dict:
+        path = tmp_path / f"mara-{target}.safetensors"
         path.write_bytes(b"lora")
-        return client.post("/api/training/loras/import", json={"path": str(path), "target": "z_image", "trigger": trigger}).json()
+        return client.post("/api/training/loras/import", json={"path": str(path), "target": target, "trigger": trigger}).json()
 
     def _character_shot(self, client, asset: dict) -> tuple[str, str]:
         scene_id = client.post(f"/api/film/projects/{PROJECT}/scenes", json={"title": "Scene"}).json()["id"]
@@ -458,7 +458,9 @@ class TestConsistencyKit:
     def test_asset_lora_binding_reaches_the_prompt_and_the_request(self, client, tmp_path: Path, test_state, create_fake_model_files):
         create_fake_model_files()
         test_state.state.app_settings.use_local_text_encoder = True
-        lora = self._lora(client, tmp_path)
+        # A video LoRA for the video model (LTX-2 here): a Z-Image LoRA stays out of
+        # video renders (test_styleguide_shots.py, 2026-10-04).
+        lora = self._lora(client, tmp_path, target="ltx2")
         asset = client.post(f"/api/film/projects/{PROJECT}/assets", json={"kind": "character", "name": "Mara", "wardrobe": "green jacket"}).json()["asset"]
         asset = client.put(f"/api/film/projects/{PROJECT}/assets/{asset['id']}", json={"lora_id": lora["id"], "lora_trigger": "mara_v1", "lora_multiplier": 0.7, "seed_lock": 4242}).json()["asset"]
         assert asset["lora_id"] == lora["id"] and asset["seed_lock"] == 4242
@@ -481,6 +483,12 @@ class TestConsistencyKit:
 
         cleared = client.put(f"/api/film/projects/{PROJECT}/assets/{asset['id']}", json={"clear_seed_lock": True}).json()["asset"]
         assert cleared["seed_lock"] is None
+
+        image_lora = self._lora(client, tmp_path)
+        client.put(f"/api/film/projects/{PROJECT}/assets/{asset['id']}", json={"lora_id": image_lora["id"]})
+        client.post(f"/api/film/projects/{PROJECT}/scenes/{scene_id}/shots/{shot_id}/generate", json={"kind": "preview"})
+        job = client.get("/api/jobs", params={"kind": "video_gen", "limit": 1}).json()["jobs"][0]
+        assert job["params"]["loras"] == [], "a Z-Image LoRA is not sent to the video model"
 
     def test_reference_sheet_uses_one_seed_and_the_bound_lora(self, client, tmp_path: Path, create_fake_model_files, fake_services):
         create_fake_model_files(include_zit=True)

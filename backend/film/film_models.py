@@ -425,6 +425,9 @@ class FilmShot(BaseModel):
     #: Storyboard frame: a still of what the shot describes ('' = none). Kept
     #: apart from `capture_path`, which the video model uses as a start frame.
     frame_path: str = ""
+    #: The end of the shot composed from the same cast ('' = none): the video's
+    #: end frame when it starts on `frame_path` (2026-10-04, style-guide shots).
+    end_frame_path: str = ""
     #: The original this shot remakes ('' = none): an image reproduce job's
     #: source photo, shown above the AI result in the storyboard.
     reference_path: str = ""

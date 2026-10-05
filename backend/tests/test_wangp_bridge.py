@@ -344,3 +344,11 @@ def test_a_1024_square_qwen_edit_render_stays_at_1_megapixel() -> None:
     assert bridge._map_image_resolution(1024, 1024, "qwen_image_edit_plus2_20B") == (1024, 1024)
     assert bridge._map_image_resolution(768, 1344, "qwen_image_edit_plus2_20B") == (928, 1664), "the style sheet keeps its native size"
 
+
+
+def test_a_storyboard_frame_renders_at_1360x768_with_qwen_edit() -> None:
+    """A style-guide frame (Qwen-Image-Edit composing the cast) at ~1 MP and 16:9:
+    1664x928 doubled the time of an angle under memory pressure (r75)."""
+    bridge = _make_bridge(image_model_type="z_image")
+    assert bridge._map_image_resolution(1360, 768, "qwen_image_edit_plus2_20B") == (1360, 768)
+    assert bridge._map_image_resolution(768, 1360, "qwen_image_edit_plus2_20B") == (768, 1360)

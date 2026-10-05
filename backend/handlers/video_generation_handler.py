@@ -241,6 +241,12 @@ class VideoGenerationHandler(StateHandlerBase):
         if named:
             return named
         default = self._config.wangp_video_model_type
+        # The video model picked in Settings -> Models renders locally when it is an
+        # installed WanGP model (it was only read for hosted providers; 2026-10-04).
+        with self.lock:
+            chosen = self.state.app_settings.default_video_model.strip()
+        if chosen and chosen != default and self._wangp_bridge.weights_installed(chosen) is True:
+            default = chosen
         if req.model.strip().lower() != "fast":
             return default
         guided = bool(req.endFramePath or req.controlVideoPath or req.depthVideoPath)
