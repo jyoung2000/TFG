@@ -355,7 +355,7 @@ class TestVisionModelPicker:
 
         The handler is built with the real client, so the fake's queued
         responses would never be seen. Swapping the service is the sanctioned
-        seam here (ServiceBundle fakes, never unittest.mock).
+        seam here (ServiceBundle fakes, never a mocking library).
         """
         test_state.vision._http = fake_services.http  # pyright: ignore[reportPrivateUsage]
         r = client.post("/api/settings", json={"vision": {
