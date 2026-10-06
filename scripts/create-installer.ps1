@@ -22,6 +22,14 @@ $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectDir = Split-Path -Parent $ScriptDir
 $ReleaseDir = Join-Path $ProjectDir "release"
+# An output folder moved with -c.directories.output=... is where the installer
+# lands; looking in release\ instead failed a finished build (r79, 2026-10-05).
+foreach ($arg in $BuilderArgs) {
+    if ($arg -match '^-c\.directories\.output=(.+)$') {
+        $out = $Matches[1]
+        $ReleaseDir = if ([System.IO.Path]::IsPathRooted($out)) { $out } else { Join-Path $ProjectDir $out }
+    }
+}
 
 Set-Location $ProjectDir
 
