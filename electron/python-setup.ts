@@ -7,6 +7,7 @@ import { load as loadYaml } from 'js-yaml'
 import path from 'path'
 import { isDev } from './config'
 import { logger } from './logger'
+import { runtimeFallbackUrl, runtimeReleaseBase } from './runtime-source'
 
 export interface PythonSetupProgress {
   status: 'downloading' | 'extracting' | 'complete' | 'error'
@@ -133,7 +134,7 @@ export async function preDownloadPythonForUpdate(
   }
 
   const baseUrl = (isDev && process.env.LTX_PYTHON_URL?.replace(/^["']+|["']+$/g, ''))
-    || `https://github.com/Lightricks/ltx-desktop/releases/download/v${newVersion}`
+    || runtimeReleaseBase(newVersion)
 
   // Fetch the new version's deps hash
   let newHash: string | null = null
@@ -190,7 +191,7 @@ export async function preDownloadPythonForUpdate(
     try {
       await acquireArchive(baseUrl, archivePath, cleanupFiles, progressCb)
     } catch (primaryErr) {
-      const fallbackUrl = newHash ? `${FALLBACK_CDN_BASE}/python-embed-win32/${newHash}/python-embed-win32.tar.gz` : null
+      const fallbackUrl = runtimeFallbackUrl(newHash)
       if (!fallbackUrl || isLocalPath(baseUrl)) {
         throw primaryErr
       }
@@ -237,10 +238,8 @@ function readHash(filePath: string): string | null {
 }
 
 // ── Archive source resolution ─────────────────────────────────────────
-// Primary: GitHub Releases (multi-part, version-based)
-// Fallback: public CDN bucket (single file, deps-hash-based)
-
-const FALLBACK_CDN_BASE = 'https://storage.googleapis.com/ltx-desktop-artifacts'
+// Primary: this repo's GitHub Releases (multi-part, version-based)
+// Fallback: a deps-hash-keyed CDN file, if one is configured (runtime-source.ts)
 
 function getArchiveBase(): string {
   // LTX_PYTHON_URL is a dev-only override for testing with local archives.
@@ -249,13 +248,13 @@ function getArchiveBase(): string {
     return process.env.LTX_PYTHON_URL.replace(/^["']+|["']+$/g, '')
   }
   const version = app.getVersion()
-  return `https://github.com/Lightricks/ltx-desktop/releases/download/v${version}`
+  return runtimeReleaseBase(version)
 }
 
 function getFallbackArchiveUrl(): string | null {
   const hash = readHash(getBundledHashPath())
   if (!hash) return null
-  return `${FALLBACK_CDN_BASE}/python-embed-win32/${hash}/python-embed-win32.tar.gz`
+  return runtimeFallbackUrl(hash)
 }
 
 function isLocalPath(source: string): boolean {

@@ -52,3 +52,29 @@ class KnowledgeResetRequest(BaseModel):
     #: Empty for both means "forget everything".
     model: str = ""
     project_id: str = ""
+
+
+class PromptHintsRequest(BaseModel):
+    """Ask what has worked for shots like this one on this target."""
+
+    spec_keys: list[str] = Field(default_factory=list[str])
+    target: str = ""
+    model: str = ""
+    limit: int = 8
+
+
+class RecordCandidateRequest(BaseModel):
+    """A Reproduce candidate was scored (or picked by the user)."""
+
+    picked: bool = False
+    model: str = ""
+    provider: str = "local"
+    target: str = ""
+    prompt: str = ""
+    negative_prompt: str = ""
+    seed: int | None = None
+    spec_keys: list[str] = Field(default_factory=list[str])
+    metrics: dict[str, float] = Field(default_factory=dict[str, float])
+    project_id: str = ""
+    shot_id: str = ""
+    note: str = ""

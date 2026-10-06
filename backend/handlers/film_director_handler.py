@@ -108,6 +108,7 @@ from handlers.base import StateHandlerBase
 from handlers.film_generation_handler import FilmGenerationHandler
 from handlers.film_handler import FilmHandler
 from handlers.timeline_handler import TimelineHandler
+from handlers.taste_handler import TasteHandler
 from services.interfaces import HTTPClient, VideoProcessor
 from state.app_settings import AppSettings
 from state.app_state_types import AppState
@@ -696,6 +697,8 @@ class FilmDirectorHandler(StateHandlerBase):
         self._http = http
         self._video_processor = video_processor
         self._openrouter_models_cache: tuple[int, list[OpenRouterModel]] | None = None
+        #: The user's thumbs up / down (film/taste.py), told to the AI that writes prompts.
+        self._taste: TasteHandler | None = None
         self._commands: dict[str, Callable[[str, dict[str, object]], object]] = {
             "get_project": self._cmd_get_project,
             "list_assets": self._cmd_list_assets,
@@ -1059,7 +1062,7 @@ class FilmDirectorHandler(StateHandlerBase):
             "If you cannot call tools, reply ONLY with JSON: "
             '{"summary": "...", "commands": [{"name": "tool_name", "params": {...}}]}'
         )
-        messages: list[LLMMessage] = [LLMMessage("system", system_text)]
+        messages: list[LLMMessage] = [LLMMessage("system", self._with_taste(system_text))]
         for turn in req.history[-8:]:
             if turn.role in ("user", "assistant") and turn.content.strip():
                 messages.append(LLMMessage("assistant" if turn.role == "assistant" else "user", turn.content))
@@ -1154,7 +1157,7 @@ class FilmDirectorHandler(StateHandlerBase):
             '"prompt": "the full video prompt", "negative_prompt": "comma separated things to avoid", '
             '"duration_seconds": number}'
         )
-        messages: list[LLMMessage] = [LLMMessage("system", system_text)]
+        messages: list[LLMMessage] = [LLMMessage("system", self._with_taste(system_text))]
         for turn in req.messages[-12:]:
             if turn.role in ("user", "assistant") and turn.content.strip():
                 messages.append(LLMMessage("assistant" if turn.role == "assistant" else "user", turn.content))
@@ -1359,7 +1362,7 @@ class FilmDirectorHandler(StateHandlerBase):
             f"Current prompt: {base_prompt}\n"
             + (f"User guidance: {req.guidance}\n" if req.guidance.strip() else "")
         )
-        messages = [LLMMessage("system", system_text), LLMMessage("user", user_text)]
+        messages = [LLMMessage("system", self._with_taste(system_text)), LLMMessage("user", user_text)]
         reply = provider.chat(messages, None, json_mode=True)
         raw = parse_json_block(reply.text)
         if not isinstance(raw, dict):
@@ -1437,6 +1440,14 @@ class FilmDirectorHandler(StateHandlerBase):
             "scenes": scenes,
             "pose_names": sorted({p.name for p in project.pose_library}),
         }
+
+    def attach_taste(self, taste: TasteHandler) -> None:
+        self._taste = taste
+
+    def _with_taste(self, system_text: str) -> str:
+        """The system prompt plus what the user's thumbs up / down say they like."""
+        note = self._taste.note() if self._taste is not None else ""
+        return f"{system_text}\n\n{note}" if note else system_text
 
     def _cmd_get_project(self, project_id: str, params: dict[str, object]) -> object:
         del params
@@ -2215,7 +2226,7 @@ class FilmDirectorHandler(StateHandlerBase):
             '"camera_move": "static", "duration_seconds": 4, "characters": ["NAME"]}]}]}'
         )
         reply = provider.chat(
-            [LLMMessage("system", system_text), LLMMessage("user", f"Screenplay:\n\n{script}")], None, json_mode=True
+            [LLMMessage("system", self._with_taste(system_text)), LLMMessage("user", f"Screenplay:\n\n{script}")], None, json_mode=True
         )
         try:
             return _StoryboardPlan.model_validate(parse_json_block(reply.text))
@@ -2254,7 +2265,7 @@ class FilmDirectorHandler(StateHandlerBase):
             '"location": "location name"}]}]}'
         )
         user_text = f"Idea: {idea}" + (f"\nVisual style: {req.style}" if req.style.strip() else "")
-        messages = [LLMMessage("system", system_text), LLMMessage("user", user_text)]
+        messages = [LLMMessage("system", self._with_taste(system_text)), LLMMessage("user", user_text)]
         reply = provider.chat(messages, None, json_mode=True)
         try:
             plan = FilmBuildPlan.model_validate(parse_json_block(reply.text))

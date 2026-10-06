@@ -8,6 +8,7 @@ film_generation_handler.
 from __future__ import annotations
 
 import base64
+import json
 import binascii
 import logging
 from pathlib import Path
@@ -40,6 +41,8 @@ from film.film_api_types import (
     UpdateSceneRequest,
     UpdateScriptRequest,
     UpdateShotRequest,
+    DeliverRequest,
+    DeliverResponse,
 )
 from film.film_continuity import (
     ContinuityReport,
@@ -48,6 +51,7 @@ from film.film_continuity import (
     continuity_level,
     shot_continuity_report,
 )
+from film.style_extraction import STYLE_EXTRACTION_PROMPT, STYLE_FACETS, style_prompt_of
 from film.film_models import (
     CompositionObject,
     CompositionTransform,
@@ -82,6 +86,7 @@ from server_utils.path_policy import (
 from film.knowledge_models import KnowledgeEvent
 from film.llm_providers import LLMMessage, LLMProvider
 from handlers.base import StateHandlerBase
+from services.stitcher.video_stitcher import VideoStitcher
 from handlers.knowledge_handler import KnowledgeHandler
 from state.app_state_types import AppState
 
@@ -345,9 +350,22 @@ class FilmHandler(StateHandlerBase):
             asset = project.asset(asset_id)
             if asset is None:
                 raise HTTPError(404, f"Asset not found: {asset_id}")
-            updates = {key: value for key, value in req.model_dump().items() if value is not None}
+            if req.name is not None and not req.name.strip():
+                raise HTTPError(400, "Asset name is required")
+            updates = {
+                key: value
+                for key, value in req.model_dump().items()
+                if value is not None and key not in ("clear_seed_lock", "style_guide", "composition")
+            }
             for key, value in updates.items():
                 setattr(asset, key, value)
+            if req.style_guide is not None:
+                # Assign the model, not its dump, so the field stays typed.
+                asset.style_guide = req.style_guide
+            if req.composition is not None:
+                asset.composition = req.composition
+            if req.clear_seed_lock:
+                asset.seed_lock = None
             asset.updated_at = now_ms()
             self._save(project)
             return asset
@@ -385,6 +403,25 @@ class FilmHandler(StateHandlerBase):
             asset.updated_at = now_ms()
             self._save(project)
             return asset
+
+    def delete_asset_reference(self, project_id: str, asset_id: str, path: str) -> FilmAsset:
+        """Remove one reference image from the asset and delete its file."""
+        with self.lock:
+            project = self._load(project_id)
+            asset = project.asset(asset_id)
+            if asset is None:
+                raise HTTPError(404, f"Asset not found: {asset_id}")
+            if path not in asset.reference_images:
+                raise HTTPError(404, f"Reference not found on {asset.name}: {path}")
+            asset.reference_images = [p for p in asset.reference_images if p != path]
+            asset.updated_at = now_ms()
+            self._save(project)
+        # File IO outside the lock; a missing file is not an error.
+        try:
+            self._store.resolve_media_path(project_id, path).unlink(missing_ok=True)
+        except FilmStoreError:
+            pass
+        return asset
 
     # ---- Scenes ----------------------------------------------------------
 
@@ -581,6 +618,70 @@ class FilmHandler(StateHandlerBase):
             self._refresh_prompt(project, scene, shot)
             self._save(project)
             return shot
+
+    # ---- Deliver (phase 6) -------------------------------------------------
+
+    def deliver(self, project_id: str, scene_id: str, shot_id: str, req: DeliverRequest, encoder: VideoStitcher) -> DeliverResponse:
+        """Write a Deliver package into the project: reference / depth / normal
+        passes encoded at the shot's fps, stills, prompt.txt and metadata.json.
+        The clean and depth passes become the shot's control signals for the
+        next render (`generation.control_video` / `depth_video`)."""
+        if not req.clean and not req.depth and not req.normal:
+            raise HTTPError(400, "Nothing to deliver: render at least one pass.")
+        fps = max(1, min(60, req.fps))
+        with self.lock:
+            project = self._load(project_id)
+            scene = self._require_scene(project, scene_id)
+            shot = self._require_shot(scene, shot_id)
+            version = max((v.number for v in shot.versions), default=0) + 1
+        package_rel = f"deliver/{shot_id}/v{version}"
+        package = self._store.project_dir(project_id) / "deliver" / shot_id / f"v{version}"
+        package.mkdir(parents=True, exist_ok=True)
+        written: list[str] = []
+        passes: dict[str, str] = {}
+        for name, frames in (("reference", req.clean), ("depth", req.depth), ("normal", req.normal)):
+            if not frames:
+                continue
+            frames_dir = package / f"{name}-frames"
+            frames_dir.mkdir(parents=True, exist_ok=True)
+            paths: list[Path] = []
+            for index, encoded in enumerate(frames):
+                path = frames_dir / f"{index:05d}.png"
+                path.write_bytes(decode_image_base64(encoded))
+                paths.append(path)
+            output = package / f"{name}.mp4"
+            try:
+                encoder.encode_frames(paths, fps, output)
+            except Exception as exc:  # noqa: BLE001 - ffmpeg failures are user-facing
+                raise HTTPError(500, f"Could not encode the {name} pass: {exc}") from exc
+            passes[name] = f"{package_rel}/{name}.mp4"
+            written.append(passes[name])
+            written.append(f"{package_rel}/{name}-frames/00000.png")
+        stills_dir = package / "stills"
+        for index, encoded in enumerate(req.stills):
+            stills_dir.mkdir(parents=True, exist_ok=True)
+            (stills_dir / f"still-{index + 1}.png").write_bytes(decode_image_base64(encoded))
+            written.append(f"{package_rel}/stills/still-{index + 1}.png")
+        if req.prompt.strip():
+            (package / "prompt.txt").write_text(req.prompt.strip() + "\n", encoding="utf-8")
+            written.append(f"{package_rel}/prompt.txt")
+        metadata = dict(req.metadata)
+        metadata.update({"fps": fps, "width": req.width, "height": req.height, "passes": passes, "shot_id": shot_id, "version": version})
+        (package / "metadata.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
+        written.append(f"{package_rel}/metadata.json")
+        with self.lock:
+            project = self._load(project_id)
+            scene = self._require_scene(project, scene_id)
+            shot = self._require_shot(scene, shot_id)
+            if req.composition is not None:
+                shot.composition = req.composition
+                shot.framing = req.composition.framing
+                shot.camera_move = req.composition.camera_move
+            shot.generation.control_video = passes.get("reference", "")
+            shot.generation.depth_video = passes.get("depth", "")
+            shot.updated_at = now_ms()
+            self._save(project)
+            return DeliverResponse(package_dir=package_rel, files=written, control_video=shot.generation.control_video, depth_video=shot.generation.depth_video, shot=shot)
 
     # ---- Poses -----------------------------------------------------------
 
@@ -1045,20 +1146,29 @@ class FilmHandler(StateHandlerBase):
                 raise HTTPError(404, f"Asset not found: {asset_id}")
             if not asset.reference_images:
                 raise HTTPError(400, "Asset has no reference image to analyze")
-            ref_relative = asset.reference_images[0]
-        try:
-            ref_path = self._store.resolve_media_path(project_id, ref_relative)
-        except FilmStoreError as exc:
-            raise HTTPError(400, str(exc)) from exc
-        if not ref_path.is_file():
-            raise HTTPError(400, f"Reference image not found: {ref_relative}")
-
-        raw = ref_path.read_bytes()
-        encoded = base64.b64encode(raw).decode("ascii")
-        mime = "image/png" if ref_path.suffix.lower() == ".png" else "image/jpeg"
-        data_url = f"data:{mime};base64,{encoded}"
+            # A style is read from up to three of its pictures: what they share is the style.
+            ref_relatives = asset.reference_images[:3] if asset.kind == "style" else asset.reference_images[:1]
+            kind = asset.kind
+        data_urls: list[str] = []
+        for ref_relative in ref_relatives:
+            try:
+                ref_path = self._store.resolve_media_path(project_id, ref_relative)
+            except FilmStoreError as exc:
+                raise HTTPError(400, str(exc)) from exc
+            if not ref_path.is_file():
+                raise HTTPError(400, f"Reference image not found: {ref_relative}")
+            encoded = base64.b64encode(ref_path.read_bytes()).decode("ascii")
+            mime = "image/png" if ref_path.suffix.lower() == ".png" else "image/jpeg"
+            data_urls.append(f"data:{mime};base64,{encoded}")
 
         messages = [
+            LLMMessage(role="system", content=STYLE_EXTRACTION_PROMPT),
+            LLMMessage(
+                role="user",
+                content=f"Reverse-engineer the art style of {'these images' if len(data_urls) > 1 else 'this image'}.",
+                images=data_urls,
+            ),
+        ] if kind == "style" else [
             LLMMessage(
                 role="system",
                 content=(
@@ -1071,7 +1181,7 @@ class FilmHandler(StateHandlerBase):
             LLMMessage(
                 role="user",
                 content="Analyze this reference image.",
-                images=[data_url],
+                images=data_urls,
             ),
         ]
 
@@ -1109,6 +1219,8 @@ class FilmHandler(StateHandlerBase):
         key_traits: list[str] = []
         raw_traits = parsed.get("key_traits", [])
         key_traits = clean_list(raw_traits)
+        # A style's anatomy (STYLE_EXTRACTION_PROMPT) leads its traits, labelled.
+        key_traits = [f"{label}: {text}" for label, text in ((k.replace("_", " "), clean_text(parsed.get(k, ""))) for k in STYLE_FACETS) if text] + key_traits
 
         color_palette: list[str] = []
         raw_palette = parsed.get("color_palette", [])
@@ -1138,7 +1250,7 @@ class FilmHandler(StateHandlerBase):
             if description:
                 asset.description = description
             if asset.kind == "style" and recommended_prompt:
-                asset.style_prompt = recommended_prompt
+                asset.style_prompt = style_prompt_of(asset.style_guide)
             asset.updated_at = now_ms()
             self._save(project)
             return asset

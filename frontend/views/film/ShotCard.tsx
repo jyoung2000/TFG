@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Aperture, Clapperboard, Clock, Copy, Play, Trash2, Users } from 'lucide-react'
 import { useFilm } from '../../contexts/FilmContext'
+import { aiTileLabel, referenceSource, referenceUrl, type AiSource } from './storyboardTiles'
 import { filmMediaUrl, filmOutputUrl } from '../../lib/film-api'
 import type { FilmProject, FilmShot } from '../../types/film'
 import { CONTINUITY_LEVEL_META, SHOT_STATUS_META, framingLabel } from '../../types/film'
@@ -20,24 +21,33 @@ interface ShotCardProps {
   onDrop: (event: React.DragEvent) => void
 }
 
-/** Thumbnail preference: current version output (video) → capture image → placeholder. */
-function useShotThumb(film: FilmProject, shot: FilmShot) {
-  const [thumb, setThumb] = useState<{ kind: 'video' | 'image'; url: string } | null>(null)
+/** Thumbnail preference: current version output (video) → composer capture → storyboard frame → 3D blockout. */
+export function useShotThumb(film: FilmProject, shot: FilmShot) {
+  const [thumb, setThumb] = useState<{ kind: 'video' | 'image' | 'blockout'; url: string; source: AiSource } | null>(null)
   const [videoFallbackUrl, setVideoFallbackUrl] = useState<string | null>(null)
   const [videoFailed, setVideoFailed] = useState(false)
   const version = shot.current_version != null ? shot.versions.find(v => v.number === shot.current_version) : undefined
   const outputPath = version?.status === 'complete' ? version.output_path : ''
   const capturePath = shot.capture_path
+  const framePath = shot.frame_path ?? ''
+  const blockoutPath = shot.blockout_path
 
   useEffect(() => {
     let cancelled = false
     void (async () => {
       if (outputPath) {
         const url = await filmOutputUrl(outputPath)
-        if (!cancelled) setThumb({ kind: 'video', url })
+        if (!cancelled) setThumb({ kind: 'video', url, source: 'version' })
       } else if (capturePath) {
         const url = await filmMediaUrl(film.id, capturePath)
-        if (!cancelled) setThumb({ kind: 'image', url })
+        if (!cancelled) setThumb({ kind: 'image', url, source: 'capture' })
+      } else if (framePath) {
+        const url = await filmMediaUrl(film.id, framePath)
+        if (!cancelled) setThumb({ kind: 'image', url, source: 'frame' })
+      } else if (blockoutPath) {
+        // A 3D storyboard build leaves an isometric blockout until the shot is captured or rendered.
+        const url = await filmMediaUrl(film.id, blockoutPath)
+        if (!cancelled) setThumb({ kind: 'blockout', url, source: 'blockout' })
       } else {
         setThumb(null)
       }
@@ -45,7 +55,7 @@ function useShotThumb(film: FilmProject, shot: FilmShot) {
     return () => {
       cancelled = true
     }
-  }, [film.id, outputPath, capturePath])
+  }, [film.id, outputPath, capturePath, framePath, blockoutPath])
 
   // When the video thumbnail errors (404, codec, interrupted download), fall
   // back to the composition capture so the card still shows the shot's
@@ -68,10 +78,28 @@ function useShotThumb(film: FilmProject, shot: FilmShot) {
 
   return {
     thumb: videoFailed && videoFallbackUrl
-      ? { kind: 'image' as const, url: videoFallbackUrl }
+      ? { kind: 'image' as const, url: videoFallbackUrl, source: 'capture' as const }
       : thumb,
     onThumbError: () => setVideoFailed(true),
   }
+}
+
+/** The image this shot remakes, if any (see storyboardTiles). */
+function useShotReference(film: FilmProject, shot: FilmShot): { url: string } | null {
+  const source = referenceSource(shot)
+  const key = source ? (source.kind === 'project' ? source.path : `${source.analysisId}/${source.shotId}`) : ''
+  const [url, setUrl] = useState('')
+  useEffect(() => {
+    setUrl('')
+    if (!source) return
+    let cancelled = false
+    referenceUrl(film.id, source).then(next => { if (!cancelled) setUrl(next) }).catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [film.id, key])
+  return source ? { url } : null
 }
 
 export function ShotCard({
@@ -89,6 +117,7 @@ export function ShotCard({
   onDrop,
 }: ShotCardProps) {
   const { thumb, onThumbError } = useShotThumb(film, shot)
+  const reference = useShotReference(film, shot)
   const { continuityLevelFor } = useFilm()
   const level = continuityLevelFor(shot.id)
   const levelMeta = level ? CONTINUITY_LEVEL_META[level] : null
@@ -113,7 +142,7 @@ export function ShotCard({
         if (event.key === 'Enter' || event.key === ' ') {
           event.preventDefault()
           onOpen()
-        } else if (event.key.toLowerCase() === 'c' && !event.metaKey && !event.ctrlKey) {
+        } else if (event.key.toLowerCase() === 'c' && !event.metaKey && !event.ctrlKey && event.target === event.currentTarget) {
           onCompose()
         }
       }}
@@ -121,8 +150,17 @@ export function ShotCard({
         isSelected ? 'border-violet-500' : 'border-zinc-800 hover:border-zinc-600'
       }`}
     >
-      {/* Thumbnail */}
-      <div className="relative aspect-video bg-zinc-950 flex items-center justify-center">
+      {/* Reference above, its AI remake below (a shot made from scratch has just its picture). */}
+      {reference && (
+        <div className="relative aspect-video bg-zinc-950 flex items-center justify-center" data-testid="shot-reference">
+          {reference.url ? <img src={reference.url} alt="Reference" className="w-full h-full object-contain" /> : <Clapperboard className="h-7 w-7 text-zinc-700" />}
+          <span className="absolute bottom-1.5 left-1.5 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wide bg-teal-500 text-black">Reference</span>
+        </div>
+      )}
+      <div className={`relative aspect-video bg-zinc-950 flex items-center justify-center ${reference ? 'border-t-2 border-violet-600/70' : ''}`} data-testid={reference ? 'shot-ai-result' : undefined}>
+        {reference && (
+          <span className="absolute bottom-1.5 left-1.5 z-10 px-1.5 py-0.5 rounded text-[9px] font-bold uppercase tracking-wide bg-violet-600 text-white">{aiTileLabel(thumb?.source ?? null, shot)}</span>
+        )}
         {thumb ? (
           thumb.kind === 'video' ? (
             <video
@@ -131,10 +169,10 @@ export function ShotCard({
               playsInline
               preload="metadata"
               onError={onThumbError}
-              className="w-full h-full object-cover"
+              className={`w-full h-full ${reference ? 'object-contain' : 'object-cover'}`}
             />
           ) : (
-            <img src={thumb.url} alt="" className="w-full h-full object-cover" />
+            <img src={thumb.url} alt={thumb.kind === 'blockout' ? '3D blockout' : ''} data-testid={thumb.kind === 'blockout' ? 'shot-thumb-blockout' : undefined} className={`w-full h-full ${reference ? 'object-contain' : 'object-cover'}`} />
           )
         ) : (
           <Clapperboard className="h-7 w-7 text-zinc-700" />

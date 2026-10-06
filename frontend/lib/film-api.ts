@@ -53,6 +53,28 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 const enc = encodeURIComponent
 
+/** A Deliver package from the composer: base64 PNG frames per pass. */
+export interface DeliverPayload {
+  fps: number
+  width: number
+  height: number
+  clean: string[]
+  depth: string[]
+  normal: string[]
+  stills: string[]
+  prompt: string
+  metadata: Record<string, unknown>
+  composition: CompositionScene | null
+}
+
+export interface DeliverResult {
+  package_dir: string
+  files: string[]
+  control_video: string
+  depth_video: string
+  shot: FilmShot
+}
+
 export const filmApi = {
   getProject: (projectId: string) =>
     request<{ project: FilmProject }>(`/api/film/projects/${enc(projectId)}`).then(r => r.project),
@@ -117,6 +139,49 @@ export const filmApi = {
       method: 'DELETE',
     }),
 
+  /** Consistency Kit: the same asset from several angles with one seed and its bound LoRA. */
+  referenceSheet: (projectId: string, assetId: string, data: { views?: string[]; seed?: number | null } = {}) =>
+    request<{ asset: FilmAsset; prompts: string[]; seed: number | null; reference_paths: string[]; face_scores?: (number | null)[] }>(
+      `/api/film/projects/${enc(projectId)}/assets/${enc(assetId)}/reference-sheet`,
+      { method: 'POST', body: JSON.stringify(data) },
+    ),
+
+  /** Multi-angle shots of an asset (LoRA-ready), each composed from its image and, optionally, a composer guide. */
+  angleSet: (projectId: string, assetId: string, data: { shots: { name: string; view: string; guide_base64?: string }[]; seed?: number | null; identity_path?: string }) =>
+    request<{ asset: FilmAsset; prompts: string[]; seed: number | null; reference_paths: string[]; face_scores?: (number | null)[] }>(
+      `/api/film/projects/${enc(projectId)}/assets/${enc(assetId)}/angle-set`,
+      { method: 'POST', body: JSON.stringify(data) },
+    ),
+
+  /** A storyboard frame: a still of what one shot describes. */
+  shotFrame: (projectId: string, sceneId: string, shotId: string) =>
+    request<FilmShot>(`/api/film/projects/${enc(projectId)}/scenes/${enc(sceneId)}/shots/${enc(shotId)}/frame`, { method: 'POST', body: '{}' }),
+
+  /** Storyboard frames for every shot that has no picture yet. */
+  storyboardFrames: (projectId: string, missingOnly = true) =>
+    request<{ generated: number; skipped: number; failed: string[] }>(`/api/film/projects/${enc(projectId)}/frames`, {
+      method: 'POST',
+      body: JSON.stringify({ missing_only: missingOnly }),
+    }),
+
+  /** A throwaway preview of the photo as the 3D model is now posed. */
+  previewRender: (
+    projectId: string,
+    data: { guide_base64: string; reference_path?: string; reference_base64?: string; prompt: string; pose?: string; width: number; height: number; seed?: number },
+  ) =>
+    request<{ image: string; seconds: number; model: string }>(`/api/film/projects/${enc(projectId)}/preview-render`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  /** The asset's images as a LoRA training dataset; `angles` first renders the
+   *  angles a LoRA needs that the asset lacks (Qwen for characters, Zero123++ for objects). */
+  assetDataset: (projectId: string, assetId: string, opts: { angles?: boolean } = {}) =>
+    request<{ id: string; name: string; trigger: string; items: unknown[] }>(
+      `/api/film/projects/${enc(projectId)}/assets/${enc(assetId)}/dataset`,
+      { method: 'POST', body: JSON.stringify({ angles: !!opts.angles }) },
+    ),
+
   addAssetReference: (projectId: string, assetId: string, imageBase64: string, nameHint: string) =>
     request<{ asset: FilmAsset }>(
       `/api/film/projects/${enc(projectId)}/assets/${enc(assetId)}/references`,
@@ -124,6 +189,13 @@ export const filmApi = {
         method: 'POST',
         body: JSON.stringify({ image_base64: imageBase64, name_hint: nameHint }),
       },
+    ).then(r => r.asset),
+
+  /** Remove one reference image (by relative path) and delete its file. */
+  deleteAssetReference: (projectId: string, assetId: string, path: string) =>
+    request<{ asset: FilmAsset }>(
+      `/api/film/projects/${enc(projectId)}/assets/${enc(assetId)}/references?path=${enc(path)}`,
+      { method: 'DELETE' },
     ).then(r => r.asset),
 
   createScene: (projectId: string, data: Partial<FilmScene>) =>
@@ -204,6 +276,12 @@ export const filmApi = {
       { method: 'POST', body: JSON.stringify({ image_base64: imageBase64, composition }) },
     ),
 
+  deliverShot: (projectId: string, sceneId: string, shotId: string, payload: DeliverPayload) =>
+    request<DeliverResult>(
+      `/api/film/projects/${enc(projectId)}/scenes/${enc(sceneId)}/shots/${enc(shotId)}/deliver`,
+      { method: 'POST', body: JSON.stringify(payload) },
+    ),
+
   generateShot: (projectId: string, sceneId: string, shotId: string, kind: VersionKind) =>
     request<{ status: string; version_number: number; warnings: ContinuityWarning[] }>(
       `/api/film/projects/${enc(projectId)}/scenes/${enc(sceneId)}/shots/${enc(shotId)}/generate`,
@@ -214,7 +292,7 @@ export const filmApi = {
     projectId: string,
     data: { kind: VersionKind; scene_id?: string; shot_ids?: string[] },
   ) =>
-    request<{ status: string; queued: QueuedJob[] }>(
+    request<{ status: string; queued: QueuedJob[]; skipped: { shot_id: string; reason: string }[] }>(
       `/api/film/projects/${enc(projectId)}/generate/batch`,
       { method: 'POST', body: JSON.stringify(data) },
     ),
@@ -350,11 +428,20 @@ export const filmApi = {
           { method: 'POST', body: JSON.stringify({}) },
         ).then(r => r.asset),
 
+  /** Redraw a shot's frame (and end frame) or a project image in a style asset's art style:
+   *  FLUX.1 USO Dev when installed, else FLUX.2 Klein. `targetAssetId` keeps the result as that asset's image. */
+  applyStyle: (projectId: string, styleId: string, body: { shot_id?: string; image_path?: string; subject?: string; target_asset_id?: string }) =>
+    request<{ image_path: string; model: string; style_images: string[]; shot: FilmShot | null; asset: FilmAsset | null }>(
+      `/api/film/projects/${enc(projectId)}/assets/${enc(styleId)}/apply-style`,
+      { method: 'POST', body: JSON.stringify(body) },
+    ),
+
   /** Render a reference image for an asset with the project's image model. */
-  generateAssetReference: (projectId: string, assetId: string, prompt = '') =>
+  generateAssetReference: (projectId: string, assetId: string, prompt = '', view = '') =>
     request<{ asset: FilmAsset; prompt: string; provider: string; model: string; reference_path: string }>(
       `/api/film/projects/${enc(projectId)}/assets/${enc(assetId)}/generate-reference`,
-      { method: 'POST', body: JSON.stringify({ prompt }) },
+      // `view`: a sheet view this image replaces - the file is named after it so it shows in that tile.
+      { method: 'POST', body: JSON.stringify({ prompt, view }) },
     ),
 
   /** Model list from the configured OpenAI-compatible endpoint (LM Studio, vLLM, …). */

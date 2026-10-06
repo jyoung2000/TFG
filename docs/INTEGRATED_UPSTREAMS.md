@@ -73,3 +73,202 @@ what was inspected and adapted, from which commits, under which licenses.
     this app's own articulated figure (`figure.ts`).
 - **Not used**: mannequin-js and its meshes/pose files, react-three-fiber,
   drei, zustand, the MCP WebSocket server, video export.
+
+
+## kijai/ComfyUI-Florence2 (Florence-2 task map, model registry)
+
+- **URL**: https://github.com/kijai/ComfyUI-Florence2
+- **License**: MIT
+- **Commit inspected**: main as of 2026-09 (the repository could not be fetched
+  from this build container; the adaptation was written from the documented
+  task tokens and registry — see `session-notes.md` VF-006)
+- **What was adapted**: the task → post-processing map (box/label parsing,
+  caption cleanup) and the HF model registry (base/large/ft, PromptGen v2,
+  CogFlorence, Flux-Large captioner) → `backend/services/vision/florence2.py`.
+  ComfyUI model management and folder plumbing are replaced by
+  `services/vram/VramManager` and the app-data models directory; the model
+  classes come from `transformers` natively (no `trust_remote_code`), so
+  nothing from `model/` was vendored.
+
+## pharmapsychotic/clip-interrogator (term lists + ranking)
+
+- **URL**: https://github.com/pharmapsychotic/clip-interrogator
+- **Commit inspected**: `bc07ce62c179d3aab3053a623d96a071101d11cb`
+- **License**: MIT (reproduced at `backend/services/vision/clip_data/LICENSE`)
+- **Vendored unchanged**: `clip_interrogator/data/{artists,flavors,mediums,
+  movements,negative}.txt` → `backend/services/vision/clip_data/`
+- **Ported**: `LabelTable` (chunked text embedding + on-disk cache),
+  `rank_top`, `chain`, the classic and negative orderings, the low-VRAM
+  `flavor_intermediate_count` knob → `backend/services/vision/clip_tagger.py`
+  on `transformers`' CLIP (`openai/clip-vit-large-patch14`). The package is
+  not installed (dormant since 2023); BLIP is not used — Florence captions
+  seed `chain()`.
+
+## macchant/imex-next (deterministic image stats, ShotSpec design)
+
+- **URL**: https://github.com/macchant/imex-next
+- **Commit inspected**: `e682df2adf71`
+- **License**: MIT as declared in the README ("MIT — see LICENSE"); the LICENSE
+  file itself is absent from the repository at that commit, so this record
+  relies on the author's declaration. Only design and small pure functions
+  were ported; nothing was vendored verbatim.
+- **What was adapted (phase 3 part)**: `types/schema.ts` (one canonical
+  schema with per-field confidence + sources) → `backend/film/shot_spec.py`,
+  `frontend/types/shotspec.ts`, `frontend/lib/shotspec/schema.ts`;
+  `pipeline/fusion.ts` (deterministic beats VLM for physical properties,
+  tagger/VLM agreement bumps confidence, disagreement caps it, medium
+  inference, negative injection) → `backend/film/shot_spec_fusion.py`,
+  `frontend/lib/shotspec/fusion.ts`; `pipeline/synthesize.ts` (per-model
+  formatters, weighted tags) → the `weighted`/`json` styles in
+  `backend/film/prompt_compiler.py` and `frontend/lib/shotspec/formatters.ts`;
+  `pipeline/vocab.ts` (style/linework/mood lists) → `backend/film/shot_vocabulary.py`.
+  `vlm.ts` and SigLIP are not used.
+- **What was adapted (phase 2 part)**: `pipeline/color.ts` + `pipeline/analyze.ts`
+  — CIELAB k-means palette, border-ring background isolation, vector-likeness,
+  Sobel edge density, aspect snapping, EXIF → `backend/services/vision/
+  deterministic.py` (server truth) and `frontend/lib/shotspec/deterministic.ts`
+  (client preview). `types/schema.ts`, `fusion.ts`, `synthesize.ts` and
+  `vocab.ts` land in phase 3 (ShotSpec). `vlm.ts`/SigLIP are not used.
+
+## NomaDamas/CozyClay — **concepts only, no source used**
+
+- **URL**: https://github.com/NomaDamas/CozyClay — **AGPL-3.0**
+- Nothing from this repository is copied, vendored or imported.
+  `backend/tests/test_licenses.py` fails the build on any AGPL text or
+  CozyClay import. Concepts referenced (written from scratch in phase 3+):
+  camera → film-vocabulary derivation, composable prompt blocks with
+  provenance/locks, crane-height paths.
+
+## robbietilton/Compositor — **concepts only, no source used**
+
+- **URL**: https://github.com/robbietilton/Compositor — MIT, Swift/macOS
+- No Swift source is portable to this Electron app; the layer/mask/adjustment
+  concepts inform `FixCanvas` (phase 4). `test_licenses.py` rejects `.swift`
+  files.
+
+
+## wildbyteai/promptlens (prompt templates)
+
+- **URL**: https://github.com/wildbyteai/promptlens
+- **Commit inspected**: `41c053939450`
+- **License**: MIT
+- **Ported**: `templates.js` built-in Detailed / Natural / Tags / Concise
+  instructions and the custom-template shape (id, name, description,
+  instruction, profile, 4000-character limit, 50 custom max) →
+  `backend/film/prompt_templates.py` (+ `/api/prompts/templates`). The
+  marketing template, IndexedDB history and provider adapters are not used.
+
+## Anil-matcha/Open-Generative-AI (model catalog, cinema vocabulary)
+
+- **URL**: https://github.com/Anil-matcha/Open-Generative-AI
+- **Commit inspected**: `9d939bc8f29a`
+- **License**: MIT
+- **Ported**: `packages/studio/src/components/CinemaStudio.jsx` camera body /
+  lens / focal-length / aperture phrase tables → `backend/film/shot_vocabulary.py`;
+  `packages/studio/src/models.js` (499 hosted model definitions) → extracted by
+  `scripts/extract-model-catalog.mjs` into `backend/film/data/model_catalog.json`
+  (id, name, vendor, task, accepted inputs, aspect ratios, resolutions,
+  durations only — muapi endpoints and marketing fields stripped), read by
+  `backend/film/media_providers.py::capabilities_for`. The Next.js components,
+  Workflow Studio and the Wan2GP HTTP client (phase 9) are not part of this
+  phase.
+
+## wassermanproductions/blockout (previs engine, camera-move library, Deliver)
+
+- **URL**: https://github.com/wassermanproductions/blockout
+- **Commit inspected**: `3f2d0564fd575f70fc28e9bfaa7e94b05e3955d9`
+- **License**: Apache-2.0 (`LICENSE` and the upstream `NOTICE` reproduced at
+  `frontend/views/film/composer/blockout/`; NOTICE also in `NOTICES.md` —
+  credit "Sam Wasserman (wassermanproductions.com)" is kept per §4(d))
+- **Vendored unchanged** (upstream headers kept) → `composer/blockout/engine/`:
+  `types.ts`, `easing.ts`, `path.ts`, `camera.ts` (sensors, lens set, shot
+  sizes, auto-framing), `camera-moves.ts` (39 classic moves), `rigs.ts`,
+  `random.ts`, `gaits.ts`, `assets.ts`, `evaluate.ts` (`state(t)`),
+  `profiles.ts` (generator profiles), `prompt.ts`, `ids.ts`, `strings.ts`.
+- **Adapted** (`# Adapted from` headers): the Deliver pipeline concept →
+  `composer/blockout/deliver.ts` (timeline stepped at the shot fps, clean /
+  depth / normal passes + stills as PNG; encoding moved to the backend
+  `services/stitcher`, output lands in the film project as
+  `generation.control_video` / `depth_video`); `ReferenceUnderlay` concept →
+  `composer/blockout/underlay.ts` (plain three.js plane on the shot camera,
+  viewfinder-only); the move library is bridged to the composer's
+  `CameraMove` presets in `composer/blockout/moves.ts` (Blockout marks →
+  `CompositionKeyframe`s).
+- **Not used**: the React/Zustand shell, Electron main/preload, the
+  choreography/motion/action-preset engines, sequences/schema, glTF export,
+  the ComfyUI workflow writer, `ffmpeg-static` and the GPL FFmpeg builds
+  (this app encodes through its existing `imageio-ffmpeg` dependency or a
+  user-supplied `TFG_FFMPEG`).
+
+## mangerik/Blocking-Room (keyframe utilities, walk cycle, bounded undo)
+
+- **URL**: https://github.com/mangerik/Blocking-Room
+- **Commit inspected**: `3472ad47ae60e3a74433864e4d7436443867c387`
+- **License**: MIT (Copyright (c) 2026 mangerik; text in `NOTICES.md`)
+- **Ported** (`Adapted from` headers): `src/model.js` `sample`/`putKey`/
+  `validateProject` rules → `composer/keyframes.ts` (shortest-arc rotation
+  sampling, 0.1 s snapping, finite/range/unique-time validation, used before
+  save, capture and Deliver); `src/spatial.js` `gait()` → `figure.ts`
+  `walkSwing`/`applyWalkCycle` (distance-tied stride with 0.15 s envelopes,
+  applied during motion preview); `src/history.js` → `composer/history.ts`
+  (bounded snapshot undo with drag grouping, Ctrl+Z / Ctrl+Shift+Z).
+- **Not used**: rooms/doorways, the MediaRecorder export, the UI.
+
+## kohya-ss/musubi-tuner (LoRA trainer, subprocess only)
+
+- **URL**: https://github.com/kohya-ss/musubi-tuner
+- **License**: Apache-2.0
+- **Integration**: **not vendored**. `scripts/ensure-trainer.{sh,ps1} musubi`
+  clones it to `backend/.trainer-musubi` and installs it into its own venv
+  (`backend/.venv-trainer-musubi`); `services/trainer/subprocess_trainer.py`
+  (`MusubiTrainer`) writes the dataset TOML and launches its
+  `*_cache_latents.py`, `*_cache_text_encoder_outputs.py` and
+  `*_train_network.py` scripts through `accelerate`. No source is copied.
+- **Facts relied on** (README at fetch time, session-notes VF-015): 12 GB
+  for image training with `--fp8_base --fp8_scaled --blocks_to_swap`, 24 GB
+  for Wan video training (refused on this card).
+
+## ostris/ai-toolkit (LoRA trainer, subprocess only)
+
+- **URL**: https://github.com/ostris/ai-toolkit
+- **License**: MIT
+- **Integration**: **not vendored**. `scripts/ensure-trainer.{sh,ps1} ai-toolkit`
+  clones it to `backend/.trainer-ai-toolkit` with its own venv;
+  `AiToolkitTrainer` writes one YAML config (`network.type: lora`,
+  `quantize`, `low_vram`, `trigger_word`) and runs `python run.py config.yaml`.
+- **Facts relied on**: config keys per the upstream example configs
+  (session-notes VF-016).
+
+## Lightricks/LTX-2 `packages/ltx-trainer` (catalog entry only)
+
+- **URL**: https://github.com/Lightricks/LTX-2/tree/main/packages/ltx-trainer
+- **License**: Apache-2.0
+- **Integration**: none beyond the catalog (`services/trainer/catalog.py`).
+  The trainer recommends 80 GB and its low-VRAM config targets 32 GB, so it
+  is listed as *needs more than 12 GB* and never launched (VF-017).
+
+## Open-Generative-AI (engine installer — concept only)
+
+- The clone → venv → pip bootstrap under the app's own folders in
+  `scripts/ensure-trainer.{sh,ps1}` follows that project's engine-installer
+  pattern as a concept. No code was copied.
+
+## Anil-matcha/Open-Generative-AI (remote WanGP concept, capability catalog)
+
+- **URL**: https://github.com/Anil-matcha/Open-Generative-AI
+- **License**: MIT
+- **Used**: the capability catalog (`backend/film/data/model_catalog.json`,
+  extracted from `packages/studio/src/models.js`, see the header there) and
+  the *concept* of treating Wan2GP as a remote server the desktop only
+  sends prompts to (`services/wangp_remote_bridge.py`,
+  docs/adr/0002). Its Gradio HTTP client was not copied; TFG's transport is
+  its own `/api/wangp/*` API.
+
+## Model Context Protocol (specification, tools-only subset)
+
+- **URL**: https://modelcontextprotocol.io/specification/2025-06-18
+- **Used**: the JSON-RPC method set (`initialize`, `tools/list`,
+  `tools/call`, `ping`, `notifications/initialized`) and result shapes,
+  implemented without the SDK in `backend/agent/mcp_core.py` (docs/adr/0004).
+  Hermes Agent's MCP client configuration was verified against
+  https://github.com/NousResearch/hermes-agent (`website/docs/user-guide/features/mcp.md`, `skills.md`).

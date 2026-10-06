@@ -1,0 +1,106 @@
+# TFG container stack (docs/CONTAINERS.md).
+#
+#   backend  — this repo's FastAPI backend with the WanGP bridge in-process
+#              (NVIDIA runtime; models and outputs on volumes)
+#   vision   — the same image running vision_worker.py: Florence-2, CLIP,
+#              Depth-Anything, DINOv2 in their own environment
+#   ollama   — optional VLM (qwen2.5vl:3b pulled on first start)
+#
+# The desktop app connects with Settings → General → Remote backend
+# (URL http://<host>:8000, the LTX_AUTH_TOKEN below), or drives only the
+# WanGP inside with WANGP_REMOTE_URL / WANGP_REMOTE_TOKEN.
+#
+#   cp deploy/.env.example deploy/.env   # set LTX_AUTH_TOKEN
+#   docker compose -f deploy/docker-compose.yml up -d --build
+#   curl -H "Authorization: Bearer $LTX_AUTH_TOKEN" http://localhost:8000/health
+
+name: tfg
+
+services:
+  backend:
+    build:
+      context: ..
+      dockerfile: deploy/backend.Dockerfile
+      args:
+        WANGP_REF: ${WANGP_REF:-main}
+    image: tfg-backend:local
+    restart: unless-stopped
+    ports:
+      - "${TFG_PORT:-8000}:8000"
+    environment:
+      LTX_HOST: 0.0.0.0
+      LTX_PORT: "8000"
+      LTX_AUTH_TOKEN: ${LTX_AUTH_TOKEN:?set LTX_AUTH_TOKEN in deploy/.env}
+      # models/, outputs/ and settings.json live under this one directory
+      LTX_APP_DATA_DIR: /data
+      WANGP_ROOT: /opt/Wan2GP
+      WANGP_VIDEO_MODEL_TYPE: ${WANGP_VIDEO_MODEL_TYPE:-ltx2_22B_distilled}
+      WANGP_IMAGE_MODEL_TYPE: ${WANGP_IMAGE_MODEL_TYPE:-z_image}
+      TFG_VISION_URL: http://vision:8765
+      TFG_VLM_BASE_URL: http://ollama:11434
+      HF_HOME: /data/models/hf
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility,video
+    volumes:
+      - tfg-data:/data
+      - wangp-ckpts:/opt/Wan2GP/ckpts
+    depends_on:
+      - vision
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,urllib.request;r=urllib.request.Request('http://127.0.0.1:8000/health',headers={'Authorization':'Bearer '+os.environ['LTX_AUTH_TOKEN']});urllib.request.urlopen(r,timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+  vision:
+    image: tfg-backend:local
+    restart: unless-stopped
+    command: ["/opt/venv-vision/bin/python", "vision_worker.py", "--host", "0.0.0.0", "--port", "8765", "--cache-dir", "/data/vision-cache/models"]
+    environment:
+      LTX_APP_DATA_DIR: /data
+      HF_HOME: /data/models/hf
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    volumes:
+      - tfg-data:/data
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    profiles: ["vlm"]
+    entrypoint: ["/bin/sh", "/ollama/entrypoint.sh"]
+    environment:
+      OLLAMA_KEEP_ALIVE: "0"
+      TFG_VLM_MODEL: ${TFG_VLM_MODEL:-qwen2.5vl:3b}
+    volumes:
+      - ollama:/root/.ollama
+      - ./ollama:/ollama:ro
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+volumes:
+  tfg-data:
+  wangp-ckpts:
+  ollama:

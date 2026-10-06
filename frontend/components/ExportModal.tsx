@@ -1,3 +1,4 @@
+import { exportClipsFor } from './exportClips'
 import { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import { X, Download, FolderOpen, Film, Package, Loader2, Check, AlertCircle, ChevronDown } from 'lucide-react'
 import { Button } from './ui/button'
@@ -256,25 +257,9 @@ export function ExportModal({ open, onClose, clips, tracks, timeline, projectNam
         return
       }
 
-      // Build clip data for ffmpeg native export (video/image + audio clips)
-      const exportClips = clips
-        .filter(c => c.type === 'video' || c.type === 'image' || c.type === 'audio')
-        .filter(c => tracks[c.trackIndex]?.enabled !== false)
-        .map(c => ({
-          url: c.asset?.url || c.importedUrl || '',
-          type: c.type as string,
-          startTime: c.startTime,
-          duration: c.duration,
-          trimStart: c.trimStart,
-          speed: c.speed || 1,
-          reversed: c.reversed || false,
-          flipH: c.flipH || false,
-          flipV: c.flipV || false,
-          opacity: c.opacity ?? 100,
-          trackIndex: c.trackIndex,
-          muted: c.muted || false,
-          volume: c.volume ?? 1,
-        }))
+      // Build clip data for ffmpeg native export: the takes the timeline plays,
+      // with track mute / solo (QA 2026-10-01, see exportClips.ts).
+      const exportClips = exportClipsFor(clips, tracks)
 
       // Compute subtitle data for burn-in
       const subtitleData = (burnSubtitles && timeline.subtitles) ? timeline.subtitles.map(sub => {
@@ -297,8 +282,8 @@ export function ExportModal({ open, onClose, clips, tracks, timeline, projectNam
         subtitles: subtitleData.length > 0 ? subtitleData : undefined,
       })
 
-      if (result?.error) {
-        throw new Error(result.error)
+      if (result?.error || (result && 'success' in result && result.success === false)) {
+        throw new Error(result.error || 'The export failed (no error message from ffmpeg).')
       }
 
       setExportProgress(100)

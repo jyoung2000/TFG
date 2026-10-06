@@ -12,13 +12,18 @@ generation queue drives it with one loop regardless of vendor.
 
 from __future__ import annotations
 
+import json
+import logging
 from dataclasses import dataclass, replace
-from typing import Literal, cast
+from pathlib import Path
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel, Field, ValidationError
 
 from _routes._errors import HTTPError
 from services.interfaces import HTTPClient, HttpTimeoutError, JSONValue
+
+logger = logging.getLogger(__name__)
 
 MediaTask = Literal["video", "image"]
 JobState = Literal["queued", "running", "complete", "failed"]
@@ -109,6 +114,112 @@ _CURATED: dict[str, list[MediaModel]] = {
         MediaModel("black-forest-labs/flux-schnell", "FLUX schnell", "replicate", "image", "", False, True),
     ],
 }
+
+
+# ---------------------------------------------------------------------------
+# Capability catalog
+#
+# `data/model_catalog.json` is extracted from Anil-matcha/Open-Generative-AI
+# (MIT, `packages/studio/src/models.js`) by `scripts/extract-model-catalog.mjs`:
+# ~500 hosted model families with the inputs each accepts. It answers "can
+# this family take a start frame / a mask / a negative prompt" and which
+# aspect ratios, resolutions and durations it offers — the facts the tiered
+# fallback (phase 9) and the compiler's cloud_generic params need. Provider
+# endpoints and marketing fields were stripped at extraction.
+
+
+@dataclass(slots=True)
+class ModelCapabilities:
+    id: str
+    name: str
+    vendor: str
+    #: t2i | t2v | i2i | i2v | v2v
+    task: str
+    image_input: bool = False
+    video_input: bool = False
+    edit: bool = False
+    negative_prompt: bool = False
+    seed: bool = False
+    aspect_ratios: tuple[str, ...] = ()
+    resolutions: tuple[str, ...] = ()
+    duration_min: float | None = None
+    duration_max: float | None = None
+    duration_default: float | None = None
+
+    @property
+    def tasks(self) -> tuple[str, ...]:
+        """TFG task flags: T2I / I2I / T2V / I2V / EDIT."""
+        flags: list[str] = []
+        if self.task == "t2i":
+            flags.append("T2I")
+        if self.task == "i2i" or (self.task == "t2i" and self.image_input):
+            flags.append("I2I")
+        if self.task == "t2v":
+            flags.append("T2V")
+        if self.task == "i2v" or (self.task == "t2v" and self.image_input):
+            flags.append("I2V")
+        if self.edit:
+            flags.append("EDIT")
+        return tuple(flags)
+
+
+_CATALOG_PATH = Path(__file__).parent / "data" / "model_catalog.json"
+_catalog_cache: dict[str, ModelCapabilities] | None = None
+
+
+def load_catalog() -> dict[str, ModelCapabilities]:
+    """The capability catalog keyed by model id (cached; empty if the file is missing)."""
+    global _catalog_cache
+    if _catalog_cache is not None:
+        return _catalog_cache
+    catalog: dict[str, ModelCapabilities] = {}
+    try:
+        payload = cast(dict[str, Any], json.loads(_CATALOG_PATH.read_text(encoding="utf-8")))
+        for raw in cast(list[dict[str, Any]], payload.get("models", [])):
+            duration = cast(dict[str, Any] | None, raw.get("duration"))
+            entry = ModelCapabilities(
+                id=str(raw.get("id", "")),
+                name=str(raw.get("name", "")),
+                vendor=str(raw.get("vendor", "")),
+                task=str(raw.get("task", "")),
+                image_input=bool(raw.get("image_input", False)),
+                video_input=bool(raw.get("video_input", False)),
+                edit=bool(raw.get("edit", False)),
+                negative_prompt=bool(raw.get("negative_prompt", False)),
+                seed=bool(raw.get("seed", False)),
+                aspect_ratios=tuple(str(a) for a in cast(list[Any], raw.get("aspect_ratios", []))),
+                resolutions=tuple(str(r) for r in cast(list[Any], raw.get("resolutions", []))),
+                duration_min=float(duration["min"]) if duration and duration.get("min") is not None else None,
+                duration_max=float(duration["max"]) if duration and duration.get("max") is not None else None,
+                duration_default=float(duration["default"]) if duration and duration.get("default") is not None else None,
+            )
+            if entry.id:
+                catalog[entry.id] = entry
+    except (OSError, ValueError) as exc:
+        logger.warning("Model capability catalog unavailable: %s", exc)
+    _catalog_cache = catalog
+    return catalog
+
+
+def capabilities_for(model_id: str) -> ModelCapabilities | None:
+    """Exact id first, then the longest catalog id contained in `model_id`
+    (hosted providers wrap the same family under their own path)."""
+    catalog = load_catalog()
+    needle = model_id.strip().lower()
+    if not needle:
+        return None
+    if needle in catalog:
+        return catalog[needle]
+    best: ModelCapabilities | None = None
+    for key, entry in catalog.items():
+        if key and key in needle and (best is None or len(key) > len(best.id)):
+            best = entry
+    return best
+
+
+def catalog_models(task: str = "") -> list[ModelCapabilities]:
+    """All catalog entries, optionally for one task (t2i/t2v/i2i/i2v/v2v)."""
+    return [m for m in load_catalog().values() if not task or m.task == task]
 
 
 def curated_models(provider: str) -> list[MediaModel]:

@@ -1,3 +1,4 @@
+import { commitNumber } from './settingsNumber'
 import { useCallback, useEffect, useState } from 'react'
 import {
   AlertTriangle,
@@ -137,6 +138,7 @@ export function FilmRenderSettingsCard() {
             className={selectClass}
             aria-label="Default quality profile"
           >
+            {!capabilities?.profiles?.length && <option value={settings.default_quality_preset}>{settings.default_quality_preset}</option>}
             {(capabilities?.profiles ?? []).map(p => (
               <option key={p.id} value={p.id}>
                 {p.label}
@@ -163,31 +165,11 @@ export function FilmRenderSettingsCard() {
         </label>
         <label className="flex items-center justify-between gap-2">
           <span>Preview max seconds</span>
-          <input
-            type="number"
-            min={1}
-            max={20}
-            step={1}
-            value={settings.preview_max_seconds}
-            disabled={saving}
-            onChange={e => void update({ preview_max_seconds: Math.max(1, Number(e.target.value) || 4) })}
-            className={`${selectClass} w-16 text-center`}
-            aria-label="Preview max seconds"
-          />
+          <SettingNumber value={settings.preview_max_seconds} min={1} max={20} step={1} label="Preview max seconds" className={`${selectClass} w-16 text-center`} onCommit={v => void update({ preview_max_seconds: v })} />
         </label>
         <label className="flex items-center justify-between gap-2">
           <span>Gap between shots on the timeline (s)</span>
-          <input
-            type="number"
-            min={0}
-            max={10}
-            step={0.5}
-            value={settings.inter_shot_gap_seconds}
-            disabled={saving}
-            onChange={e => void update({ inter_shot_gap_seconds: Math.max(0, Number(e.target.value) || 0) })}
-            className={`${selectClass} w-16 text-center`}
-            aria-label="Gap between shots"
-          />
+          <SettingNumber value={settings.inter_shot_gap_seconds} min={0} max={10} step={0.5} label="Gap between shots" className={`${selectClass} w-16 text-center`} onCommit={v => void update({ inter_shot_gap_seconds: v })} />
         </label>
         <label className="flex items-center justify-between gap-2 col-span-2">
           <span>
@@ -579,5 +561,33 @@ export function InstalledModelsPanel() {
         <p className="text-[11px] text-zinc-600 leading-relaxed">{capabilities.vram_note}</p>
       </div>
     </div>
+  )
+}
+
+/**
+ * A number setting that keeps what is typed and saves on Enter / leaving the
+ * field (QA 2026-10-01: saving per keystroke turned "12" into "1").
+ */
+function SettingNumber({ value, min, max, step, label, className, onCommit }: { value: number; min: number; max: number; step: number; label: string; className: string; onCommit: (value: number) => void }) {
+  const [text, setText] = useState(String(value))
+  useEffect(() => setText(String(value)), [value])
+  const commit = () => {
+    const next = commitNumber(text, value, { min, max })
+    if (next === null) setText(String(value))
+    else onCommit(next)
+  }
+  return (
+    <input
+      type="number"
+      min={min}
+      max={max}
+      step={step}
+      value={text}
+      onChange={e => setText(e.target.value)}
+      onBlur={commit}
+      onKeyDown={e => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }}
+      className={className}
+      aria-label={label}
+    />
   )
 }

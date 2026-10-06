@@ -4,6 +4,14 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+
+from services.vision.fake_vision import FakeVision
+from services.vram.vram_manager import FakeNvml
+from services.motion.fake_motion import FakeMotion
+from services.stitcher.video_stitcher import FakeStitcher
+from services.lora_fetcher.fake_lora_fetcher import FakeLoraFetcher
+from services.trainer.fake_trainer import FakeTrainer
+from tests.fakes.fake_wangp_bridge import FakeWanGPBridge
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -87,6 +95,30 @@ class FakeHTTPClient:
     ) -> FakeResponse:
         self.calls.append(HttpCall("put", url, headers, None, data, timeout))
         return self._dequeue("put")
+
+    def download_to(
+        self,
+        url: str,
+        path: Path,
+        on_chunk: Any,
+        headers: dict[str, str] | None = None,
+        timeout: int = 60,
+        chunk_bytes: int = 1024 * 1024,
+    ) -> int:
+        """Serves a queued GET response in chunks, as the real client streams it."""
+        self.calls.append(HttpCall("download_to", url, headers, None, None, timeout))
+        response = self._dequeue("get")
+        if response.status_code != 200:
+            raise RuntimeError(f"Download failed: HTTP {response.status_code}")
+        body = response.content
+        written = 0
+        with path.open("wb") as handle:
+            while written < len(body):
+                chunk = body[written:written + chunk_bytes]
+                handle.write(chunk)
+                written += len(chunk)
+                on_chunk(written, len(body))
+        return written
 
 
 class FakeTaskRunner:
@@ -745,6 +777,48 @@ class FakeTextEncoder:
 
 
 @dataclass
+class FakeFaceMatcher:
+    """Face vectors for tests: `queue` is consumed one per call (None = no face);
+    then `vectors` by file-name fragment; then `default`."""
+
+    queue: list[list[float] | None] = field(default_factory=list[list[float] | None])
+    vectors: dict[str, list[float]] = field(default_factory=dict[str, list[float]])
+    default: list[float] = field(default_factory=lambda: [1.0, 0.0])
+    enabled: bool = True
+    calls: list[str] = field(default_factory=list[str])
+    #: Face boxes (pixels: x, y, w, h) by file-name fragment; none by default.
+    boxes: dict[str, tuple[float, float, float, float]] = field(default_factory=dict[str, tuple[float, float, float, float]])
+    #: Face box and five landmarks by file-name fragment; none by default.
+    points: dict[str, tuple[tuple[float, float, float, float], list[tuple[float, float]]]] = field(
+        default_factory=dict[str, tuple[tuple[float, float, float, float], list[tuple[float, float]]]]
+    )
+
+    def available(self) -> bool:
+        return self.enabled
+
+    def face_box(self, image_path: str) -> tuple[float, float, float, float] | None:
+        for fragment, box in self.boxes.items():
+            if fragment in image_path:
+                return box
+        return None
+
+    def face_points(self, image_path: str) -> tuple[tuple[float, float, float, float], list[tuple[float, float]]] | None:
+        for fragment, found in self.points.items():
+            if fragment in image_path:
+                return found
+        return None
+
+    def embedding(self, image_path: str) -> list[float] | None:
+        self.calls.append(image_path)
+        if self.queue:
+            return self.queue.pop(0)
+        for fragment, vector in self.vectors.items():
+            if fragment in image_path:
+                return vector
+        return self.default
+
+
+@dataclass
 class FakeServices:
     http: FakeHTTPClient = field(default_factory=FakeHTTPClient)
     gpu_cleaner: FakeGpuCleaner = field(default_factory=FakeGpuCleaner)
@@ -762,6 +836,18 @@ class FakeServices:
     a2v_pipeline: FakeA2VPipeline = field(default_factory=FakeA2VPipeline)
     retake_pipeline: FakeRetakePipeline = field(default_factory=FakeRetakePipeline)
     ic_lora_model_downloader: FakeIcLoraModelDownloader = field(default_factory=FakeIcLoraModelDownloader)
+    vision: FakeVision = field(default_factory=FakeVision)
+    nvml: FakeNvml = field(default_factory=FakeNvml)
+    motion: FakeMotion = field(default_factory=FakeMotion)
+    stitcher: FakeStitcher = field(default_factory=FakeStitcher)
+    trainer: FakeTrainer = field(default_factory=FakeTrainer)
+    lora_fetcher: FakeLoraFetcher = field(default_factory=FakeLoraFetcher)
+    #: Off by default: tests that exercise face matching turn it on.
+    face_matcher: FakeFaceMatcher = field(default_factory=lambda: FakeFaceMatcher(enabled=False))
+    #: Injected into the bundle by conftest (needs the outputs dir); None until then.
+    wangp_bridge: FakeWanGPBridge | None = None
+    #: Zero123++ stand-in, off by default; conftest gives it a folder.
+    multiview: Any = None
 
     def __post_init__(self) -> None:
         FakeFastVideoPipeline.bind_singleton(self.fast_video_pipeline)

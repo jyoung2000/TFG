@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import cast
 
 from film.video_analysis_models import VideoAnalysis
+from server_utils.atomic_file import replace_with_retry
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +81,7 @@ class VideoAnalysisStore:
         # half-written analysis that fails to parse on the next open.
         temporary = document.with_suffix(".json.tmp")
         temporary.write_text(analysis.model_dump_json(indent=2), encoding="utf-8")
-        temporary.replace(document)
+        replace_with_retry(temporary, document)
 
     def list_ids(self) -> list[str]:
         if not self._root.is_dir():

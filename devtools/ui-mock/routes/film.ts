@@ -16,6 +16,10 @@ import { seedProject } from '../seed'
 
 const now = () => Date.now()
 
+/** A short, visible "the AI is working" pause for the asset-kit endpoints,
+ *  so pipeline spinners and tile states are observable (and e2e-testable). */
+const pipelineDelay = () => new Promise<void>(resolve => setTimeout(resolve, 250))
+
 function findScene(project: FilmProject, sceneId: string): FilmScene {
   const scene = project.scenes.find(s => s.id === sceneId)
   if (!scene) throw new MockHttpError(404, `Scene not found: ${sceneId}`)
@@ -146,7 +150,8 @@ export function registerFilmRoutes(router: Router, store: Store, clipUrl: string
       const p = project(req.params.projectId)
       const asset = p.assets.find(a => a.id === req.params.assetId)
       if (!asset) throw new MockHttpError(404, `Asset not found: ${req.params.assetId}`)
-      applyPatch(asset, req.body, ['id', 'created_at'])
+      applyPatch(asset, req.body, ['id', 'created_at', 'clear_seed_lock'])
+      if (req.body.clear_seed_lock) asset.seed_lock = null
       asset.updated_at = now()
       touched(p)
       return { asset }
@@ -175,8 +180,43 @@ export function registerFilmRoutes(router: Router, store: Store, clipUrl: string
     }),
   )
 
-  router.post('/api/film/projects/:projectId/assets/:assetId/generate-reference', req =>
-    store.mutate(state => {
+  router.delete('/api/film/projects/:projectId/assets/:assetId/references', req =>
+    store.mutate(() => {
+      const p = project(req.params.projectId)
+      const asset = p.assets.find(a => a.id === req.params.assetId)
+      if (!asset) throw new MockHttpError(404, `Asset not found: ${req.params.assetId}`)
+      const path = req.query.get('path') ?? ''
+      if (!asset.reference_images.includes(path)) throw new MockHttpError(404, `Reference not found on ${asset.name}: ${path}`)
+      asset.reference_images = asset.reference_images.filter(r => r !== path)
+      asset.updated_at = now()
+      touched(p)
+      return { asset }
+    }),
+  )
+
+  router.post('/api/film/projects/:projectId/assets/:assetId/reference-sheet', async req => {
+    await pipelineDelay()
+    return store.mutate(state => {
+      const p = project(req.params.projectId)
+      const asset = p.assets.find(a => a.id === req.params.assetId)
+      if (!asset) throw new MockHttpError(404, `Asset not found: ${req.params.assetId}`)
+      const views = ((req.body.views as string[] | undefined) ?? ['front view', 'three-quarter view', 'profile view', 'back view']).slice(0, 6)
+      const seed = typeof req.body.seed === 'number' ? req.body.seed : asset.seed_lock ?? 4242
+      const lora = state.training.loras.find(l => l.id === asset.lora_id)
+      const trigger = asset.lora_trigger || lora?.trigger || ''
+      const prompts = views.map(view => [trigger, `${asset.name}, ${asset.appearance || asset.description}`, view, 'consistent character sheet, same person, same outfit'].filter(Boolean).join(', '))
+      const paths = views.map(view => `references/${asset.id}-${view.replace(/ /g, '-')}-${asset.reference_images.length + 1}.png`)
+      asset.reference_images.push(...paths)
+      if (asset.seed_lock === null) asset.seed_lock = seed
+      asset.updated_at = now()
+      touched(p)
+      return { asset, prompts, seed, reference_paths: paths }
+    })
+  })
+
+  router.post('/api/film/projects/:projectId/assets/:assetId/generate-reference', async req => {
+    await pipelineDelay()
+    return store.mutate(state => {
       const p = project(req.params.projectId)
       const asset = p.assets.find(a => a.id === req.params.assetId)
       if (!asset) throw new MockHttpError(404, `Asset not found: ${req.params.assetId}`)
@@ -198,11 +238,12 @@ export function registerFilmRoutes(router: Router, store: Store, clipUrl: string
         model: (p.settings.image_model || state.settings.defaultImageModel || 'local-image').trim(),
         reference_path: path,
       }
-    }),
-  )
+    })
+  })
 
-  router.post('/api/film/projects/:projectId/assets/:assetId/style-guide', req =>
-    store.mutate(() => {
+  router.post('/api/film/projects/:projectId/assets/:assetId/style-guide', async req => {
+    await pipelineDelay()
+    return store.mutate(() => {
       const p = project(req.params.projectId)
       const asset = p.assets.find(a => a.id === req.params.assetId)
       if (!asset) throw new MockHttpError(404, `Asset not found: ${req.params.assetId}`)
@@ -213,11 +254,15 @@ export function registerFilmRoutes(router: Router, store: Store, clipUrl: string
         mood: 'cinematic, tactile and grounded',
         recommended_prompt: `${asset.name}: ${asset.appearance || asset.description || 'preserve the visible shape, materials and color palette'}`,
       }
+      // Mirror the backend: the vision pass also fills the derived fields.
+      if (!asset.description) asset.description = `${asset.name}, as seen in the reference image`
+      if (asset.kind === 'character' && !asset.appearance) asset.appearance = 'matches the reference image (mock analysis)'
+      if (asset.kind === 'style') asset.style_prompt = asset.style_guide.recommended_prompt
       asset.updated_at = now()
       touched(p)
       return { asset }
-    }),
-  )
+    })
+  })
 
   // ---- Scenes ----
 
@@ -295,6 +340,7 @@ export function registerFilmRoutes(router: Router, store: Store, clipUrl: string
         visual_prompt: '',
         composition: null,
         capture_path: '',
+        blockout_path: '',
         versions: [],
         current_version: null,
         status: 'draft',
@@ -383,6 +429,30 @@ export function registerFilmRoutes(router: Router, store: Store, clipUrl: string
       renumber(scene.shots)
       touched(p)
       return copy
+    }),
+  )
+
+  router.post('/api/film/projects/:projectId/scenes/:sceneId/shots/:shotId/deliver', req =>
+    store.mutate(() => {
+      const p = project(req.params.projectId)
+      const shot = findShot(findScene(p, req.params.sceneId), req.params.shotId)
+      const clean = Array.isArray(req.body.clean) ? (req.body.clean as string[]) : []
+      const depth = Array.isArray(req.body.depth) ? (req.body.depth as string[]) : []
+      const normal = Array.isArray(req.body.normal) ? (req.body.normal as string[]) : []
+      if (!clean.length && !depth.length && !normal.length) throw new MockHttpError(400, 'Nothing to deliver: render at least one pass.')
+      const version = Math.max(0, ...shot.versions.map(v => v.number)) + 1
+      const dir = `deliver/${shot.id}/v${version}`
+      const files: string[] = []
+      if (clean.length) files.push(`${dir}/reference.mp4`)
+      if (depth.length) files.push(`${dir}/depth.mp4`)
+      if (normal.length) files.push(`${dir}/normal.mp4`)
+      files.push(`${dir}/metadata.json`)
+      if (req.body.composition) syncComposition(shot, req.body.composition as CompositionScene)
+      shot.generation.control_video = clean.length ? `${dir}/reference.mp4` : ''
+      shot.generation.depth_video = depth.length ? `${dir}/depth.mp4` : ''
+      shot.updated_at = now()
+      touched(p)
+      return { package_dir: dir, files, control_video: shot.generation.control_video, depth_video: shot.generation.depth_video, shot }
     }),
   )
 

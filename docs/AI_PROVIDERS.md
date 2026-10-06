@@ -99,6 +99,39 @@ a message naming the provider and the setting to fill in; provider `401`s
 surface as an invalid-key error; timeouts fail the job rather than hanging
 the queue.
 
+### Per-task capabilities and tiered fallback (phase 9)
+
+Every task — **T2I, I2I, T2V, I2V, EDIT** — has its own tier list in
+*Settings → AI Models → Fallback order per task* (`AppSettings.media_tiers`).
+The first tier renders; when it fails (out of VRAM, a provider error) the
+next one runs with the same prompt and seed; a cancel never falls through.
+Local first is the default and nothing hosted is added unless you add it.
+
+The preview beside each row comes from `GET /api/settings/tiers` and says
+why a tier would be skipped: `FAL_KEY_MISSING`, "no fal model id for t2v",
+"…cannot do i2v per the capability catalog" (the catalog is
+`backend/film/data/model_catalog.json`, extracted from Open-Generative-AI),
+or "local engine cannot do edit yet". Film projects with an explicit
+provider keep it; the film queue and Create video both use the tiers.
+History shows `fallback` in a job's metrics with every attempt's reason.
+
+### Cost and privacy per provider
+
+| Provider | What leaves your machine | Billing | Notes |
+|---|---|---|---|
+| **Local** (WanGP / LTX pipeline) | nothing | electricity | the only option that is fully offline; 12 GB preset defaults here |
+| **Remote backend / container** (`docs/CONTAINERS.md`) | prompts, conditioning images, LoRAs — to *your* box | your hardware | same privacy as local, over your LAN/VPN; token-authenticated |
+| LTX API | prompts, images, audio | per-second / per-clip, your LTX key | forced-API builds (macOS) use it for video |
+| fal.ai | prompts + inline `data:` images | per-inference, your fal key | queue API; no file host upload |
+| WaveSpeed AI | prompts + inline images | per-inference | submit → poll → download |
+| Replicate | prompts + inline images | per-second of compute | model or pinned `version` |
+| OpenRouter / Claude / Grok / Gemini (text) | your script, storyboard and prompts | per-token | AI Director only; never receives media unless the VLM provider is set to one of them |
+| Local / OpenAI-compatible (text), Ollama (VLM) | nothing | your hardware | LM Studio, vLLM, Ollama on this machine or the compose stack |
+
+Keys never leave the backend's settings file, are redacted from logs and
+are absent from `GET /api/settings` (only `has*` flags) — see *Where the
+secrets live* below.
+
 ---
 
 ## The Model Library

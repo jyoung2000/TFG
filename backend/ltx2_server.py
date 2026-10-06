@@ -1,7 +1,6 @@
 """FastAPI composition root for the LTX backend server."""
 import os
 import sys
-import shlex
 from typing import Any, cast
 
 if os.environ.get("BACKEND_DEBUG") == "1":
@@ -37,7 +36,9 @@ import platform
 # them to the session log file. This ensures *all* output (including early
 # import errors and unhandled tracebacks) reaches the log, not just messages
 # that go through Python's logging module.
-console_handler = logging.StreamHandler(sys.stdout)
+from logging_policy import console_handler as _console_handler  # noqa: E402
+
+console_handler = _console_handler(sys.stdout)
 console_handler.setLevel(logging.INFO)
 
 logging.basicConfig(level=logging.INFO, handlers=[console_handler])
@@ -147,68 +148,12 @@ IC_LORA_DIR = MODELS_DIR / "ic-loras"
 
 
 def _resolve_wangp_root() -> Path | None:
-    candidates: list[Path] = []
-    search_roots = [PROJECT_ROOT, *PROJECT_ROOT.parents]
-
-    for env_key in ("WANGP_ROOT", "WANGP_WGP_PATH"):
-        raw_value = os.environ.get(env_key, "").strip()
-        if not raw_value:
-            continue
-        candidate = Path(raw_value)
-        if candidate.is_file():
-            candidate = candidate.parent
-        candidates.append(candidate)
-
-    # Fall back to bundled/sibling checkouts only when no explicit WanGP root
-    # was provided in the environment.
-    for base in search_roots:
-        candidates.append(base)
-        for sibling_name in ("Wan2GP", "WanGP", "wan2gp", "wangp"):
-            candidates.append(base / sibling_name)
-
-    seen: set[Path] = set()
-    for candidate in candidates:
-        try:
-            resolved = candidate.resolve()
-        except Exception:
-            continue
-        if resolved in seen:
-            continue
-        seen.add(resolved)
-        if (resolved / "wgp.py").exists():
-            return resolved
-    return None
+    return resolve_wangp_root(project_root=PROJECT_ROOT, app_data_dir=APP_DATA_DIR)
 
 
 def _resolve_wangp_python(wangp_root: Path | None) -> str | None:
-    env_python = os.environ.get("WANGP_PYTHON", "").strip()
-    if env_python:
-        return env_python
+    return resolve_wangp_python(wangp_root=wangp_root)
 
-    if wangp_root is not None:
-        if os.name == "nt":
-            venv_candidate = wangp_root / ".venv" / "Scripts" / "python.exe"
-        else:
-            venv_candidate = wangp_root / ".venv" / "bin" / "python"
-        if venv_candidate.exists():
-            return str(venv_candidate)
-
-    return sys.executable
-
-
-def _resolve_wangp_extra_args() -> tuple[str, ...]:
-    raw_args = os.environ.get("WANGP_EXTRA_ARGS", "").strip()
-    args = tuple(shlex.split(raw_args)) if raw_args else ()
-    # SageAttention kernels are JIT-compiled by Triton at generation time.
-    # The embedded python-embed interpreter ships without development headers
-    # (Include/Python.h), so Triton's tcc cannot build cuda_utils.c and every
-    # generation dies with 'include file Python.h not found'. sdpa is the
-    # pure-torch fallback (built-in scaled_dot_product_attention) and works
-    # with the embedded interpreter. Only force it when the caller did not
-    # already pick an attention mode explicitly.
-    if "--attention" not in args and not any(a.startswith("--attention=") for a in args):
-        args = args + ("--attention", "sdpa")
-    return args
 
 # ============================================================
 # Settings
@@ -219,6 +164,9 @@ SETTINGS_DIR.mkdir(parents=True, exist_ok=True)
 SETTINGS_FILE = SETTINGS_DIR / "settings.json"
 
 DEFAULT_APP_SETTINGS = AppSettings()
+# The compose stack points the VLM at its ollama service without a settings edit.
+if os.environ.get("TFG_VLM_BASE_URL", "").strip():
+    DEFAULT_APP_SETTINGS.vision.vlm_base_url = os.environ["TFG_VLM_BASE_URL"].strip()
 
 from app_factory import DEFAULT_ALLOWED_ORIGINS, create_app
 from state import RuntimeConfig, build_initial_state
@@ -227,18 +175,28 @@ from runtime_config.runtime_policy import decide_force_api_generations
 from state.app_state_types import ModelFileType
 from server_utils.model_layout_migration import migrate_legacy_models_layout
 from services.gpu_info.gpu_info_impl import GpuInfoImpl
+from services.trainer.subprocess_trainer import resolve_trainer_root
+from services.wangp_paths import (
+    in_process_diagnostic,
+    resolve_wangp_extra_args,
+    resolve_wangp_python,
+    resolve_wangp_root,
+)
 
 migrate_legacy_models_layout(APP_DATA_DIR)
 IC_LORA_DIR.mkdir(parents=True, exist_ok=True)
 
 LTX_API_BASE_URL = "https://api.ltx.video"
 WANGP_ROOT = _resolve_wangp_root()
-WANGP_ENABLED = platform.system() in ("Windows", "Linux") and WANGP_ROOT is not None
+#: A WanGP on another machine or in the compose stack (docs/CONTAINERS.md); overrides the local checkout.
+WANGP_REMOTE_URL = os.environ.get("WANGP_REMOTE_URL", "").strip().rstrip("/")
+WANGP_REMOTE_TOKEN = os.environ.get("WANGP_REMOTE_TOKEN", "").strip()
+WANGP_ENABLED = bool(WANGP_REMOTE_URL) or (platform.system() in ("Windows", "Linux") and WANGP_ROOT is not None)
 WANGP_PYTHON = _resolve_wangp_python(WANGP_ROOT) if WANGP_ENABLED else None
 WANGP_CONFIG_DIR = APP_DATA_DIR / "wangp_bridge"
 WANGP_VIDEO_MODEL_TYPE = os.environ.get("WANGP_VIDEO_MODEL_TYPE", "ltx2_22B_distilled")
 WANGP_IMAGE_MODEL_TYPE = os.environ.get("WANGP_IMAGE_MODEL_TYPE", "z_image")
-WANGP_EXTRA_ARGS = _resolve_wangp_extra_args()
+WANGP_EXTRA_ARGS = resolve_wangp_extra_args(os.environ.get("WANGP_EXTRA_ARGS", ""), wangp_python=WANGP_PYTHON, current_executable=sys.executable)
 
 
 def _resolve_force_api_generations() -> bool:
@@ -306,6 +264,9 @@ runtime_config = RuntimeConfig(
     wangp_video_model_type=WANGP_VIDEO_MODEL_TYPE,
     wangp_image_model_type=WANGP_IMAGE_MODEL_TYPE,
     wangp_extra_args=WANGP_EXTRA_ARGS,
+    wangp_remote_url=WANGP_REMOTE_URL,
+    trainer_root=resolve_trainer_root(backend_root=Path(__file__).resolve().parent, app_data_dir=APP_DATA_DIR),
+    wangp_remote_token=WANGP_REMOTE_TOKEN,
 )
 
 handler = build_initial_state(runtime_config, DEFAULT_APP_SETTINGS)
@@ -347,7 +308,17 @@ def log_hardware_info() -> None:
     logger.info(f"GPU: {gpu_info['name']}  |  VRAM: {vram_gb} GB")
     logger.info(f"SageAttention: {'enabled' if use_sage_attention else 'disabled'}")
     if WANGP_ENABLED:
-        logger.info("WanGP bridge: enabled  |  Root: %s  |  Python: %s", WANGP_ROOT, WANGP_PYTHON)
+        from services.wangp_worker_bridge import select_wangp_mode
+
+        mode = select_wangp_mode(remote_url=WANGP_REMOTE_URL, enabled=WANGP_ENABLED, root=WANGP_ROOT, python=WANGP_PYTHON)
+        logger.info("WanGP bridge: enabled  |  WanGP mode: %s  |  Root: %s  |  Python: %s", mode, WANGP_ROOT, WANGP_PYTHON)
+        # A venv-less checkout means the isolated worker is unused, which is how
+        # F-077 hid: mode came out `in_process` with nothing to say why.
+        if mode == "in_process" and WANGP_ROOT is not None:
+            logger.warning(
+                in_process_diagnostic(WANGP_ROOT, app_data_dir=APP_DATA_DIR)
+                or "WanGP is in-process with no dedicated interpreter; renders share this Python."
+            )
     else:
         logger.info("WanGP bridge: disabled")
     logger.info(f"Python: {sys.version.split()[0]}  |  Torch: {torch.__version__}")
@@ -361,6 +332,13 @@ if __name__ == "__main__":
     logger.info("=" * 60)
     logger.info("LTX-2 Video Generation Server (FastAPI + Uvicorn)")
     log_hardware_info()
+    # F-040: a corrupt opencv install (namespace-package cv2) must stop the
+    # server here with the repair command, not surface as 57 pyright errors
+    # and AttributeErrors mid-export.
+    from services.video_processor.cv2_check import verify_cv2
+
+    verify_cv2()
+    logger.info("cv2: OK")
     logger.info("=" * 60)
 
     warmup_thread = threading.Thread(target=background_warmup, daemon=True)
@@ -392,7 +370,9 @@ if __name__ == "__main__":
     sock.bind(("127.0.0.1", port))
     actual_port = int(sock.getsockname()[1])
 
-    config = uvicorn.Config(app, host="127.0.0.1", port=actual_port, log_level="info", access_log=False, log_config=log_config)
+    # LTX_HOST=0.0.0.0 inside a container (docs/CONTAINERS.md); the desktop keeps loopback.
+    bind_host = os.environ.get("LTX_HOST", "").strip() or "127.0.0.1"
+    config = uvicorn.Config(app, host=bind_host, port=actual_port, log_level="info", access_log=False, log_config=log_config)
     server = uvicorn.Server(config)
 
     _orig_startup = server.startup

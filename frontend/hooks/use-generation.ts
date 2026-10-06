@@ -2,7 +2,9 @@ import { useState, useCallback, useRef } from 'react'
 import type { GenerationSettings } from '../components/SettingsPanel'
 import { backendFetch } from '../lib/backend'
 import { toFileUrl } from '../lib/file-url'
+import { expectedInferenceSeconds, inferenceStatusMessage, interpolateInferenceProgress } from '../lib/generation-progress'
 import { useAppSettings } from '../contexts/AppSettingsContext'
+import { faceMatchNote } from '../lib/faceLock'
 
 interface GenerationState {
   isGenerating: boolean
@@ -15,6 +17,8 @@ interface GenerationState {
   imagePath: string | null  // Original file path for first image
   imageUrls: string[]  // For multiple image variations
   imagePaths: string[]  // Original file paths for all images
+  /** "Face match 0.62" after a face-locked image render; '' otherwise. */
+  faceMatch: string
   error: string | null
 }
 
@@ -116,6 +120,7 @@ export function useGeneration(): UseGenerationReturn {
     imagePath: null,
     imageUrls: [],
     imagePaths: [],
+    faceMatch: '',
     error: null,
   })
 
@@ -142,6 +147,7 @@ export function useGeneration(): UseGenerationReturn {
       imagePath: null,
       imageUrls: [],
       imagePaths: [],
+      faceMatch: '',
       error: null,
     })
 
@@ -167,12 +173,17 @@ export function useGeneration(): UseGenerationReturn {
       if (audioPath) {
         body.audioPath = audioPath
       }
+      if (settings.loras?.length) {
+        body.loras = settings.loras
+      }
+      if (settings.styleId) {
+        body.styleId = settings.styleId
+      }
 
       // Poll for real progress from backend with time-based interpolation
       let lastPhase = ''
       let inferenceStartTime = 0
-      // Estimated inference time in seconds based on model
-      const estimatedInferenceTime = settings.model === 'pro' ? 120 : 45
+      const expectedSeconds = expectedInferenceSeconds(settings.model)
       
       const pollProgress = async () => {
         if (!shouldApplyPollingUpdates) return
@@ -195,9 +206,8 @@ export function useGeneration(): UseGenerationReturn {
                 inferenceStartTime = Date.now()
               }
               const elapsed = (Date.now() - inferenceStartTime) / 1000
-              // Interpolate from 15% to 95% based on estimated time
-              const inferenceProgress = Math.min(elapsed / estimatedInferenceTime, 0.95)
-              displayProgress = 15 + Math.floor(inferenceProgress * 80)
+              displayProgress = interpolateInferenceProgress(elapsed, expectedSeconds, data.progress)
+              statusMessage = inferenceStatusMessage(elapsed, expectedSeconds, statusMessage)
             }
 
             // Keep API/local completion as a terminal response state, not polling state.
@@ -252,6 +262,7 @@ export function useGeneration(): UseGenerationReturn {
           imagePath: null,
           imageUrls: [],
           imagePaths: [],
+          faceMatch: '',
           error: null,
         })
       } else if (result.status === 'cancelled') {
@@ -354,6 +365,7 @@ export function useGeneration(): UseGenerationReturn {
       imagePath: null,
       imageUrls: [],
       imagePaths: [],
+      faceMatch: '',
       error: null,
     })
 
@@ -402,6 +414,9 @@ export function useGeneration(): UseGenerationReturn {
           height: dims.height,
           numSteps,
           numImages,
+          loras: settings.loras ?? [],
+          faceLock: settings.faceLock ?? true,
+          styleId: settings.styleId ?? '',
         }),
         signal: abortControllerRef.current.signal,
       })
@@ -441,6 +456,7 @@ export function useGeneration(): UseGenerationReturn {
             imagePath: rawPaths[0],  // First image path
             imageUrls: fileUrls,    // All images
             imagePaths: rawPaths,   // All image paths
+            faceMatch: faceMatchNote(result.face_scores, result.outfit_locked),
             error: null,
           })
         }
@@ -487,6 +503,7 @@ export function useGeneration(): UseGenerationReturn {
       imagePath: null,
       imageUrls: [],
       imagePaths: [],
+      faceMatch: '',
       error: null,
     })
   }, [])

@@ -13,6 +13,8 @@ from state import RuntimeConfig, build_initial_state, set_state_service_for_test
 from app_handler import ServiceBundle
 from runtime_config.model_download_specs import DEFAULT_MODEL_DOWNLOAD_SPECS, DEFAULT_REQUIRED_MODEL_TYPES
 from tests.fakes.services import FakeServices
+from tests.fakes.fake_wangp_bridge import FakeWanGPBridge
+from tests.fakes.fake_multiview import FakeMultiViewGenerator
 
 CAMERA_MOTION_PROMPTS = {
     "none": "",
@@ -61,6 +63,8 @@ def test_state(tmp_path: Path, fake_services: FakeServices):
 
     for directory in (models_dir, outputs_dir, ic_lora_dir, app_data):
         directory.mkdir(parents=True, exist_ok=True)
+    fake_services.wangp_bridge = FakeWanGPBridge(outputs_dir)
+    fake_services.multiview = FakeMultiViewGenerator(outputs_dir / "multiview", enabled=False)
 
     config = RuntimeConfig(
         device="cpu",
@@ -101,6 +105,15 @@ def test_state(tmp_path: Path, fake_services: FakeServices):
         a2v_pipeline_class=type(fake_services.a2v_pipeline),
         retake_pipeline_class=type(fake_services.retake_pipeline),
         ic_lora_model_downloader=fake_services.ic_lora_model_downloader,
+        vision=fake_services.vision,
+        nvml=fake_services.nvml,
+        motion=fake_services.motion,
+        stitcher=fake_services.stitcher,
+        trainers={"fake": fake_services.trainer, "musubi": fake_services.trainer, "ai-toolkit": fake_services.trainer},
+        wangp_bridge=fake_services.wangp_bridge,
+        lora_fetcher=fake_services.lora_fetcher,
+        face_matcher=fake_services.face_matcher,
+        multiview=fake_services.multiview,
     )
 
     handler = build_initial_state(

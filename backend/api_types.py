@@ -114,7 +114,8 @@ class GenerationQueueItem(BaseModel):
     path: str
     prompt: str = ""
     completed_at: int = 0
-    type: Literal["video", "image"]
+    #: "lora": a LoRA that finished training or was imported (2026-10-02).
+    type: Literal["video", "image", "lora"]
     size_mb: float = 0.0
 
 
@@ -201,6 +202,12 @@ class GenerateVideoResponse(BaseModel):
 class GenerateImageResponse(BaseModel):
     status: str
     image_paths: list[str] | None = None
+    #: Face match of each image against the character's photo after face lock;
+    #: None when no face lock ran.
+    face_scores: list[float | None] | None = None
+    #: Whether each image's outfit was re-composed from the style sheet; None
+    #: when no lock ran.
+    outfit_locked: list[bool] | None = None
 
 
 class CancelResponse(BaseModel):
@@ -258,6 +265,13 @@ class ErrorResponse(BaseModel):
 # ============================================================
 
 
+class LoraUse(BaseModel):
+    """One LoRA to apply: the registry entry's file (absolute path) and a strength."""
+
+    name: str
+    multiplier: float = 1.0
+
+
 class GenerateVideoRequest(BaseModel):
     prompt: NonEmptyPrompt
     resolution: str = "512p"
@@ -270,6 +284,23 @@ class GenerateVideoRequest(BaseModel):
     imagePath: str | None = None
     audioPath: str | None = None
     aspectRatio: Literal["16:9", "9:16"] = "16:9"
+    #: Control signals from a Deliver export (absolute paths). The local LTX
+    #: pipeline has no control input and ignores them with a log line; WanGP
+    #: receives them as its guide video (key per docs/VIDEO_REPRODUCE.md, VF-011).
+    controlVideoPath: str | None = None
+    depthVideoPath: str | None = None
+    #: LoRAs from the registry (WanGP `activated_loras` / `loras_multipliers`).
+    loras: list[LoraUse] = Field(default_factory=list[LoraUse])
+    #: Reference images (WanGP `image_refs`) and an end frame (`image_end`).
+    referenceImagePaths: list[str] = Field(default_factory=list[str])
+    endFramePath: str | None = None
+    #: Strength of `controlVideoPath` (WanGP "G" guide denoising); None = the
+    #: model's default use of the control video.
+    controlStrength: float | None = None
+    #: WanGP video model to render with; None = chosen from `model` (fast/pro).
+    wangpModel: str | None = None
+    #: A saved style (handlers/style_library_handler.py): the video starts on a frame in it.
+    styleId: str = ""
 
 
 class GenerateImageRequest(BaseModel):
@@ -278,6 +309,18 @@ class GenerateImageRequest(BaseModel):
     height: int = 1024
     numSteps: int = 4
     numImages: int = 1
+    loras: list[LoraUse] = Field(default_factory=list[LoraUse])
+    #: Which installed local image model renders this request. Empty means the
+    #: backend's configured default (`WANGP_IMAGE_MODEL_TYPE`).
+    model: str = ""
+    #: With a character LoRA trained here: re-compose each render's face from the
+    #: style sheet's front face (film.face_lock). Needs FLUX.2 Klein and the face models.
+    faceLock: bool = True
+    #: With faceLock: first re-compose the character's outfit from the style
+    #: sheet's front view (medium and full shots; close-ups and profiles keep theirs).
+    outfitLock: bool = True
+    #: A saved style (handlers/style_library_handler.py) to draw the image in.
+    styleId: str = ""
 
 
 class ModelDownloadRequest(BaseModel):
@@ -288,7 +331,7 @@ class ModelDownloadRequest(BaseModel):
 # Model library: one searchable catalog over local weights and hosted models
 # ---------------------------------------------------------------------------
 
-LibraryTask = Literal["video", "image", "text"]
+LibraryTask = Literal["video", "image", "text", "vision"]
 LibrarySource = Literal["local", "hosted"]
 
 
@@ -309,6 +352,7 @@ class LibraryModel(BaseModel):
     estimated_min_vram_gb: float | None = None
     fits_gpu: bool | None = None
     supports_image_input: bool = False
+    capabilities: list[str] = []
     context_length: int | None = None
     family: str = ""
     quantization: str = ""
@@ -431,3 +475,28 @@ class IcLoraGenerateRequest(BaseModel):
     cfg_guidance_scale: float = 1.0
     negative_prompt: str = ""
     images: list[IcLoraImageInput] = Field(default_factory=_default_ic_lora_images)
+
+
+# ============================================================
+# Jobs / History
+# ============================================================
+
+
+class LegacyQuickEntry(BaseModel):
+    """One entry of the pre-1.0 Quick-mode history that lived in localStorage."""
+
+    prompt: str
+    negative_prompt: str = ""
+    seed: int | None = None
+    video_path: str
+    created_at: int = 0
+    params: dict[str, object] = Field(default_factory=dict)
+
+
+class ImportJobsRequest(BaseModel):
+    entries: list[LegacyQuickEntry]
+
+
+class ImportJobsResponse(BaseModel):
+    imported: int
+    skipped: int

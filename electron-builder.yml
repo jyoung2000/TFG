@@ -23,9 +23,16 @@ extraResources:
     filter:
       - "**/*.py"
       - pyproject.toml
+      # Runtime data the backend reads: CLIP style-tag term lists and the
+      # media capability catalog (both were silently missing before).
+      - "services/vision/clip_data/**"
+      - "film/data/**"
       - "!**/__pycache__/**"
       - "!**/*.pyc"
       - "!.venv/**"
+      # LoRA trainers (scripts/ensure-trainer.ps1): a clone and its own venv.
+      - "!.venv-trainer-*/**"
+      - "!.trainer-*/**"
       - "!outputs/**"
       - "!models/**"
       - "!tests/**"
@@ -38,6 +45,7 @@ extraResources:
       - "!**/__pycache__/**"
       - "!**/*.pyc"
       - "!ckpts/**"
+      - "!loras/**"
       - "!outputs/**"
       - "!release/**"
   - from: python-deps-hash.txt

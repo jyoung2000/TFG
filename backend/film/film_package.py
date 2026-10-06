@@ -31,6 +31,7 @@ from pydantic import ValidationError
 
 from film.film_models import FILM_SCHEMA_VERSION, FilmProject
 from film.film_store import FilmStore, FilmStoreError, migrate
+from server_utils.atomic_file import replace_with_retry
 
 PACKAGE_FORMAT = "ltx-film-package"
 PACKAGE_FORMAT_VERSION = 1
@@ -154,7 +155,7 @@ def export_package(
             archive.writestr("host_project.json", json.dumps(_strip_secret_like(host_project), indent=2))
         for member, source in media.items():
             archive.write(source, arcname=member, compress_type=zipfile.ZIP_STORED if source.suffix.lower() in (".mp4", ".webm", ".mov", ".m4v") else zipfile.ZIP_DEFLATED)
-    tmp.replace(destination)
+    replace_with_retry(tmp, destination)
     return PackageSummary(
         project_id=project.id,
         project_name=project.name,

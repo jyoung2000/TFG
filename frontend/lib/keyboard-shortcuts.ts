@@ -54,6 +54,13 @@ export type ActionId =
   | 'nav.nextEdit'
   // View
   | 'view.fullscreen'
+  // App-wide (work in every view)
+  | 'app.home'
+  | 'app.create'
+  | 'app.reproduce'
+  | 'app.train'
+  | 'app.history'
+  | 'app.shortcuts'
 
 // ── Key Combo ──
 export interface KeyCombo {
@@ -68,7 +75,7 @@ export interface KeyCombo {
 export interface ActionDefinition {
   id: ActionId
   label: string
-  category: 'Tools' | 'Transport' | 'Editing' | 'Marking' | 'Timeline'
+  category: 'Tools' | 'Transport' | 'Editing' | 'Marking' | 'Timeline' | 'App'
   description?: string
 }
 
@@ -123,6 +130,13 @@ export const ACTION_REGISTRY: ActionDefinition[] = [
   { id: 'nav.prevEdit',        label: 'Go to Previous Edit Point', category: 'Transport', description: 'Jump playhead to previous cut on timeline' },
   { id: 'nav.nextEdit',        label: 'Go to Next Edit Point',     category: 'Transport', description: 'Jump playhead to next cut on timeline' },
   { id: 'view.fullscreen',     label: 'Fullscreen Preview', category: 'Timeline' },
+  // App-wide
+  { id: 'app.home',      label: 'Go to Home',      category: 'App' },
+  { id: 'app.create',    label: 'Go to Create',    category: 'App', description: 'Quick video' },
+  { id: 'app.reproduce', label: 'Go to Reproduce', category: 'App' },
+  { id: 'app.train',     label: 'Go to Train',     category: 'App' },
+  { id: 'app.history',   label: 'Go to History',   category: 'App' },
+  { id: 'app.shortcuts', label: 'Keyboard shortcuts', category: 'App', description: 'Open this editor' },
 ]
 
 // ── Keyboard Layout (mapping from ActionId to one or more key combos) ──
@@ -145,6 +159,16 @@ function k(key: string, mods?: { ctrl?: boolean; shift?: boolean; alt?: boolean;
 // ═══════════════════════════════════════════
 // ── PRESET: LTX Default ──
 // ═══════════════════════════════════════════
+/** App-wide navigation, identical in every preset so muscle memory survives a preset switch. */
+export const APP_BINDINGS: KeyboardLayout = {
+  'app.home':      [k('1', { alt: true })],
+  'app.create':    [k('2', { alt: true })],
+  'app.reproduce': [k('3', { alt: true })],
+  'app.train':     [k('4', { alt: true })],
+  'app.history':   [k('5', { alt: true })],
+  'app.shortcuts': [k('/', { ctrl: true })],
+}
+
 export const LTX_DEFAULT_LAYOUT: KeyboardLayout = {
   // Tools
   'tool.select':       [k('v')],
@@ -194,12 +218,14 @@ export const LTX_DEFAULT_LAYOUT: KeyboardLayout = {
   'nav.prevEdit': [k('arrowup')],
   'nav.nextEdit': [k('arrowdown')],
   'view.fullscreen': [k('`'), k('f11')],
+  ...APP_BINDINGS,
 }
 
 // ═══════════════════════════════════════════
 // ── PRESET: Adobe Premiere Pro ──
 // ═══════════════════════════════════════════
 export const PREMIERE_LAYOUT: KeyboardLayout = {
+  ...APP_BINDINGS,
   // Tools (Premiere defaults)
   'tool.select':       [k('v')],
   'tool.blade':        [k('c')],         // Premiere uses C for razor
@@ -254,6 +280,7 @@ export const PREMIERE_LAYOUT: KeyboardLayout = {
 // ── PRESET: DaVinci Resolve ──
 // ═══════════════════════════════════════════
 export const DAVINCI_LAYOUT: KeyboardLayout = {
+  ...APP_BINDINGS,
   // Tools
   'tool.select':       [k('a')],         // DaVinci: A = selection
   'tool.blade':        [k('b')],         // DaVinci: B = blade
@@ -308,6 +335,7 @@ export const DAVINCI_LAYOUT: KeyboardLayout = {
 // ── PRESET: Avid Media Composer ──
 // ═══════════════════════════════════════════
 export const AVID_LAYOUT: KeyboardLayout = {
+  ...APP_BINDINGS,
   // Tools
   'tool.select':       [k('v')],
   'tool.blade':        [k('/')],         // Avid uses different paradigm but closest

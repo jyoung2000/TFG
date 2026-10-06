@@ -81,3 +81,38 @@ shot). **Save** persists the composition without capturing.
 Compositions are versioned inside `project.json`; re-opening a composed shot
 rehydrates the exact scene. All three.js resources are disposed when the
 composer closes.
+
+## 3D from analysis (phase 6)
+
+Shots reconstructed from an analysed video open pre-seeded: figures and
+props at the world positions solved from Florence boxes × depth medians ×
+FOV (`backend/film/scene_solver.py`, mirrored in `sceneFromAnalysis.ts`), a
+camera whose pose reprojects those boxes within 5 % of the frame, keyframes
+derived from the measured camera move, and the source frame as a
+**reference underlay** behind the viewfinder (never in captures or Deliver
+passes). The **3D scene** section shows the camera language derived from the
+layout on every edit (`describe_camera`) and **Apply 3D layout to the shot
+spec** locks the layout on the analysed shot so Reproduce renders follow the
+scene. See `docs/STORYBOARD_3D.md`.
+
+## Move library, walk cycle, undo
+
+The **Motion** section carries Blockout's 39 classic camera moves beside the
+ten presets (`composer/blockout/moves.ts`, Apache-2.0); a library move
+generates keyframes around the first figure. Figures with keyframes walk
+their path during motion preview (distance-tied stride ported from
+Blocking-Room). Every edit is one undo step — gizmo drags are grouped —
+with Ctrl+Z / Ctrl+Shift+Z or the header buttons. Keyframes are validated
+(inside the shot, finite, unique times) before save, capture and Deliver.
+
+## Deliver
+
+**Deliver passes** renders the keyframed scene at the shot's fps as clean,
+depth and normal passes (plus first/last stills) in the browser, ships the
+PNG frames to the backend, which encodes them with ffmpeg into
+`film_projects/<id>/deliver/<shot>/v<n>/{reference,depth,normal}.mp4` plus
+`prompt.txt` and `metadata.json`. The clean and depth passes are stored on
+the shot as `generation.control_video` / `depth_video` and travel with the
+next render request as real control signals (`controlVideoPath` /
+`depthVideoPath`): WanGP receives them as its guide video; the local LTX
+pipeline has no control input and logs that it ignored them.

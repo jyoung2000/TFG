@@ -41,6 +41,12 @@ class HealthHandler(StateHandlerBase):
     def get_health(self) -> HealthResponse:
         if self._config.wangp_enabled:
             bridge = self._wangp_bridge.get_status()
+            # "downloaded" answers weight PRESENCE with the same predicate the
+            # Model Library uses (weights_installed: defaults/*.json + ckpts/),
+            # never bridge availability — round 2 watched the two disagree
+            # live (checkpoint on disk, worker broken). None = cannot tell
+            # (remote bridge), where the bridge's word is all there is.
+            installed = self._wangp_bridge.weights_installed(self._config.wangp_video_model_type)
             return HealthResponse(
                 status="ok",
                 models_loaded=bridge.available,
@@ -52,7 +58,7 @@ class HealthHandler(StateHandlerBase):
                         id="fast",
                         name="WanGP LTX-2.3 Distilled",
                         loaded=bridge.available,
-                        downloaded=bridge.available,
+                        downloaded=bridge.available if installed is None else installed,
                     ),
                 ],
             )

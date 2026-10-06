@@ -16,9 +16,20 @@ from film.prompt_api_types import (
     CompilePromptResponse,
     PromptTargetListResponse,
     PromptTargetPayload,
+    CompileSpecAllResponse,
+    CompileSpecRequest,
+    CompileSpecResponse,
+    PromptTemplateCreateRequest,
+    PromptTemplateListResponse,
+    PromptTemplateUpdateRequest,
 )
 from film.prompt_brief import brief_from_analysis, brief_from_shot
-from film.prompt_compiler import GENERIC, TARGETS, ShotBrief, compile_for
+from _routes._errors import HTTPError
+from film.prompt_compiler import PromptStyle
+from film.prompt_templates import PromptTemplate, TemplateStore
+from film.shot_spec import ShotSpec
+from handlers.knowledge_handler import KnowledgeHandler
+from film.prompt_compiler import GENERIC, TARGETS, ShotBrief, compile_for, PromptHints, SpecCompileResult, compile_from_spec, resolve_target
 from film.video_analysis_store import VideoAnalysisStore
 from handlers.base import StateHandlerBase
 from handlers.film_handler import FilmHandler
@@ -32,10 +43,68 @@ class PromptHandler(StateHandlerBase):
         lock: RLock,
         film_handler: FilmHandler,
         analysis_store: VideoAnalysisStore,
+        templates: TemplateStore | None = None,
+        knowledge: KnowledgeHandler | None = None,
     ) -> None:
         super().__init__(state, lock)
         self._film = film_handler
         self._analyses = analysis_store
+        self._templates = templates
+        self._knowledge = knowledge
+
+    # ---- ShotSpec compile ---------------------------------------------------
+
+    def hints(self, spec: ShotSpec, target: str, model: str = "") -> PromptHints | None:
+        if self._knowledge is None:
+            return None
+        resolved, _ = resolve_target(target)
+        return self._knowledge.hints_for(spec.attribute_keys(), resolved.id, model=model)
+
+    def compile_spec(self, req: CompileSpecRequest) -> CompileSpecResponse:
+        hints = self.hints(req.spec, req.target, req.model) if req.use_hints else None
+        result = compile_from_spec(req.spec, req.target, req.style, hints, seed=req.seed)
+        return CompileSpecResponse(result=result, hints=hints, spec_keys=req.spec.attribute_keys())
+
+    def compile_spec_all(self, spec: ShotSpec, targets: list[str], styles: list[PromptStyle], *, seed: int | None = None, use_hints: bool = True) -> CompileSpecAllResponse:
+        results: dict[str, SpecCompileResult] = {}
+        hints: PromptHints | None = None
+        for target in targets or [t.id for t in TARGETS]:
+            target_hints = self.hints(spec, target) if use_hints else None
+            hints = hints or target_hints
+            for style in styles or [None]:
+                key = f"{resolve_target(target)[0].id}:{style or 'default'}"
+                results[key] = compile_from_spec(spec, target, style, target_hints, seed=seed)
+        return CompileSpecAllResponse(results=results, hints=hints)
+
+    # ---- templates ----------------------------------------------------------
+
+    def _store(self) -> TemplateStore:
+        if self._templates is None:
+            raise HTTPError(503, "Prompt templates are not available in this build")
+        return self._templates
+
+    def templates(self) -> PromptTemplateListResponse:
+        return PromptTemplateListResponse(templates=self._store().list())
+
+    def update_template(self, template_id: str, req: PromptTemplateUpdateRequest) -> PromptTemplate:
+        try:
+            return self._store().set_instruction(template_id, req.instruction)
+        except KeyError as exc:
+            raise HTTPError(404, f"Unknown template: {template_id}") from exc
+        except ValueError as exc:
+            raise HTTPError(400, str(exc)) from exc
+
+    def reset_template(self, template_id: str) -> PromptTemplate:
+        return self._store().reset(template_id)
+
+    def create_template(self, req: PromptTemplateCreateRequest) -> PromptTemplate:
+        try:
+            return self._store().create(req.name, req.instruction, req.description, req.profile)
+        except ValueError as exc:
+            raise HTTPError(400, str(exc)) from exc
+
+    def delete_template(self, template_id: str) -> bool:
+        return self._store().delete(template_id)
 
     def targets(self) -> PromptTargetListResponse:
         """Every convention this app knows, including the fallback.

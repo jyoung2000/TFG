@@ -68,9 +68,11 @@ export function TimelinePanel() {
     }
   }, [projectId])
 
+  // Reload when the film changes (a render finishing, a storyboard edit) - it
+  // only loaded when the tab opened (QA 2026-10-01).
   useEffect(() => {
     void load()
-  }, [load])
+  }, [load, film?.updated_at])
 
   const run = async (action: TimelineActionName, params: Record<string, unknown>, label: string) => {
     if (!projectId) return

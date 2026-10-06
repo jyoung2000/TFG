@@ -1,7 +1,8 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Check, ExternalLink, KeyRound, Loader2, PlugZap, RefreshCw, ShieldCheck, Trash2 } from 'lucide-react'
 import { useAppSettings, type ClearableKeyProvider } from '../contexts/AppSettingsContext'
 import { filmApi } from '../lib/film-api'
+import { backendFetch } from '../lib/backend'
 import { modelLibraryApi } from '../lib/model-library-api'
 import type { OpenRouterModelInfo } from '../types/film'
 import {
@@ -408,7 +409,75 @@ export function AiProviderSettings() {
           <MediaProviderCard provider="wavespeed" hasKey={settings.hasWavespeedApiKey} keyProvider="wavespeed" />
           <MediaProviderCard provider="replicate" hasKey={settings.hasReplicateApiKey} keyProvider="replicate" />
         </div>
+        <MediaTiersEditor />
       </div>
+    </div>
+  )
+}
+
+
+const TIER_TASKS: { id: string; label: string }[] = [
+  { id: 't2v', label: 'Text → video' },
+  { id: 'i2v', label: 'Image → video' },
+  { id: 't2i', label: 'Text → image' },
+  { id: 'i2i', label: 'Image → image' },
+  { id: 'edit', label: 'Edit (inpaint)' },
+]
+const TIER_PROVIDERS: MediaProviderId[] = ['local', 'fal', 'wavespeed', 'replicate']
+
+interface TierPreview { provider: string; model: string; skip_reason: string }
+
+/**
+ * Tiered fallback (phase 9): per task, the order providers are tried. Local
+ * first by default; a hosted tier only runs when the one before it fails,
+ * never on cancel. The preview comes from the backend and says exactly why a
+ * tier would be skipped (no key, no model id, the catalog says it cannot).
+ */
+function MediaTiersEditor() {
+  const { settings, updateSettings } = useAppSettings()
+  const [preview, setPreview] = useState<Record<string, TierPreview[]>>({})
+  const tiersFor = (task: string): string[] => settings.mediaTiers[task]?.length ? settings.mediaTiers[task] : [settings.mediaProvider || 'local']
+  const setTiers = (task: string, order: string[]) => updateSettings({ mediaTiers: { ...settings.mediaTiers, [task]: order } })
+
+  useEffect(() => {
+    let cancelled = false
+    const timer = setTimeout(() => {
+      backendFetch('/api/settings/tiers').then(r => (r.ok ? r.json() : {})).then(data => { if (!cancelled) setPreview(data as Record<string, TierPreview[]>) }).catch(() => undefined)
+    }, 400)
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, [settings.mediaTiers, settings.mediaProvider, settings.hasFalApiKey, settings.hasWavespeedApiKey, settings.hasReplicateApiKey, settings.defaultVideoModel, settings.defaultImageModel])
+
+  return (
+    <div className="space-y-2 pt-2 border-t border-zinc-800" data-testid="media-tiers">
+      <div>
+        <span className="text-xs font-semibold text-white">Fallback order per task</span>
+        <p className="text-[10px] text-zinc-600 leading-snug">When the first tier fails (out of VRAM, a provider error), the next one runs with the same prompt and seed. A cancel never falls through. Local first keeps everything on this computer unless it cannot render.</p>
+      </div>
+      {TIER_TASKS.map(task => {
+        const order = tiersFor(task.id)
+        const resolved = preview[task.id] ?? []
+        return (
+          <div key={task.id} className="flex items-center gap-1.5 flex-wrap text-[11px]" data-testid={`tier-row-${task.id}`}>
+            <span className="w-24 text-zinc-400">{task.label}</span>
+            {order.map((provider, index) => {
+              const info = resolved.find(t => t.provider === provider)
+              const skipped = info?.skip_reason
+              return (
+                <span key={`${provider}-${index}`} title={skipped || info?.model || ''} className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border ${skipped ? 'border-amber-900 text-amber-300' : 'border-zinc-700 text-zinc-200'}`}>
+                  {index > 0 && <span className="text-zinc-600">→</span>}
+                  {MEDIA_PROVIDER_LABELS[provider as MediaProviderId] ?? provider}
+                  {skipped && <span className="text-[9px] text-amber-400">({skipped})</span>}
+                  <button onClick={() => setTiers(task.id, order.filter((_, i) => i !== index))} aria-label={`Remove ${provider} from ${task.label}`} className="text-zinc-500 hover:text-red-300">×</button>
+                </span>
+              )
+            })}
+            <select value="" onChange={e => { if (e.target.value) setTiers(task.id, [...order, e.target.value]) }} aria-label={`Add a tier to ${task.label}`} className="bg-zinc-800 border border-zinc-700 rounded px-1 py-0.5 text-[11px] text-zinc-300">
+              <option value="">+ add</option>
+              {TIER_PROVIDERS.filter(p => !order.includes(p)).map(p => <option key={p} value={p}>{MEDIA_PROVIDER_LABELS[p]}</option>)}
+            </select>
+          </div>
+        )
+      })}
     </div>
   )
 }

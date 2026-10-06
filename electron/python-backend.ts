@@ -8,6 +8,7 @@ import { logger, writeLog } from './logger'
 import { getCurrentLogFilename } from './logging-management'
 import { getPythonDir } from './python-setup'
 import { getMainWindow } from './window'
+import { getRemoteBackend, probeRemoteBackend, setRemoteBackend, type RemoteBackendConfig, type RemoteProbeResult } from './remote-backend'
 
 let pythonProcess: ChildProcess | null = null
 let isIntentionalShutdown = false
@@ -21,6 +22,9 @@ let authToken: string | null = null
 
 export function getBackendUrl(): string | null { return backendUrl }
 export function getAuthToken(): string | null { return authToken }
+
+let remoteActive = false
+export function isRemoteBackend(): boolean { return remoteActive }
 
 type BackendOwnership = 'managed' | 'adopted' | null
 
@@ -206,6 +210,13 @@ export function getPythonPath(): string {
 export async function startPythonBackend(): Promise<void> {
   if (startPromise) {
     return startPromise
+  }
+
+  // A configured remote backend replaces the local Python process entirely.
+  const remote = getRemoteBackend()
+  if (remote.enabled && remote.url) {
+    await connectRemoteBackend(remote)
+    return
   }
 
   if (pythonProcess && backendOwnership === 'managed') {
@@ -582,3 +593,39 @@ export function stopPythonBackend(): void {
     latestBackendHealthStatus = null
   }
 }
+
+
+// ---- Remote backend (phase 9) -------------------------------------------------
+
+async function connectRemoteBackend(remote: RemoteBackendConfig): Promise<void> {
+  if (pythonProcess) stopPythonBackend()
+  backendUrl = remote.url
+  authToken = remote.token
+  backendOwnership = 'adopted'
+  remoteActive = true
+  const probe = await probeRemoteBackend(remote.url, remote.token)
+  logger.info(`Remote backend ${remote.url}: ${probe.ok ? 'alive' : `unreachable (${probe.error ?? probe.status})`}`)
+  publishBackendHealthStatus({ status: probe.ok ? 'alive' : 'dead' })
+}
+
+/** Save and switch to a remote backend (or back to the local one when disabled). */
+export async function applyRemoteBackend(config: RemoteBackendConfig): Promise<RemoteProbeResult> {
+  const saved = setRemoteBackend(config)
+  if (saved.enabled) {
+    const probe = await probeRemoteBackend(saved.url, saved.token)
+    if (!probe.ok) return probe
+    await connectRemoteBackend(saved)
+    return probe
+  }
+  if (remoteActive) {
+    remoteActive = false
+    backendUrl = null
+    authToken = null
+    backendOwnership = null
+    latestBackendHealthStatus = null
+    await startPythonBackend()
+  }
+  return { ok: true, status: 'local' }
+}
+
+export { getRemoteBackend, probeRemoteBackend }

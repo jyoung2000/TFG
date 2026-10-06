@@ -86,6 +86,18 @@ def test_generation_queue_returns_recent_media(client, test_state):
     assert payload["recent"][0]["size_mb"] > 0
 
 
+def test_a_finished_lora_shows_in_recent_activity(client, test_state, tmp_path):
+    """User, 2026-10-02: "add LoRA generation to the history and activity tab".
+    The Activity panel's recent list scanned image/video outputs only; a LoRA
+    that just finished training was nowhere in it."""
+    lora = tmp_path / "raven.safetensors"
+    lora.write_bytes(b"0" * 2048)
+    entry = client.post("/api/training/loras/import", json={"path": str(lora), "name": "Raven", "target": "z_image", "trigger": "rvnx"}).json()
+    recent = client.get("/api/generation/queue").json()["recent"]
+    mine = [r for r in recent if r["type"] == "lora"]
+    assert mine and mine[0]["path"] == entry["file"] and mine[0]["prompt"] == "Raven · rvnx"
+    assert mine[0]["size_mb"] > 0
+
 def test_asset_style_guide_prompt_is_reused_for_future_generation():
     from film.film_models import FilmAsset, FilmAssetStyleGuide, FilmProject, FilmScene, FilmShot, ShotCharacter
     from film.film_prompt import synthesize_prompt

@@ -141,6 +141,8 @@ class GenerationProgress:
 class GenerationRunning:
     id: str
     progress: GenerationProgress
+    #: The History job this generation reports to ("" when untracked).
+    job_id: str = ""
 
 
 @dataclass

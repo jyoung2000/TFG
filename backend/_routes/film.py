@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import FileResponse
 
 from _routes._errors import HTTPError
 from api_types import StatusResponse
 from film.film_api_types import (
+    ApplyStyleRequest,
+    ApplyStyleResponse,
     AddAssetReferenceRequest,
+    AssetDatasetRequest,
     AssetResponse,
     ContinuityResponse,
     CreateAssetRequest,
@@ -38,12 +43,23 @@ from film.film_api_types import (
     UpdateSceneRequest,
     UpdateScriptRequest,
     UpdateShotRequest,
+    DeliverRequest,
+    DeliverResponse,
+    AngleSetRequest,
+    FramesRequest,
+    FramesResponse,
+    PreviewRenderRequest,
+    PreviewRenderResponse,
+    ReferenceSheetRequest,
+    ReferenceSheetResponse,
 )
 from film.film_models import FilmScene, FilmShot
+from film.training_models import Dataset
 from state import get_state_service
 from app_handler import AppHandler
 
 router = APIRouter(prefix="/api/film", tags=["film"])
+logger = logging.getLogger(__name__)
 
 
 class SceneResponse(FilmScene):
@@ -58,6 +74,11 @@ class ShotResponse(FilmShot):
 def route_get_film_project(
     project_id: str, handler: AppHandler = Depends(get_state_service)
 ) -> FilmProjectResponse:
+    # Old image shots get today's 3D scene (posed like the photo) when opened.
+    try:
+        handler.reproduce.refresh_storyboard(project_id)
+    except Exception:  # noqa: BLE001 - opening a project never fails over a re-seed
+        logger.warning("Could not refresh the storyboard of %s", project_id, exc_info=True)
     return FilmProjectResponse(project=handler.film.get_project(project_id))
 
 
@@ -150,6 +171,42 @@ def route_generate_asset_reference(
     return handler.film_generation.generate_asset_reference(project_id, asset_id, req)
 
 
+@router.post(
+    "/projects/{project_id}/assets/{asset_id}/reference-sheet",
+    response_model=ReferenceSheetResponse,
+)
+def route_reference_sheet(
+    project_id: str,
+    asset_id: str,
+    req: ReferenceSheetRequest,
+    handler: AppHandler = Depends(get_state_service),
+) -> ReferenceSheetResponse:
+    """Consistency Kit: multi-angle references with one seed and the asset's LoRA."""
+    return handler.film_generation.generate_reference_sheet(project_id, asset_id, req)
+
+
+@router.post("/projects/{project_id}/assets/{asset_id}/angle-set", response_model=ReferenceSheetResponse)
+def route_angle_set(
+    project_id: str,
+    asset_id: str,
+    req: AngleSetRequest,
+    handler: AppHandler = Depends(get_state_service),
+) -> ReferenceSheetResponse:
+    """Multi-angle shots for consistency / LoRA training, composed from the asset's image and the composer's angles."""
+    return handler.film_generation.generate_angle_set(project_id, asset_id, req)
+
+
+@router.post("/projects/{project_id}/assets/{asset_id}/dataset", response_model=Dataset)
+def route_asset_dataset(
+    project_id: str,
+    asset_id: str,
+    req: AssetDatasetRequest | None = None,
+    handler: AppHandler = Depends(get_state_service),
+) -> Dataset:
+    """The asset's images as a LoRA training dataset (with `angles`, its LoRA angles rendered first)."""
+    return handler.film_generation.asset_dataset(project_id, asset_id, angles=req.angles if req is not None else False)
+
+
 @router.put("/projects/{project_id}/assets/{asset_id}", response_model=AssetResponse)
 def route_update_asset(
     project_id: str,
@@ -178,6 +235,17 @@ def route_add_asset_reference(
     handler: AppHandler = Depends(get_state_service),
 ) -> AssetResponse:
     return AssetResponse(asset=handler.film.add_asset_reference(project_id, asset_id, req))
+
+
+@router.delete("/projects/{project_id}/assets/{asset_id}/references", response_model=AssetResponse)
+def route_delete_asset_reference(
+    project_id: str,
+    asset_id: str,
+    path: str,
+    handler: AppHandler = Depends(get_state_service),
+) -> AssetResponse:
+    """Remove one reference image (by its relative path) and delete the file."""
+    return AssetResponse(asset=handler.film.delete_asset_reference(project_id, asset_id, path))
 
 
 # ---- Scenes ------------------------------------------------------------
@@ -283,6 +351,52 @@ def route_duplicate_shot(
     handler: AppHandler = Depends(get_state_service),
 ) -> FilmShot:
     return handler.film.duplicate_shot(project_id, scene_id, shot_id)
+
+
+@router.post(
+    "/projects/{project_id}/scenes/{scene_id}/shots/{shot_id}/deliver",
+    response_model=DeliverResponse,
+)
+def route_deliver_shot(
+    project_id: str,
+    scene_id: str,
+    shot_id: str,
+    req: DeliverRequest,
+    handler: AppHandler = Depends(get_state_service),
+) -> DeliverResponse:
+    """Deliver package: rendered passes → mp4s in the project, wired as control signals."""
+    return handler.film.deliver(project_id, scene_id, shot_id, req, handler.stitcher)
+
+
+@router.post("/projects/{project_id}/scenes/{scene_id}/shots/{shot_id}/frame", response_model=ShotResponse)
+def route_shot_frame(
+    project_id: str,
+    scene_id: str,
+    shot_id: str,
+    handler: AppHandler = Depends(get_state_service),
+) -> FilmShot:
+    """A storyboard frame: a still of what the shot describes."""
+    return handler.film_generation.generate_frame(project_id, scene_id, shot_id)
+
+
+@router.post("/projects/{project_id}/preview-render", response_model=PreviewRenderResponse)
+def route_preview_render(
+    project_id: str,
+    req: PreviewRenderRequest,
+    handler: AppHandler = Depends(get_state_service),
+) -> PreviewRenderResponse:
+    """A live preview of the photo as the 3D model is now posed (throwaway)."""
+    return handler.film_generation.preview_render(project_id, req)
+
+
+@router.post("/projects/{project_id}/frames", response_model=FramesResponse)
+def route_storyboard_frames(
+    project_id: str,
+    req: FramesRequest,
+    handler: AppHandler = Depends(get_state_service),
+) -> FramesResponse:
+    """Storyboard frames for every shot that has no picture yet."""
+    return handler.film_generation.generate_frames(project_id, req)
 
 
 @router.post(
@@ -396,6 +510,20 @@ def route_film_media(
 
 
 # ---- Style guide ---------------------------------------------------------
+
+
+@router.post(
+    "/projects/{project_id}/assets/{asset_id}/apply-style",
+    response_model=ApplyStyleResponse,
+)
+def route_apply_style(
+    project_id: str,
+    asset_id: str,
+    req: ApplyStyleRequest,
+    handler: AppHandler = Depends(get_state_service),
+) -> ApplyStyleResponse:
+    """Redraw a shot's frame or a project image in this style asset's art style."""
+    return handler.film_generation.apply_style(project_id, asset_id, req)
 
 
 @router.post(

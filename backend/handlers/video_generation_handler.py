@@ -7,6 +7,7 @@ import os
 import tempfile
 import time
 import uuid
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from threading import RLock
@@ -17,10 +18,15 @@ from PIL import Image
 from api_types import GenerateVideoRequest, GenerateVideoResponse, ImageConditioningInput, VideoCameraMotion
 from _routes._errors import HTTPError
 from handlers.base import StateHandlerBase
+from handlers.jobs_handler import JobsHandler
+from handlers.vision_handler import VisionHandler
 from handlers.generation_handler import GenerationHandler
 from handlers.pipelines_handler import PipelinesHandler
 from handlers.text_handler import TextHandler
 from services.wangp_bridge import WanGPBridge
+from film.media_providers import MediaSpec
+from film.media_runner import MediaRunResult, MediaRunner, image_data_url, suffix_for
+from film.provider_tiers import Task, Tier, default_order, plan as plan_tiers, run_with_fallback
 from server_utils.media_validation import (
     normalize_optional_path,
     validate_audio_file,
@@ -35,6 +41,31 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+#: Wan 2.2 TI2V FastWan 5B: fits a 32 GB machine where LTX-2 22B (~39 GB of
+#: weights) pages. Start image yes; end frame / control video no.
+LIGHT_VIDEO_MODEL = "ti2v_2_2_fastwan"
+#: VACE 1.3B: positioned frames (start/end) and a raw guide video, the rungs
+#: FastWan cannot render. MEASURED (4070, 3 s at 832x480, raw guide): 0.924
+#: at 10 steps, ~2-3 min per segment, vs LTX-2's 20-30 min on a 10 s shot.
+GUIDED_VIDEO_MODEL = "vace_1.3B"
+
+#: CUDA error substrings that indicate a stale context — the worker should be
+#: restarted once before reporting the failure.
+_CUDA_ERRORS = (
+    "cudaErrorAlreadyMapped",
+    "CUDA error: an illegal memory access",
+    "CUDA error: unknown error",
+    "driver shutting down",
+    "context is destroyed",
+)
+
+def _is_cuda_context_error(text: str) -> bool:
+    """True when `text` looks like a CUDA-context error the worker can't recover from."""
+    lowered = text.lower()
+    return any(marker.lower() in lowered for marker in _CUDA_ERRORS)
+
+
+
 FORCED_API_MODEL_MAP: dict[str, str] = {
     "fast": "ltx-2-3-fast",
     "pro": "ltx-2-3-pro",
@@ -47,6 +78,14 @@ FORCED_API_RESOLUTION_MAP: dict[str, dict[str, str]] = {
 A2V_FORCED_API_RESOLUTION = "1920x1080"
 FORCED_API_ALLOWED_ASPECT_RATIOS = {"16:9", "9:16"}
 FORCED_API_ALLOWED_FPS = {24, 25, 48, 50}
+
+
+def _existing_file(path: str | None) -> str | None:
+    """A control-signal path only when it names an existing file; never raises."""
+    if not path:
+        return None
+    candidate = Path(path)
+    return str(candidate.resolve()) if candidate.is_absolute() and candidate.is_file() else None
 
 
 def get_allowed_durations(model_id: str, resolution_label: str, fps: int) -> set[int]:
@@ -69,8 +108,13 @@ class VideoGenerationHandler(StateHandlerBase):
         camera_motion_prompts: dict[str, str],
         default_negative_prompt: str,
         wangp_bridge: WanGPBridge,
+        jobs: JobsHandler | None = None,
+        vision: VisionHandler | None = None,
+        media_runner: MediaRunner | None = None,
     ) -> None:
         super().__init__(state, lock)
+        self._jobs = jobs
+        self._vision = vision
         self._generation = generation_handler
         self._pipelines = pipelines_handler
         self._text = text_handler
@@ -80,16 +124,213 @@ class VideoGenerationHandler(StateHandlerBase):
         self._camera_motion_prompts = camera_motion_prompts
         self._default_negative_prompt = default_negative_prompt
         self._wangp_bridge = wangp_bridge
+        self._media_runner = media_runner
 
-    def generate(self, req: GenerateVideoRequest) -> GenerateVideoResponse:
+    def generate(
+        self,
+        req: GenerateVideoRequest,
+        *,
+        job_id: str | None = None,
+        seed: int | None = None,
+        allow_fallback: bool = True,
+    ) -> GenerateVideoResponse:
+        """Render one video. `job_id` reuses a History job another handler
+        already opened (the film queue); `seed` pins the seed for a re-run;
+        `allow_fallback=False` when the caller runs its own provider tiers."""
+        if self._generation.is_generation_running():
+            raise HTTPError(409, "Generation already in progress")
+        tracked = self._open_job(req, job_id, seed)
+        peak_mb: int | None = None
+        try:
+            if self._vision is not None:
+                # Free the card first (VLM keep_alive 0, vision models unloaded);
+                # a render that still cannot fit fails here with an actionable
+                # message instead of a CUDA trace.
+                held = self._wangp_bridge.held_vram_mb() if self._config.wangp_enabled else 0
+                # A WanGP video model does not fit this machine's RAM with the
+                # app's vision models beside it: release them all (they reload
+                # lazily), not just enough VRAM.
+                with self._vision.render_scope(self._render_model_type(req), reclaimable_mb=held, release_all=self._config.wangp_enabled) as scope:
+                    response = self._dispatch(req, tracked, seed)
+                peak_mb = scope.peak_mb
+            else:
+                response = self._dispatch(req, tracked, seed)
+        except HTTPError as exc:
+            fallback = self._hosted_fallback(req, tracked, seed, str(exc.detail)) if allow_fallback else None
+            if fallback is None:
+                self._close_job(tracked, error=str(exc.detail))
+                raise
+            response = fallback
+        except Exception as exc:
+            fallback = self._hosted_fallback(req, tracked, seed, str(exc)) if allow_fallback else None
+            if fallback is None:
+                self._close_job(tracked, error=str(exc))
+                raise
+            response = fallback
+        if peak_mb is not None and tracked and self._jobs is not None:
+            self._jobs.annotate(tracked, metrics={"peak_vram_mb": peak_mb})
+        self._close_job(tracked, response=response)
+        return response
+
+    # ---- Tiered fallback (phase 9) --------------------------------------
+
+    def _hosted_fallback(self, req: GenerateVideoRequest, job_id: str, seed: int | None, error: str) -> GenerateVideoResponse | None:
+        """The local render failed: try the hosted tiers configured for this
+        task, in order. None when no hosted tier is usable (the caller then
+        reports the local error); raises with every attempt's reason when all
+        tiers fail. Cancelled renders never fall back."""
+        runner = self._media_runner
+        if runner is None or self._generation.is_generation_cancelled() or "cancelled" in error.lower():
+            return None
+        with self.lock:
+            settings = self.state.app_settings.model_copy(deep=True)
+        task: Task = "i2v" if req.imagePath else "t2v"
+        order = list(settings.media_tiers.get(task) or default_order(settings.media_provider))
+        tiers = [
+            t for t in plan_tiers(task, order=order, local_available=False, keys=settings.media_api_key, models=lambda _p, _t: settings.default_video_model).usable
+            if t.provider != "local"
+        ]
+        if not tiers:
+            return None
+        logger.info("Local render failed (%s); trying hosted tiers %s", error, [t.provider for t in tiers])
+        if job_id and self._jobs is not None:
+            self._jobs.progress(job_id, 0.0, f"Local failed: {error[:120]} — trying {tiers[0].provider}")
+        spec = MediaSpec(
+            model="",
+            prompt=req.prompt,
+            task="video",
+            negative_prompt=req.negativePrompt,
+            duration_seconds=float(req.duration),
+            fps=int(float(req.fps)),
+            aspect_ratio=req.aspectRatio,
+            resolution=req.resolution,
+            seed=seed,
+            image_data_url=image_data_url(req.imagePath),
+        )
+
+        def attempt(tier: Tier) -> MediaRunResult:
+            if job_id and self._jobs is not None:
+                self._jobs.annotate(job_id, provider=tier.provider, model=tier.model)
+            return runner.run(
+                provider=tier.provider,
+                api_key=settings.media_api_key(tier.provider),
+                spec=replace(spec, model=tier.model),
+                is_cancelled=self._generation.is_generation_cancelled,
+                on_progress=lambda percent, phase: self._generation.update_progress(phase, percent, None, None),
+            )
+
+        outcome = run_with_fallback(tiers, attempt, is_cancelled=self._generation.is_generation_cancelled)
+        attempts = [("local", error), *outcome.attempts]
+        if job_id and self._jobs is not None:
+            self._jobs.annotate(job_id, metrics={"fallback": "; ".join(f"{p}: {e[:80]}" for p, e in attempts)})
+        result = outcome.result
+        if result.status == "cancelled":
+            return GenerateVideoResponse(status="cancelled")
+        if result.status != "complete":
+            raise HTTPError(502, "; ".join(f"{p}: {e}" for p, e in [*attempts, (outcome.provider, result.error)] if p))
+        self._outputs_dir.mkdir(parents=True, exist_ok=True)
+        target = self._outputs_dir / f"quick-{outcome.provider}-{int(time.time() * 1000)}{suffix_for(result.media_url, 'video')}"
+        target.write_bytes(result.content)
+        return GenerateVideoResponse(status="complete", video_path=str(target), seed=seed)
+
+    def _wangp_video_model(self, req: GenerateVideoRequest) -> str:
+        """The WanGP model this request renders with. A named model wins;
+        otherwise a fast render uses the light model when it is installed and
+        the request needs nothing it lacks (end frame, control/depth video)."""
+        named = (req.wangpModel or "").strip()
+        if named:
+            return named
+        default = self._config.wangp_video_model_type
+        # The video model picked in Settings -> Models renders locally when it is an
+        # installed WanGP model (it was only read for hosted providers; 2026-10-04).
+        with self.lock:
+            chosen = self.state.app_settings.default_video_model.strip()
+        if chosen and chosen != default and self._wangp_bridge.weights_installed(chosen) is True:
+            default = chosen
+        if req.model.strip().lower() != "fast":
+            return default
+        guided = bool(req.endFramePath or req.controlVideoPath or req.depthVideoPath)
+        # A fast render that needs frames/guide FastWan cannot take goes to
+        # VACE 1.3B (minutes, fits the machine) rather than LTX-2 (20-30 min).
+        light = GUIDED_VIDEO_MODEL if guided else LIGHT_VIDEO_MODEL
+        if light != default and self._wangp_bridge.weights_installed(light) is True:
+            return light
+        return default
+
+    def guided_model_available(self) -> bool:
+        return self._config.wangp_enabled and self._wangp_bridge.weights_installed(GUIDED_VIDEO_MODEL) is True
+
+    def render_model_for(self, req: GenerateVideoRequest) -> str:
+        """The model this request will actually render with."""
+        return self._render_model_type(req)
+
+    def _render_model_type(self, req: GenerateVideoRequest) -> str:
         if self._config.wangp_enabled:
-            return self._generate_via_wangp(req)
+            return self._wangp_video_model(req)
+        return f"ltx2-{req.model.strip().lower() or 'fast'}"
+
+    def _open_job(self, req: GenerateVideoRequest, job_id: str | None, seed: int | None) -> str:
+        if self._jobs is None:
+            return ""
+        if self._config.wangp_enabled:
+            provider, model = "wangp", self._wangp_video_model(req)
+        elif should_video_generate_with_ltx_api(
+            force_api_generations=self._config.force_api_generations, settings=self.state.app_settings
+        ):
+            provider, model = "ltx-api", FORCED_API_MODEL_MAP.get(req.model.strip().lower(), req.model)
+        else:
+            provider, model = "local", f"ltx2-{req.model}"
+        params = req.model_dump()
+        inputs = {k: v for k, v in (("image_path", req.imagePath), ("audio_path", req.audioPath)) if v}
+        if job_id:
+            self._jobs.annotate(
+                job_id, model=model, provider=provider, prompt=req.prompt, negative_prompt=req.negativePrompt,
+                params=params, inputs=inputs, seed=seed,
+            )
+            self._jobs.mark_running(job_id, phase="starting")
+            return job_id
+        job = self._jobs.start(
+            "video_gen",
+            title=req.prompt[:80],
+            model=model,
+            provider=provider,
+            seed=seed,
+            prompt=req.prompt,
+            negative_prompt=req.negativePrompt,
+            params=params,
+            inputs=inputs,
+        )
+        return job.id
+
+    def _close_job(self, job_id: str, *, response: GenerateVideoResponse | None = None, error: str = "") -> None:
+        """Guarantee a terminal state whatever path the render took."""
+        if not job_id or self._jobs is None:
+            return
+        if response is not None:
+            if response.status == "complete" and response.video_path:
+                self._jobs.complete(job_id, [response.video_path])
+            elif response.status == "cancelled":
+                self._jobs.mark_cancelled(job_id)
+            else:
+                self._jobs.fail(job_id, f"Generation ended with status {response.status}")
+            if response.seed is not None:
+                self._jobs.annotate(job_id, seed=response.seed)
+        else:
+            self._jobs.fail(job_id, error or "Generation failed")
+
+    def _note_seed(self, job_id: str, seed: int) -> None:
+        if job_id and self._jobs is not None:
+            self._jobs.annotate(job_id, seed=seed)
+
+    def _dispatch(self, req: GenerateVideoRequest, job_id: str, seed_override: int | None) -> GenerateVideoResponse:
+        if self._config.wangp_enabled:
+            return self._generate_via_wangp(req, job_id=job_id, seed_override=seed_override)
 
         if should_video_generate_with_ltx_api(
             force_api_generations=self._config.force_api_generations,
             settings=self.state.app_settings,
         ):
-            return self._generate_forced_api(req)
+            return self._generate_forced_api(req, job_id=job_id)
 
         if self._generation.is_generation_running():
             raise HTTPError(409, "Generation already in progress")
@@ -101,7 +342,7 @@ class VideoGenerationHandler(StateHandlerBase):
 
         audio_path = normalize_optional_path(req.audioPath)
         if audio_path:
-            return self._generate_a2v(req, duration, fps, audio_path=audio_path)
+            return self._generate_a2v(req, duration, fps, audio_path=audio_path, job_id=job_id, seed_override=seed_override)
 
         logger.info("Resolution %s - using fast pipeline", resolution)
 
@@ -133,11 +374,12 @@ class VideoGenerationHandler(StateHandlerBase):
             logger.info("Image: %s -> %sx%s", image_path, width, height)
 
         generation_id = self._make_generation_id()
-        seed = self._resolve_seed()
+        seed = seed_override if seed_override is not None else self._resolve_seed()
+        self._note_seed(job_id, seed)
 
         try:
             self._pipelines.load_gpu_pipeline("fast", should_warm=False)
-            self._generation.start_generation(generation_id)
+            self._generation.start_generation(generation_id, job_id=job_id)
 
             output_path = self.generate_video(
                 prompt=req.prompt,
@@ -260,7 +502,14 @@ class VideoGenerationHandler(StateHandlerBase):
                 os.unlink(temp_image_path)
 
     def _generate_a2v(
-        self, req: GenerateVideoRequest, duration: int, fps: int, *, audio_path: str
+        self,
+        req: GenerateVideoRequest,
+        duration: int,
+        fps: int,
+        *,
+        audio_path: str,
+        job_id: str = "",
+        seed_override: int | None = None,
     ) -> GenerateVideoResponse:
         if req.model != "pro":
             logger.warning("A2V local requested with model=%s; A2V always uses pro pipeline", req.model)
@@ -282,13 +531,14 @@ class VideoGenerationHandler(StateHandlerBase):
         if image_path:
             image = self._prepare_image(image_path, width, height)
 
-        seed = self._resolve_seed()
+        seed = seed_override if seed_override is not None else self._resolve_seed()
+        self._note_seed(job_id, seed)
 
         generation_id = self._make_generation_id()
 
         try:
             a2v_state = self._pipelines.load_a2v_pipeline()
-            self._generation.start_generation(generation_id)
+            self._generation.start_generation(generation_id, job_id=job_id)
 
             enhanced_prompt = req.prompt + self._camera_motion_prompts.get(req.cameraMotion, "")
             neg = req.negativePrompt if req.negativePrompt else self._default_negative_prompt
@@ -396,12 +646,12 @@ class VideoGenerationHandler(StateHandlerBase):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         return self._outputs_dir / f"ltx2_video_{timestamp}_{self._make_generation_id()}.mp4"
 
-    def _generate_forced_api(self, req: GenerateVideoRequest) -> GenerateVideoResponse:
+    def _generate_forced_api(self, req: GenerateVideoRequest, *, job_id: str = "") -> GenerateVideoResponse:
         if self._generation.is_generation_running():
             raise HTTPError(409, "Generation already in progress")
 
         generation_id = self._make_generation_id()
-        self._generation.start_api_generation(generation_id)
+        self._generation.start_api_generation(generation_id, job_id=job_id)
 
         audio_path = normalize_optional_path(req.audioPath)
         image_path = normalize_optional_path(req.imagePath)
@@ -553,12 +803,26 @@ class VideoGenerationHandler(StateHandlerBase):
         output_path.write_bytes(video_bytes)
         return output_path
 
-    def _generate_via_wangp(self, req: GenerateVideoRequest) -> GenerateVideoResponse:
+    def _generate_via_wangp(
+        self, req: GenerateVideoRequest, *, job_id: str = "", seed_override: int | None = None
+    ) -> GenerateVideoResponse:
         if self._generation.is_generation_running():
             raise HTTPError(409, "Generation already in progress")
 
+        # A render must never turn into a silent multi-GB checkpoint download
+        # (wgp.py auto-downloads missing weights on load). Refuse with the
+        # explicit path instead: the Models tab downloads with progress/cancel.
+        model_type = self._wangp_video_model(req)
+        if self._wangp_bridge.weights_installed(model_type) is False:
+            raise HTTPError(
+                409,
+                f"The local video model '{model_type}' has no downloaded weights yet. "
+                "Download it first in the Models tab (Model Library → Local · WanGP models) — "
+                "a render never starts a checkpoint download on its own.",
+            )
+
         generation_id = self._make_generation_id()
-        self._generation.start_api_generation(generation_id)
+        self._generation.start_api_generation(generation_id, job_id=job_id)
 
         duration = self._parse_forced_numeric_field(req.duration, "INVALID_DURATION")
         fps = self._parse_forced_numeric_field(req.fps, "INVALID_FPS")
@@ -571,7 +835,8 @@ class VideoGenerationHandler(StateHandlerBase):
 
             settings = self.state.app_settings.model_copy(deep=True)
             steps = 8 if req.model.strip().lower() == "fast" else max(1, settings.pro_model.steps)
-            seed = self._resolve_seed()
+            seed = seed_override if seed_override is not None else self._resolve_seed()
+            self._note_seed(job_id, seed)
 
             output_path = self._wangp_bridge.generate_video(
                 prompt=req.prompt,
@@ -587,21 +852,44 @@ class VideoGenerationHandler(StateHandlerBase):
                 audio_path=validated_audio_path,
                 on_progress=self._generation.update_progress,
                 is_cancelled=self._generation.is_generation_cancelled,
+                control_video_path=_existing_file(req.controlVideoPath),
+                depth_video_path=_existing_file(req.depthVideoPath),
+                loras=[(lora.name, lora.multiplier) for lora in req.loras if _existing_file(lora.name)],
+                reference_images=[p for p in (_existing_file(r) for r in req.referenceImagePaths) if p],
+                end_frame_path=_existing_file(req.endFramePath),
+                control_strength=req.controlStrength,
+                model_type=model_type,
             )
 
             self._generation.complete_generation(output_path)
             return GenerateVideoResponse(status="complete", video_path=output_path, seed=seed)
         except Exception as e:
             if self._generation.is_generation_cancelled() or "cancelled" in str(e).lower():
-                # A cancelled run must surface with a Cancelled state, not an error:
-                # align the state machine with the response so the frontend polling
-                # loop never sees a cancelled job as failed.
                 self._generation.cancel_generation()
                 logger.info("WanGP generation cancelled by user")
                 return GenerateVideoResponse(status="cancelled")
 
+            # CUDA-context errors from a stale worker: restart once and retry once.
+            error_text = str(e)
+            if _is_cuda_context_error(error_text):
+                logger.warning("CUDA context error detected, restarting WanGP worker: %s", error_text[:120])
+                stop_fn = getattr(self._wangp_bridge, "stop", None)
+                if stop_fn is not None:
+                    stop_fn()
+                # Retry exactly once
+                try:
+                    return self._generate_via_wangp(req, job_id=job_id, seed_override=seed_override)
+                except Exception as retry_e:
+                    if self._generation.is_generation_cancelled() or "cancelled" in str(retry_e).lower():
+                        self._generation.cancel_generation()
+                        return GenerateVideoResponse(status="cancelled")
+                    self._generation.fail_generation(str(retry_e))
+                    raise HTTPError(500, f"CUDA error after worker restart: {retry_e}") from retry_e
+
             self._generation.fail_generation(str(e))
             raise HTTPError(500, str(e)) from e
+
+
 
     @staticmethod
     def _parse_forced_numeric_field(raw_value: str, error_detail: str) -> int:

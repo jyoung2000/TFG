@@ -5,21 +5,41 @@ LTX Desktop is an open-source desktop app for generating videos with LTX models 
 > **Status: Beta.** Expect breaking changes.
 > Frontend architecture is under active refactor; large UI PRs may be declined for now (see [`CONTRIBUTING.md`](docs/CONTRIBUTING.md)).
 
-**This LTX Desktop fork powered by WanGP reduces the VRAM requirements from 32 GB to 6 GB.**
+**This LTX Desktop fork is powered by WanGP, which cuts VRAM needs dramatically: measured on a 12 GB RTX 4070 (2026-09-26, WanGP-direct), a 768×512 · 49-frame clip peaked ~4.4 GiB above idle and a 1024² still ~4.6 GiB. Cards below 12 GB are untested by this fork.**
 
 Check the WanGP repo for more information (docs, Discord, and more): https://github.com/deepbeepmeep/Wan2GP
 
 ## What do you want to make?
 
-Home offers two entry points that share one engine and one project model:
+Home is four verbs plus the studio, all sharing one engine, one History and
+one project model:
 
-- **Quick video** — describe an idea (an assistant can draft the prompt when
-  an AI key is configured), pick model/length, generate a clip. From the
-  result: *Generate again*, *Save to project*, *Open in Video Editor*, or
-  **Edit in Film Maker**, which turns the clip into a film project as
-  Scene 1 / Shot 1 / version 1 with prompt, negative prompt, model,
-  resolution, duration, fps, seed and output preserved.
-- **Filmmaker Studio** — a project's Storyboard tab (below).
+- **Create** — Quick video (Fast 540p · 6 s or Balanced 720p · 8 s on the
+  distilled LTX-2) or a still (Z-Image, 8 steps). An assistant drafts the
+  prompt when an AI key is configured; trained LoRAs are one checkbox away.
+  From the result: *Generate again*, *Save to project*, *Open in Video
+  Editor*, or **Edit in Film Maker** (Scene 1 / Shot 1 / version 1 with
+  every setting preserved).
+- **Reproduce** — give it an image or a video. The local vision stack
+  (Florence-2, CLIP, Depth-Anything, DINOv2) reads it into an editable
+  ShotSpec, renders candidates, scores them against the original and keeps
+  refining. Video adds shot detection, camera-language and motion analysis,
+  a 3D storyboard per shot and a stitched result
+  ([`docs/REPRODUCE.md`](docs/REPRODUCE.md),
+  [`docs/VIDEO_REPRODUCE.md`](docs/VIDEO_REPRODUCE.md),
+  [`docs/STORYBOARD_3D.md`](docs/STORYBOARD_3D.md)).
+- **Train** — build a dataset from a folder, a video or your own History,
+  auto-caption it with a trigger word, and train a LoRA that fits a 12 GB
+  card; bind it to a film character so every shot inherits it
+  ([`docs/TRAINING.md`](docs/TRAINING.md)).
+- **History** — every image, video, analysis, download and training run,
+  live, with prompt, seed, settings, lineage and metrics
+  ([`docs/HISTORY.md`](docs/HISTORY.md)).
+- **Film Studio** (advanced) — a project's Storyboard tab (below).
+
+At first run the app applies the **RTX 4070 · 12 GB** preset (Settings →
+General → Hardware preset): nothing it ships as a default can exceed the
+card, and what cannot run there is refused with a reason.
 
 Overview: [`docs/FILMMAKING.md`](docs/FILMMAKING.md).
 
@@ -149,7 +169,9 @@ pnpm -v
 
 ### 1. Wan2GP not installed yet
 
-`pnpm setup:dev:win` clones `Wan2GP/` into this repository, installs the backend dependencies, and prepares a plug-and-play local setup.
+`pnpm setup:dev:win` clones `Wan2GP/` into this repository, installs the backend dependencies, and creates WanGP's own Python environment at `Wan2GP\.venv` (CUDA PyTorch + `Wan2GP\requirements.txt`, via `scripts\ensure-wangp-venv.ps1`).
+
+WanGP deliberately does **not** share the backend venv: `uv sync` owns `backend\.venv` and removes anything outside `uv.lock`, which used to delete WanGP's packages (`No module named 'gradio'`). When `Wan2GP\.venv` exists, the backend runs WanGP from it as a separate worker process (`backend/wangp_worker.py`) and talks to it over loopback HTTP; the backend log shows `WanGP mode: worker`. Re-run `scripts\ensure-wangp-venv.ps1` any time (add `-Recreate` to start fresh).
 
 ```bash
 pnpm setup:dev:win
@@ -178,7 +200,7 @@ set WANGP_ROOT=D:\Wan2GP
 $env:WANGP_ROOT = "D:\Wan2GP"
 ```
 
-Set `WANGP_ROOT` before running setup. `pnpm setup:dev:win` will then reuse that checkout and install its `requirements.txt` into the LTX Desktop backend venv.
+Set `WANGP_ROOT` before running setup. `pnpm setup:dev:win` will then reuse that checkout and create its environment at `%WANGP_ROOT%\.venv` (skipped work if it already exists and imports). To use an existing WanGP environment instead, point `WANGP_PYTHON` at its `python.exe`.
 
 ```bash
 set WANGP_ROOT=D:\Wan2GP
@@ -186,17 +208,19 @@ pnpm setup:dev:win
 pnpm dev
 ```
 
-If you prefer the manual path instead of `pnpm setup:dev:win`, install the external Wan2GP requirements into the backend venv yourself after `uv sync`:
+If you prefer the manual path instead of `pnpm setup:dev:win`:
 
 ```bash
 set WANGP_ROOT=D:\Wan2GP
 pnpm install
 cd backend
-uv sync --extra dev
-uv pip install --python .venv\Scripts\python.exe -r %WANGP_ROOT%\requirements.txt
+uv sync --extra dev --extra test
 cd ..
+powershell -ExecutionPolicy Bypass -File scripts\ensure-wangp-venv.ps1
 pnpm dev
 ```
+
+Do not `uv pip install` WanGP's requirements into `backend\.venv` — the next `uv sync` removes them.
 
 The backend still runs in LTX Desktop's own `backend/.venv` unless you explicitly override it with `LTX_BACKEND_PYTHON`.
 
@@ -251,6 +275,31 @@ If `WANGP_ROOT` is not set, `pnpm setup:dev:linux` will prepare a repo-local `Wa
   <img src="images/timeline-gap-fill.png" alt="Timeline gap fill" width="70%">
 </p>
 
+## Containers, Unraid and a remote backend
+
+`deploy/docker-compose.yml` runs the backend, the vision sidecar and an
+optional Ollama VLM where the GPU is; the desktop connects through
+*Settings → General → Remote backend* (URL + token) and any MCP agent
+through `http://<host>:8000/mcp`. Unraid steps, the Docker Desktop on
+Windows "file cannot be accessed by the system" repair
+(`scripts/docker-desktop-repair.ps1`) and the WanGP-only remote mode are in
+[`docs/CONTAINERS.md`](docs/CONTAINERS.md).
+
+## Agents: Hermes, Claude Code, Cursor
+
+Hand Hermes only [`docs/HERMES_PROMPT.md`](docs/HERMES_PROMPT.md) and this
+repository: it sets up from scratch (`pnpm backend:dev:win` starts a headless
+backend), tests every feature as a user and grades it into
+`docs/HERMES_REVIEW.md`. A deeper multi-agent debugging pass is
+scripted in [`docs/AGENT_DEBUG_PROMPT.md`](docs/AGENT_DEBUG_PROMPT.md)
+(shared brief + per-agent adapters, reports to `docs/DEBUG_REPORT_<agent>.md`).
+
+Every API route is an MCP tool — `pnpm agent:mcp` (stdio) or `POST /mcp`
+(HTTP). [`skills/tfg/SKILL.md`](skills/tfg/SKILL.md) is the agent skill
+(agentskills.io format; `hermes skills install …`), and
+[`docs/AGENTS_GUIDE.md`](docs/AGENTS_GUIDE.md) has the Hermes
+`config.yaml` snippets and the workflow tool names.
+
 ## Features
 
 - Text-to-video generation
@@ -264,7 +313,7 @@ If `WANGP_ROOT` is not set, `pnpm setup:dev:linux` will prepare a repo-local `Wa
 
 | Platform / hardware | Generation mode | Notes |
 | --- | --- | --- |
-| Windows + CUDA GPU with **as low as 6 GB VRAM with WanGP** | Local generation | Downloads model weights locally |
+| Windows + CUDA GPU — **12 GB validated; WanGP's low-VRAM path may go lower (untested here)** | Local generation | Downloads model weights locally |
 | Windows (no CUDA, low VRAM, or unknown VRAM) | API-only | **LTX API key required** |
 | macOS (Apple Silicon builds) | API-only | **LTX API key required** |
 | Linux + CUDA GPU + WanGP checkout | Local generation | Source/dev setup supported in this fork |
@@ -277,7 +326,7 @@ In API-only mode, available resolutions/durations may be limited to what the API
 ### Windows (local generation)
 
 - Windows 10/11 (x64)
-- NVIDIA GPU with CUDA support and as low as 6 GB VRAM with WanGP
+- NVIDIA GPU with CUDA support — 12 GB (RTX 4070) is the validated configuration; WanGP advertises lower, untested by this fork
 - 16 GB+ RAM (32 GB recommended)
 - Plenty of free disk space for model weights and outputs
 

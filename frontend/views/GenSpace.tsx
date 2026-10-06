@@ -3,8 +3,14 @@ import {
   Trash2, Download, Image, Video, X,
   Heart, Film, Volume2, VolumeX, Sparkles,
   Clock, Monitor, ChevronUp, Scissors, Music,
-  ChevronLeft, ChevronRight, Copy, Check
+  ChevronLeft, ChevronRight, Copy, Check, Layers
 } from 'lucide-react'
+import { LoraPicker } from '../components/LoraPicker'
+import { StyleButton } from '../components/StylePicker'
+import type { LoraUse } from '../types/training'
+import { imageLoraLabel } from '../lib/faceLock'
+import { ThumbVote } from '../components/ThumbVote'
+import { appendPhrase, tasteApi, tasteChips, type TastePhrase } from '../lib/taste'
 import { useProjects } from '../contexts/ProjectContext'
 import type { GenSpaceRetakeSource } from '../contexts/ProjectContext'
 import { useAppSettings } from '../contexts/AppSettingsContext'
@@ -132,6 +138,9 @@ function AssetCard({
             >
               <Heart className={`h-3.5 w-3.5 ${isFavorite ? 'fill-current' : ''}`} />
             </button>
+            {(asset.type === 'image' || asset.type === 'video') && (
+              <ThumbVote target={{ kind: asset.type, subject: asset.path, prompt: asset.prompt, model: asset.generationParams?.model }} variant="overlay" />
+            )}
             
             {asset.type === 'image' && (
               <>
@@ -290,6 +299,46 @@ function SettingsDropdown({
   )
 }
 
+/**
+ * The image toolbar's LoRA popover: registry LoRAs for Z-Image, and face lock -
+ * a character LoRA render's face re-composed from its style sheet (on by default).
+ */
+function ImageLoraButton({ loras, onLorasChange, faceLock, onFaceLockChange, faceMatch, disabled }: {
+  loras: LoraUse[]
+  onLorasChange: (next: LoraUse[]) => void
+  faceLock: boolean
+  onFaceLockChange: (on: boolean) => void
+  faceMatch: string
+  disabled?: boolean
+}) {
+  const [isOpen, setIsOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const close = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setIsOpen(false) }
+    if (isOpen) document.addEventListener('mousedown', close)
+    return () => document.removeEventListener('mousedown', close)
+  }, [isOpen])
+  return (
+    <div ref={ref} className="relative">
+      <button onClick={() => setIsOpen(!isOpen)} className={`flex shrink-0 items-center gap-1 whitespace-nowrap px-2 py-1.5 rounded-md transition-colors ${isOpen ? 'bg-zinc-700 hover:bg-zinc-700' : 'hover:bg-zinc-800'}`} aria-expanded={isOpen} data-testid="image-lora-button">
+        <Layers className="h-3.5 w-3.5" />
+        <span className={loras.length ? 'text-zinc-200' : ''}>{imageLoraLabel(loras.length, faceLock)}</span>
+      </button>
+      {isOpen && (
+        <div className="absolute bottom-full right-0 mb-2 bg-zinc-800 border border-zinc-700 rounded-md p-2 w-72 shadow-xl z-[9999] space-y-2" data-testid="image-lora-panel">
+          <div className="text-[10px] text-zinc-500 uppercase tracking-wider">LoRAs</div>
+          <LoraPicker model="z_image" value={loras} onChange={onLorasChange} disabled={disabled} compact />
+          <label className="flex items-start gap-2 text-xs text-zinc-300 border-t border-zinc-700 pt-2">
+            <input type="checkbox" checked={faceLock} disabled={disabled} onChange={e => onFaceLockChange(e.target.checked)} className="mt-0.5" data-testid="face-lock" />
+            <span>Style-sheet lock<span className="block text-[10px] text-zinc-500">After each render with a character LoRA, re-composes the outfit and then the face from its style sheet. Close-ups keep their framing and get the face only. Slower per image.</span></span>
+          </label>
+          {faceMatch && <p className="text-[10px] text-emerald-300" data-testid="face-match">Last render · {faceMatch}</p>}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // Lightricks brand icon
 function LightricksIcon({ className }: { className?: string }) {
   return (
@@ -336,6 +385,14 @@ function PromptBar({
   canGenerate,
   buttonLabel,
   buttonIcon,
+  imageLoras,
+  onImageLorasChange,
+  faceLock,
+  onFaceLockChange,
+  faceMatch,
+  likedPhrases,
+  styleId,
+  onStyleChange,
 }: {
   mode: 'image' | 'video' | 'retake'
   onModeChange: (mode: 'image' | 'video' | 'retake') => void
@@ -362,6 +419,16 @@ function PromptBar({
   }
   onSettingsChange: (settings: any) => void
   shouldVideoGenerateWithLtxApi: boolean
+  imageLoras: LoraUse[]
+  onImageLorasChange: (next: LoraUse[]) => void
+  faceLock: boolean
+  onFaceLockChange: (on: boolean) => void
+  faceMatch: string
+  /** Prompt phrases the user's thumbs up favour (lib/taste.ts). */
+  likedPhrases: TastePhrase[]
+  /** The saved style the image or video is drawn in ('' = none). */
+  styleId: string
+  onStyleChange: (styleId: string) => void
 }) {
   const inputRef = useRef<HTMLInputElement>(null)
   const audioInputRef = useRef<HTMLInputElement>(null)
@@ -540,6 +607,14 @@ function PromptBar({
             }
             className="w-full bg-transparent text-white text-sm placeholder:text-zinc-500 focus:outline-none px-2 py-2 resize-none overflow-y-auto h-[70px] leading-5"
           />
+          {!isRetake && tasteChips(likedPhrases, prompt).length > 0 && (
+            <div className="flex flex-wrap items-center gap-1 px-2 pb-1" data-testid="taste-chips">
+              <span className="text-[10px] text-zinc-500" title="Phrases from prompts you gave a thumbs up">Your taste</span>
+              {tasteChips(likedPhrases, prompt).map(text => (
+                <button key={text} type="button" onClick={() => onPromptChange(appendPhrase(prompt, text))} className="px-1.5 py-0.5 rounded-full bg-emerald-900/40 border border-emerald-800/60 text-[10px] text-emerald-200 hover:bg-emerald-800/60">+ {text}</button>
+              ))}
+            </div>
+          )}
         </div>
 
       </div>
@@ -567,6 +642,8 @@ function PromptBar({
         
         <div className="flex-1" />
         
+        {!isRetake && <StyleButton value={styleId} onChange={onStyleChange} disabled={isGenerating} />}
+
         {isRetake ? (
           <div className="text-[10px] text-zinc-500 pr-2">Trim in the panel above, then retake</div>
         ) : mode === 'image' ? (
@@ -612,7 +689,8 @@ function PromptBar({
                 </>
               }
             />
-            
+
+            <ImageLoraButton loras={imageLoras} onLorasChange={onImageLorasChange} faceLock={faceLock} onFaceLockChange={onFaceLockChange} faceMatch={faceMatch} disabled={isGenerating} />
           </>
         ) : (
           <>
@@ -843,9 +921,21 @@ export function GenSpace() {
     videoPath,
     imageUrls,
     imagePaths,
+    faceMatch,
     error,
     reset,
   } = useGeneration()
+  // Image mode: registry LoRAs and face lock (frontend/lib/faceLock.ts).
+  const [imageLoras, setImageLoras] = useState<LoraUse[]>([])
+  const [faceLock, setFaceLock] = useState(true)
+  const [styleId, setStyleId] = useState('')
+  // What the user's thumbs up say they like, offered as one-click prompt phrases.
+  const [likedPhrases, setLikedPhrases] = useState<TastePhrase[]>([])
+  useEffect(() => {
+    let cancelled = false
+    tasteApi.summary().then(s => { if (!cancelled && s.enabled) setLikedPhrases(s.liked_phrases) }).catch(() => undefined)
+    return () => { cancelled = true }
+  }, [isGenerating])
 
   const {
     submitRetake,
@@ -1132,6 +1222,9 @@ export function GenSpace() {
           imageAspectRatio: settings.aspectRatio,
           imageSteps: settings.imageSteps,
           variations: settings.variations,
+          loras: imageLoras,
+          faceLock,
+          styleId,
         }
       )
     } else {
@@ -1156,6 +1249,7 @@ export function GenSpace() {
           imageResolution: videoSettings.imageResolution,
           imageAspectRatio: videoSettings.aspectRatio,
           imageSteps: videoSettings.imageSteps,
+          styleId,
         },
         audioPath,
       )
@@ -1439,6 +1533,14 @@ export function GenSpace() {
           settings={settings}
           onSettingsChange={(nextSettings) => setSettings(applyForcedVideoSettings(nextSettings))}
           shouldVideoGenerateWithLtxApi={shouldVideoGenerateWithLtxApi}
+          imageLoras={imageLoras}
+          onImageLorasChange={setImageLoras}
+          faceLock={faceLock}
+          onFaceLockChange={setFaceLock}
+          faceMatch={faceMatch}
+          likedPhrases={likedPhrases}
+          styleId={styleId}
+          onStyleChange={setStyleId}
         />
       </div>
       

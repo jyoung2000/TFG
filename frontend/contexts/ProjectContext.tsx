@@ -1,5 +1,13 @@
+import { copyTimelineContent } from '../views/editor/timelineOps'
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react'
 import type { Project, Asset, AssetTake, ViewType, ProjectTab, Timeline } from '../types/project'
+
+export interface QuickPreset {
+  prompt: string
+  negativePrompt: string
+  params: Record<string, unknown>
+  seed: number | null
+}
 import { createDefaultTimeline } from '../types/project'
 import { logger } from '../lib/logger'
 
@@ -32,7 +40,8 @@ interface ProjectContextType {
   addTimeline: (projectId: string, name?: string) => Timeline
   deleteTimeline: (projectId: string, timelineId: string) => void
   renameTimeline: (projectId: string, timelineId: string, name: string) => void
-  duplicateTimeline: (projectId: string, timelineId: string) => Timeline | null
+  /** `content`: the timeline as the editor has it now (edits not auto-saved yet). */
+  duplicateTimeline: (projectId: string, timelineId: string, content?: Pick<Timeline, 'clips' | 'tracks' | 'subtitles'>) => Timeline | null
   setActiveTimeline: (projectId: string, timelineId: string) => void
   updateTimeline: (projectId: string, timelineId: string, updates: Partial<Pick<Timeline, 'tracks' | 'clips' | 'subtitles'>>) => void
   getActiveTimeline: (projectId: string) => Timeline | null
@@ -44,6 +53,22 @@ interface ProjectContextType {
   openQuickMode: () => void
   /** Analyse an existing video into an editable storyboard. */
   openAnalyzeVideo: () => void
+  /** The unified History tab. */
+  openHistory: () => void
+  /** The Train tab: datasets, LoRA training runs and the registry. */
+  /** Train, opened on `datasetId` when given (a dataset just made from an asset or a reproduce job). */
+  openTrain: (datasetId?: string) => void
+  /** The dataset Train should open on next (taken once by the Train view). */
+  pendingTrainDatasetId: string | null
+  clearPendingTrainDataset: () => void
+  /** Open Reproduce for an image or video analysis; an empty id opens the view without a selection. */
+  openAnalysis: (kind: 'image' | 'video', id: string) => void
+  /** Set by openAnalysis, consumed (and cleared) by the analysis view that mounts next. */
+  pendingAnalysis: { kind: 'image' | 'video'; id: string } | null
+  clearPendingAnalysis: () => void
+  /** Prompt + parameters handed to Quick mode from History ("open in Quick"). */
+  quickPreset: QuickPreset | null
+  setQuickPreset: (preset: QuickPreset | null) => void
   
   // Cross-view communication (editor → gen space)
   genSpaceEditImageUrl: string | null
@@ -428,25 +453,22 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
     ))
   }, [])
   
-  const duplicateTimeline = useCallback((projectId: string, timelineId: string): Timeline | null => {
+  const duplicateTimeline = useCallback((projectId: string, timelineId: string, content?: Pick<Timeline, 'clips' | 'tracks' | 'subtitles'>): Timeline | null => {
     const project = projects.find(p => p.id === projectId)
     const source = project?.timelines?.find(t => t.id === timelineId)
     if (!source) return null
     
+    // The copy's clips get new ids and their links point at each other (QA 2026-10-01).
+    const from = content ?? source
+    const copied = copyTimelineContent(from, kind => `${kind}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`)
     const newTimeline: Timeline = {
       ...source,
       id: `timeline-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       name: `${source.name} (copy)`,
       createdAt: Date.now(),
-      tracks: source.tracks.map(t => ({ ...t })),
-      clips: source.clips.map(c => ({ 
-        ...c, 
-        id: `clip-${Date.now()}-${Math.random().toString(36).substr(2, 9)}` 
-      })),
-      subtitles: source.subtitles?.map(s => ({
-        ...s,
-        id: `sub-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
-      })),
+      tracks: from.tracks.map(t => ({ ...t })),
+      clips: copied.clips,
+      subtitles: copied.subtitles,
     }
     
     setProjects(prev => prev.map(p => 
@@ -531,6 +553,28 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
     setCurrentProjectId(null)
     setCurrentView('analyze')
   }, [])
+
+  const openHistory = useCallback(() => {
+    setCurrentProjectId(null)
+    setCurrentView('history')
+  }, [])
+
+  const [pendingTrainDatasetId, setPendingTrainDatasetId] = useState<string | null>(null)
+  const openTrain = useCallback((datasetId?: string) => {
+    setPendingTrainDatasetId(datasetId ?? null)
+    setCurrentProjectId(null)
+    setCurrentView('train')
+  }, [])
+  const clearPendingTrainDataset = useCallback(() => setPendingTrainDatasetId(null), [])
+
+  const [pendingAnalysis, setPendingAnalysis] = useState<{ kind: 'image' | 'video'; id: string } | null>(null)
+  const openAnalysis = useCallback((kind: 'image' | 'video', id: string) => {
+    setPendingAnalysis(id ? { kind, id } : null)
+    setCurrentProjectId(null)
+    setCurrentView(kind === 'image' ? 'analyze-image' : 'analyze')
+  }, [])
+  const clearPendingAnalysis = useCallback(() => setPendingAnalysis(null), [])
+  const [quickPreset, setQuickPreset] = useState<QuickPreset | null>(null)
   
   return (
     <ProjectContext.Provider value={{
@@ -564,6 +608,15 @@ export function ProjectProvider({ children }: { children: React.ReactNode }) {
       openPlayground,
       openQuickMode,
       openAnalyzeVideo,
+      openHistory,
+      openTrain,
+      pendingTrainDatasetId,
+      clearPendingTrainDataset,
+      openAnalysis,
+      pendingAnalysis,
+      clearPendingAnalysis,
+      quickPreset,
+      setQuickPreset,
       genSpaceEditImageUrl,
       setGenSpaceEditImageUrl,
       genSpaceEditMode,

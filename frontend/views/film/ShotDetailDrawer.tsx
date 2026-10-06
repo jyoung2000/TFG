@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { syncDraft } from './drawerDraft'
+import { useCallback, useEffect, useMemo, useState, useRef } from 'react'
 import {
   AlertTriangle,
   Aperture,
@@ -33,6 +34,11 @@ import type {
 } from '../../types/film'
 import { CAMERA_MOVES, CONTINUITY_LEVEL_META, SHOT_STATUS_META, VISUAL_REVIEW_META, framingLabel } from '../../types/film'
 import { useShotWorkflow } from './useShotWorkflow'
+import { ThumbVote } from '../../components/ThumbVote'
+import { AssetMentionTextarea } from '../../components/ui/AssetMentionTextarea'
+import { useMentionAssets } from './useMentionAssets'
+
+const MENTION_PLACEHOLDER = 'Type @ to reference a character, prop or location from your style guides'
 
 /** What the local host renders with. The quality profile varies; the family does not. */
 const LOCAL_VIDEO_MODEL = 'ltx-2'
@@ -60,6 +66,7 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
   const { film, refresh, capabilities, isGenerating, setShotContinuity } = useFilm()
   const workflow = useShotWorkflow(scene, shot)
   const projectId = film?.id ?? ''
+  const mentionAssets = useMentionAssets()
   // Only what this project could actually render with — a prompt for every
   // model in the catalog would be noise. `default_model` is deliberately absent:
   // it holds a quality profile ("fast", "pro"), not a model id, and the local
@@ -81,6 +88,8 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
     visual_prompt: shot.visual_prompt,
     camera_move: shot.camera_move,
     gap_before: shot.gap_before_seconds == null ? '' : String(shot.gap_before_seconds),
+    emotion: shot.emotion,
+    negative_prompt: shot.negative_prompt,
   })
   const [warnings, setWarnings] = useState<ContinuityWarning[]>([])
   const [continuityLevel, setContinuityLevel] = useState<ContinuityLevel>('good')
@@ -101,8 +110,11 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
     setVisualFrames(null)
   }, [shot.id])
 
+  // A different shot resets the form; a refresh of this one (the queue poll
+  // during a render) only updates fields the user has not edited (QA 2026-10-01).
+  const serverDraftRef = useRef<{ id: string; values: typeof draft } | null>(null)
   useEffect(() => {
-    setDraft({
+    const values = {
       title: shot.title,
       description: shot.description,
       action: shot.action,
@@ -111,8 +123,14 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
       visual_prompt: shot.visual_prompt,
       camera_move: shot.camera_move,
       gap_before: shot.gap_before_seconds == null ? '' : String(shot.gap_before_seconds),
-    })
-  }, [shot.id, shot.updated_at, shot.title, shot.description, shot.action, shot.dialogue, shot.duration_seconds, shot.visual_prompt, shot.camera_move, shot.gap_before_seconds])
+      emotion: shot.emotion,
+      negative_prompt: shot.negative_prompt,
+    }
+    const previous = serverDraftRef.current
+    serverDraftRef.current = { id: shot.id, values }
+    if (!previous || previous.id !== shot.id) setDraft(values)
+    else setDraft(d => syncDraft(d, previous.values, values))
+  }, [shot.id, shot.title, shot.description, shot.action, shot.dialogue, shot.duration_seconds, shot.visual_prompt, shot.camera_move, shot.gap_before_seconds, shot.emotion, shot.negative_prompt])
 
   useEffect(() => {
     if (!projectId) return
@@ -173,6 +191,8 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
         dialogue: draft.dialogue,
         duration_seconds: Math.max(0.5, draft.duration_seconds),
         camera_move: draft.camera_move,
+        emotion: draft.emotion,
+        negative_prompt: draft.negative_prompt,
         ...(draft.gap_before.trim() === ''
           ? { clear_gap: true }
           : { gap_before_seconds: Math.max(0, Number(draft.gap_before) || 0) }),
@@ -482,10 +502,13 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
             />
           </Row>
           <Row label="Action / what happens">
-            <textarea
+            <AssetMentionTextarea
               className={`${inputClass} resize-none h-14`}
               value={draft.action}
-              onChange={e => setDraft(d => ({ ...d, action: e.target.value }))}
+              onChange={action => setDraft(d => ({ ...d, action }))}
+              assets={mentionAssets}
+              placeholder={MENTION_PLACEHOLDER}
+              data-testid="shot-action"
             />
           </Row>
           <Row label="Dialogue">
@@ -535,11 +558,21 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
             </Row>
           </div>
           <Row label={shot.prompt_locked ? 'Visual prompt (edited — locked)' : 'Visual prompt (auto-synthesized)'}>
-            <textarea
+            <AssetMentionTextarea
               className={`${inputClass} resize-none h-20 font-mono text-[10px] leading-snug`}
               value={draft.visual_prompt}
-              onChange={e => setDraft(d => ({ ...d, visual_prompt: e.target.value }))}
+              onChange={visual_prompt => setDraft(d => ({ ...d, visual_prompt }))}
+              assets={mentionAssets}
+              placeholder={MENTION_PLACEHOLDER}
+              data-testid="shot-visual-prompt"
             />
+          </Row>
+          {/* Editable here too (QA 2026-10-01: nowhere in the storyboard edited them). */}
+          <Row label="Emotion / mood">
+            <input className={inputClass} value={draft.emotion} onChange={e => setDraft(d => ({ ...d, emotion: e.target.value }))} placeholder="e.g. tense, hopeful" aria-label="Emotion" />
+          </Row>
+          <Row label="Negative prompt">
+            <textarea className={`${inputClass} resize-none h-12 text-[10px]`} value={draft.negative_prompt} onChange={e => setDraft(d => ({ ...d, negative_prompt: e.target.value }))} placeholder="what to keep out of the shot" aria-label="Negative prompt" />
           </Row>
           <div className="flex items-center gap-1.5">
             <button
@@ -551,6 +584,11 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
               {busy === 'refine' ? <Loader2 className="h-3 w-3 animate-spin" /> : <Wand2 className="h-3 w-3" />}
               Refine with AI
             </button>
+            {shot.visual_prompt.trim() && (
+              <span className="flex items-center gap-0.5 text-[10px] text-zinc-500" title="Grade this prompt: the AI Director learns what you like">
+                Prompt <ThumbVote target={{ kind: 'prompt', subject: shot.visual_prompt, prompt: shot.visual_prompt, projectId }} />
+              </span>
+            )}
             {shot.prompt_locked && (
               <button
                 onClick={() => void unlockPrompt()}
@@ -791,6 +829,7 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
                 size="sm"
                 variant={shot.status === 'approved' ? 'default' : 'secondary'}
                 onClick={() => void setStatus('approved')}
+                disabled={anyBusy}
                 className="gap-1.5"
               >
                 <ThumbsUp className="h-3.5 w-3.5" /> Approve
@@ -799,11 +838,18 @@ export function ShotDetailDrawer({ scene, shot, onClose, onCompose }: ShotDetail
                 size="sm"
                 variant="secondary"
                 onClick={() => void setStatus('rejected')}
+                disabled={anyBusy}
                 className="gap-1.5"
               >
                 <ThumbsDown className="h-3.5 w-3.5" /> Reject
               </Button>
             </div>
+            {/* The way back (QA 2026-10-01: Delete's tooltip said to set the shot back to review, and nothing did). */}
+            {(shot.status === 'approved' || shot.status === 'rejected') && (
+              <button onClick={() => void setStatus('review')} disabled={anyBusy} className="w-full text-[10px] text-zinc-400 hover:text-zinc-200 disabled:opacity-40" data-testid="back-to-review">
+                Back to review
+              </button>
+            )}
             <Button
               size="sm"
               onClick={() => void sendToTimeline(currentVersion, { replace: linkedClip !== null })}

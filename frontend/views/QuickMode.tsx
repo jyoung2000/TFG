@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { LoraPicker } from '../components/LoraPicker'
+import type { LoraUse } from '../types/training'
 import {
   ArrowLeft,
   Clapperboard,
@@ -24,6 +26,7 @@ import { filmApi } from '../lib/film-api'
 import { importClipAsShot } from '../lib/film-conversion'
 import { fileUrlToPath } from '../lib/url-to-path'
 import { logger } from '../lib/logger'
+import { backendFetch } from '../lib/backend'
 import {
   FORCED_API_VIDEO_RESOLUTIONS,
   getAllowedForcedApiDurations,
@@ -33,12 +36,14 @@ import { ErrorNotice } from '../components/ErrorNotice'
 import { LtxLogo } from '../components/LtxLogo'
 import { Button } from '../components/ui/button'
 import { requestSettings } from '../lib/error-messages'
+import { toFileUrl } from '../lib/file-url'
+import { filmOutputUrl } from '../lib/film-api'
+import { importLegacyQuickHistory, jobsApi } from '../lib/jobs-api'
 import type { GenerationSettings } from '../components/SettingsPanel'
 import type { DirectorChatMessage, DirectorContextDetails } from '../types/film'
 
 const LOCAL_RESOLUTIONS = ['540p', '720p', '1080p'] as const
 const LOCAL_MAX_DURATION: Record<string, number> = { '540p': 20, '720p': 10, '1080p': 5 }
-const HISTORY_KEY = 'ltx-quick-history'
 const HISTORY_LIMIT = 24
 
 interface QuickSettings {
@@ -71,6 +76,12 @@ interface ChatTurn extends DirectorChatMessage {
   error?: boolean
 }
 
+/** Quick video defaults per hardware-preset profile (docs/RTX_4070_TEST_MATRIX.md). */
+const VIDEO_PROFILE_DEFAULTS: Record<'fast' | 'balanced', Pick<QuickSettings, 'videoResolution' | 'duration'>> = {
+  fast: { videoResolution: '540p', duration: 6 },
+  balanced: { videoResolution: '720p', duration: 8 },
+}
+
 const DEFAULT_QUICK_SETTINGS: QuickSettings = {
   model: 'fast',
   duration: 5,
@@ -80,23 +91,38 @@ const DEFAULT_QUICK_SETTINGS: QuickSettings = {
   audio: false,
 }
 
-function loadHistory(): QuickResult[] {
-  try {
-    const raw = localStorage.getItem(HISTORY_KEY)
-    if (!raw) return []
-    const parsed: unknown = JSON.parse(raw)
-    return Array.isArray(parsed) ? (parsed as QuickResult[]).filter(r => r && typeof r.videoPath === 'string') : []
-  } catch {
-    return []
+/** Recent quick videos come from the unified job store; nothing lives in localStorage any more. */
+async function loadHistory(): Promise<QuickResult[]> {
+  const { jobs } = await jobsApi.list({ kind: 'video_gen', status: 'complete', limit: HISTORY_LIMIT * 2 })
+  const results: QuickResult[] = []
+  for (const job of jobs) {
+    if (job.project_id) continue // film shots belong to their storyboard
+    const first = job.outputs.find(o => o.kind === 'video') ?? job.outputs[0]
+    if (!first) continue
+    const params = job.params
+    const settings: QuickSettings = {
+      model: params.model === 'pro' ? 'pro' : 'fast',
+      duration: Number(params.duration) || DEFAULT_QUICK_SETTINGS.duration,
+      videoResolution: typeof params.resolution === 'string' && params.resolution ? params.resolution : DEFAULT_QUICK_SETTINGS.videoResolution,
+      fps: Number(params.fps) || DEFAULT_QUICK_SETTINGS.fps,
+      aspectRatio: params.aspectRatio === '9:16' ? '9:16' : '16:9',
+      audio: params.audio === 'true' || params.audio === true,
+    }
+    const imagePath = typeof job.inputs.image_path === 'string' ? job.inputs.image_path : ''
+    results.push({
+      id: job.id,
+      prompt: job.prompt,
+      negativePrompt: job.negative_prompt,
+      settings,
+      seed: job.seed,
+      videoPath: first.path,
+      videoUrl: await filmOutputUrl(first.path),
+      createdAt: job.created_at,
+      referenceImage: imagePath ? toFileUrl(imagePath) : null,
+    })
+    if (results.length >= HISTORY_LIMIT) break
   }
-}
-
-function saveHistory(items: QuickResult[]) {
-  try {
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(items.slice(0, HISTORY_LIMIT)))
-  } catch (e) {
-    logger.warn(`Could not persist quick history: ${e}`)
-  }
+  return results
 }
 
 function toGenerationSettings(quick: QuickSettings): GenerationSettings {
@@ -128,18 +154,48 @@ function projectNameFromPrompt(prompt: string): string {
  * as Scene 1 / Shot 1 / version 1.
  */
 export function QuickMode() {
-  const { goHome, createProject, addAsset, updateAsset, openProject, projects } = useProjects()
-  const { shouldVideoGenerateWithLtxApi, hasDirectorProvider } = useAppSettings()
+  const { goHome, createProject, addAsset, updateAsset, openProject, projects, openHistory, quickPreset, setQuickPreset } = useProjects()
+  const { shouldVideoGenerateWithLtxApi, hasDirectorProvider, settings: appSettings, refreshSettings } = useAppSettings()
   const generation = useGeneration()
 
   const [prompt, setPrompt] = useState('')
   const [negativePrompt, setNegativePrompt] = useState('')
   const [settings, setSettings] = useState<QuickSettings>(DEFAULT_QUICK_SETTINGS)
+  // The hardware preset's video profile seeds the defaults until the person changes them.
+  const profileSeededRef = useRef(false)
+  useEffect(() => {
+    if (profileSeededRef.current) return
+    profileSeededRef.current = true
+    setSettings(s => ({ ...s, ...VIDEO_PROFILE_DEFAULTS[appSettings.videoProfile] }))
+  }, [appSettings.videoProfile])
+  const setVideoProfile = useCallback(async (profile: 'fast' | 'balanced') => {
+    setSettings(s => ({ ...s, ...VIDEO_PROFILE_DEFAULTS[profile] }))
+    try {
+      await backendFetch('/api/settings', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ videoProfile: profile }) })
+      await refreshSettings()
+    } catch (e) {
+      logger.warn(`Video profile not saved: ${e instanceof Error ? e.message : String(e)}`)
+    }
+  }, [refreshSettings])
+  const [loras, setLoras] = useState<LoraUse[]>([])
   const [chat, setChat] = useState<ChatTurn[]>([])
   const [chatInput, setChatInput] = useState('')
   const [chatBusy, setChatBusy] = useState(false)
   const [showContext, setShowContext] = useState<number | null>(null)
-  const [history, setHistory] = useState<QuickResult[]>(() => loadHistory())
+  const [history, setHistory] = useState<QuickResult[]>([])
+  const reloadHistory = useCallback(async () => {
+    try {
+      setHistory(await loadHistory())
+    } catch (e) {
+      logger.warn(`Could not load quick history: ${e}`)
+    }
+  }, [])
+  useEffect(() => {
+    void (async () => {
+      try { await importLegacyQuickHistory() } catch (e) { logger.warn(`Legacy history import skipped: ${e}`) }
+      await reloadHistory()
+    })()
+  }, [reloadHistory])
   const [result, setResult] = useState<QuickResult | null>(null)
   const [actionBusy, setActionBusy] = useState<string | null>(null)
   const [actionNote, setActionNote] = useState('')
@@ -155,8 +211,7 @@ export function QuickMode() {
     if (!file || !file.type.startsWith('image/')) return
     const filePath = (file as File & { path?: string }).path
     if (filePath) {
-      const normalized = filePath.replace(/\\/g, '/')
-      setReferenceImage(normalized.startsWith('/') ? `file://${normalized}` : `file:///${normalized}`)
+      setReferenceImage(toFileUrl(filePath))
     } else {
       setActionNote('Pick the image with the file dialog so its path can be used as the reference.')
     }
@@ -202,13 +257,9 @@ export function QuickMode() {
       referenceImage: submitted?.referenceImage ?? null,
     }
     setResult(entry)
-    setHistory(prev => {
-      const next = [entry, ...prev].slice(0, HISTORY_LIMIT)
-      saveHistory(next)
-      return next
-    })
+    void reloadHistory()
     setActionNote('')
-  }, [generation.isGenerating, generation.videoUrl, generation.videoPath, generation.videoSeed, prompt, negativePrompt, effectiveSettings])
+  }, [generation.isGenerating, generation.videoUrl, generation.videoPath, generation.videoSeed, prompt, negativePrompt, effectiveSettings, reloadHistory])
 
   const runGeneration = useCallback(
     async (overridePrompt?: string, overrideSettings?: QuickSettings, overrideNegative?: string, overrideReference?: string | null) => {
@@ -219,9 +270,9 @@ export function QuickMode() {
       const useReference = overrideReference === undefined ? referenceImage : overrideReference
       submittedRef.current = { prompt: usePrompt, negativePrompt: useNegative, settings: useSettings, referenceImage: useReference }
       setResult(null)
-      await generation.generate(usePrompt, useReference ? fileUrlToPath(useReference) : null, toGenerationSettings(useSettings))
+      await generation.generate(usePrompt, useReference ? fileUrlToPath(useReference) : null, { ...toGenerationSettings(useSettings), loras })
     },
-    [prompt, negativePrompt, effectiveSettings, generation, referenceImage],
+    [prompt, negativePrompt, effectiveSettings, generation, referenceImage, loras],
   )
 
   const sendChat = useCallback(async () => {
@@ -367,6 +418,23 @@ export function QuickMode() {
     [],
   )
 
+  // "Open in Quick" from History hands over a prompt and its parameters.
+  useEffect(() => {
+    if (!quickPreset) return
+    setPrompt(quickPreset.prompt)
+    setNegativePrompt(quickPreset.negativePrompt)
+    const params = quickPreset.params
+    setSettings(s => ({
+      ...s,
+      model: params.model === 'pro' ? 'pro' : 'fast',
+      duration: Number(params.duration) || s.duration,
+      videoResolution: typeof params.resolution === 'string' && params.resolution ? params.resolution : s.videoResolution,
+      fps: Number(params.fps) || s.fps,
+      aspectRatio: params.aspectRatio === '9:16' ? '9:16' : '16:9',
+    }))
+    setQuickPreset(null)
+  }, [quickPreset, setQuickPreset])
+
   const selectClass =
     'bg-zinc-800 border border-zinc-700 rounded-lg px-2 py-1.5 text-xs text-zinc-200 focus:outline-none focus:border-violet-600'
 
@@ -508,6 +576,13 @@ export function QuickMode() {
                 </select>
               </label>
               <label className="block">
+                <span className="text-[10px] text-zinc-500 uppercase tracking-wide">Profile</span>
+                <select value={appSettings.videoProfile} onChange={e => void setVideoProfile(e.target.value as 'fast' | 'balanced')} className={`${selectClass} mt-1 w-full`} aria-label="Video profile" title="Fast: 540p · 6 s. Balanced: 720p · 8 s, about three times longer per clip on a 4070.">
+                  <option value="fast">Fast · 540p</option>
+                  <option value="balanced">Balanced · 720p</option>
+                </select>
+              </label>
+              <label className="block">
                 <span className="text-[10px] text-zinc-500 uppercase tracking-wide">Aspect</span>
                 <select value={effectiveSettings.aspectRatio} onChange={e => setSettings(s => ({ ...s, aspectRatio: e.target.value as '16:9' | '9:16' }))} className={`${selectClass} mt-1 w-full`} aria-label="Aspect ratio">
                   <option value="16:9">16:9</option>
@@ -515,6 +590,7 @@ export function QuickMode() {
                 </select>
               </label>
             </div>
+            {!forcedApi && <LoraPicker model="ltx2" value={loras} onChange={setLoras} disabled={generation.isGenerating} />}
             {/* Optional reference image → image-to-video */}
             <div className="flex items-center gap-3">
               <div
@@ -601,13 +677,10 @@ export function QuickMode() {
               <div className="flex items-center gap-2 text-[10px] text-zinc-500 uppercase tracking-wide">
                 <History className="h-3 w-3" /> Recent quick videos
                 <button
-                  onClick={() => {
-                    setHistory([])
-                    saveHistory([])
-                  }}
-                  className="ml-auto text-zinc-600 hover:text-red-400 normal-case tracking-normal"
+                  onClick={openHistory}
+                  className="ml-auto text-zinc-500 hover:text-violet-300 normal-case tracking-normal"
                 >
-                  clear
+                  open History
                 </button>
               </div>
               <div className="space-y-1">

@@ -22,6 +22,7 @@ from api_types import (
 )
 from _routes._errors import HTTPError
 from handlers.base import StateHandlerBase
+from handlers.jobs_handler import JobsHandler
 from handlers.generation_handler import GenerationHandler
 from handlers.pipelines_handler import PipelinesHandler
 from handlers.text_handler import TextHandler
@@ -43,8 +44,10 @@ class IcLoraHandler(StateHandlerBase):
         ic_lora_model_downloader: IcLoraModelDownloader,
         ic_lora_dir: Path,
         outputs_dir: Path,
+        jobs: JobsHandler | None = None,
     ) -> None:
         super().__init__(state, lock)
+        self._jobs = jobs
         self._generation = generation_handler
         self._pipelines = pipelines_handler
         self._text = text_handler
@@ -110,10 +113,21 @@ class IcLoraHandler(StateHandlerBase):
             raise HTTPError(400, f"LoRA not found: {req.lora_path}")
 
         generation_id = uuid.uuid4().hex[:8]
+        job_id = ""
+        if self._jobs is not None:
+            job_id = self._jobs.start(
+                "video_gen",
+                title=f"IC-LoRA {req.conditioning_type}: {req.prompt[:60]}",
+                model=lora_path.stem,
+                provider="local",
+                prompt=req.prompt,
+                params=req.model_dump(),
+                inputs={"video_path": str(video_path), "lora_path": str(lora_path)},
+            ).id
 
         try:
             ic_state = self._pipelines.load_ic_lora(str(lora_path))
-            self._generation.start_generation(generation_id)
+            self._generation.start_generation(generation_id, job_id=job_id)
             self._generation.update_progress("loading_model", 5, 0, 1)
 
             s = self.state.app_settings
@@ -190,8 +204,10 @@ class IcLoraHandler(StateHandlerBase):
             self._generation.complete_generation(str(output_path))
             return IcLoraGenerateResponse(status="complete", video_path=str(output_path))
 
-        except HTTPError:
+        except HTTPError as exc:
             self._generation.fail_generation("IC-LoRA generation failed")
+            if job_id and self._jobs is not None:
+                self._jobs.fail(job_id, str(exc.detail))
             raise
         except Exception as exc:
             if self._generation.is_generation_cancelled() or "cancelled" in str(exc).lower():
@@ -199,10 +215,14 @@ class IcLoraHandler(StateHandlerBase):
                 # error: align the state machine with the response so frontend
                 # polling never sees a cancelled job as failed.
                 self._generation.cancel_generation()
+                if job_id and self._jobs is not None:
+                    self._jobs.mark_cancelled(job_id)
                 logger.info("IC-LoRA generation cancelled by user")
                 return IcLoraGenerateResponse(status="cancelled")
 
             self._generation.fail_generation(str(exc))
+            if job_id and self._jobs is not None:
+                self._jobs.fail(job_id, str(exc))
             raise HTTPError(500, f"Generation error: {exc}") from exc
         finally:
             self._text.clear_api_embeddings()

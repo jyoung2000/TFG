@@ -27,14 +27,29 @@ import type {
   Vec3,
 } from '../../../types/film'
 import { buildCameraMove, sampleCameraTrack } from './cameraMotion'
-import { applyPose, buildFigure, readPose, type FigureRig } from './figure'
+import { angleCamera, type AngleView } from './angleViews'
+import { dragHandle, dragJoint } from './limbPose'
+import { constrainPose, snapshotPose, type PoseSnapshot } from './anatomy'
+import { axisHint, dragReadout, type DragReadout } from './dragReadout'
+import { DragGuide } from './dragGuide'
+import { pickAssetColor } from './assetColors'
+import { poseWords } from './poseWords'
+import { applyPose, applyWalkCycle, buildFigure, jointForObject, readPose, sectionMeshes, tintMeshes, type FigureRig, type JointName } from './figure'
+import { travelAlong } from './keyframes'
+import { ReferenceUnderlay } from './blockout/underlay'
+import { keyframesFromPreset, presetById } from './blockout/moves'
+import type { DeliverPass } from './blockout/deliver'
 import { applySolvedShot, getCharacterAnchors, solveShot } from './shotSolver'
 
-const FIGURE_COLORS = ['#7f9cc4', '#c4907f', '#8fc47f', '#b98fc4', '#c4b97f', '#7fc4b9']
-
 export const SHOT_CAMERA_ID = 'shot-camera'
+/** Pose mode tints: the section under the cursor, and the one being edited. */
+const HOVER_TINT = '#fde047'
+const EDIT_TINT = '#a78bfa'
 
-export type GizmoMode = 'translate' | 'rotate' | 'scale'
+/** `pose`: click a figure's limb to rotate that joint with the gizmo. */
+export type GizmoMode = 'translate' | 'rotate' | 'scale' | 'pose'
+/** Pose mode's handles: arrows that move a body part, or rings that turn its joint. */
+export type PoseTool = 'move' | 'rotate'
 
 export interface ComposerEntity {
   data: CompositionObject
@@ -80,9 +95,33 @@ export class ComposerScene {
   private selectedId: string | null = null
   private selectionRing: THREE.Mesh
   private dragging: { id: string; offset: THREE.Vector3 } | null = null
+  /** The rotate gizmo's free-spin handles, set aside while posing. */
+  private freeSpinHandles: { parent: THREE.Object3D; handle: THREE.Object3D }[] = []
+  /** Pose mode: a body part being dragged on a camera-facing plane. */
+  private limbDrag: { id: string; joint: JointName; plane: THREE.Plane; grab: THREE.Vector3 } | null = null
   private pointerDownAt: { x: number; y: number } | null = null
   private disposables: { dispose: () => void }[] = []
   private gizmoModeValue: GizmoMode = 'translate'
+  /** The joint the gizmo rotates in pose mode. */
+  private selectedJoint: JointName | null = null
+  /** Tinted sections: the one under the cursor and the one being edited. */
+  private hoverSection: THREE.Mesh[] = []
+  private editSection: THREE.Mesh[] = []
+  /**
+   * Pose mode's move arrows (asked 2026-10-01: draggable arrows to edit a
+   * model): a translate gizmo on a stand-in at the selected part's handle,
+   * aligned to the figure, that drags the part (IK for a hand or a foot).
+   */
+  private moveGizmo: TransformControls
+  private moveHandle = new THREE.Object3D()
+  private poseToolValue: PoseTool = 'move'
+  /** Editor-only overlays (move arrows, drag guide): never in a capture, a pass or the viewfinder. */
+  private overlay = new THREE.Group()
+  private dragGuide = new DragGuide()
+  /** The body part being dragged (by the arrows or by the limb itself) and where the drag began. */
+  private poseDrag: { id: string; joint: JointName; start: THREE.Vector3 } | null = null
+  /** The pose before the latest ring turn: a turn into the body is stopped against it. */
+  private ringBefore: PoseSnapshot | null = null
 
   /** Camera keyframes for motion preview / hand-authored camera animation. */
   cameraKeyframes: CompositionKeyframe[] = []
@@ -91,11 +130,22 @@ export class ComposerScene {
   private liveTransforms: Map<string, TransformSnapshot> | null = null
   private liveCamera: { position: Vec3; rotation: Vec3; fov: number } | null = null
 
+  /** Reference underlay behind the viewfinder (analysed frame / depth map). */
+  readonly underlay: ReferenceUnderlay
+
   onSelect: (id: string | null) => void = () => {}
+  /** Pose mode picked a joint by clicking a limb. */
+  onJointSelect: (joint: JointName) => void = () => {}
   /** Any object transform/pose changed (gizmo, drag, sliders, keyframes). */
   onTransformChange: () => void = () => {}
+  /** A gizmo drag started (true) or ended (false) — one undo step per drag. */
+  onDragStateChange: (dragging: boolean) => void = () => {}
+  /** The composer switched gizmo mode itself (a double-click on a limb enters pose mode). */
+  onGizmoModeChange: (mode: GizmoMode) => void = () => {}
   /** The shot camera was moved by hand (gizmo / numeric input) → manual mode. */
   onCameraManualChange: () => void = () => {}
+  /** Pose mode: what is being dragged and how far, why it stopped, or what a hovered arrow does; null when idle. */
+  onPoseReadout: (readout: DragReadout | null) => void = () => {}
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas
@@ -117,6 +167,7 @@ export class ComposerScene {
     this.cameraHelper = new THREE.CameraHelper(this.shotCamera)
     this.cameraHelper.visible = true
     this.scene.add(this.cameraHelper)
+    this.underlay = new ReferenceUnderlay(this.shotCamera)
 
     this.controls = new OrbitControls(this.editorCamera, canvas)
     this.controls.target.set(0, 1, 0)
@@ -130,11 +181,28 @@ export class ComposerScene {
     this.gizmo = new TransformControls(this.editorCamera, canvas)
     this.gizmo.setSize(0.8)
     this.gizmo.addEventListener('dragging-changed', event => {
-      this.controls.enabled = !(event as unknown as { value: boolean }).value
+      const dragging = (event as unknown as { value: boolean }).value
+      this.controls.enabled = !dragging
+      this.onDragStateChange(dragging)
+    })
+    this.gizmo.addEventListener('mouseDown', () => {
+      const rig = this.posingEntity()?.rig
+      this.ringBefore = rig ? snapshotPose(rig) : null
+    })
+    this.gizmo.addEventListener('mouseUp', () => {
+      if (this.ringBefore) this.onPoseReadout(null)
+      this.ringBefore = null
     })
     this.gizmo.addEventListener('objectChange', () => {
       const target = this.gizmo.object
       if (!target) return
+      const posing = this.posingEntity()
+      if (this.ringBefore && posing?.rig && this.selectedJoint) {
+        // A ring turn is held to the joint's range and stops at the body.
+        const result = constrainPose(posing.rig, this.ringBefore)
+        this.ringBefore = snapshotPose(posing.rig)
+        this.onPoseReadout(result.blocked || result.limited.length ? dragReadout(this.selectedJoint, null, result.blocked, result.limited, true) : null)
+      }
       if (target === this.shotCamera) {
         this.cameraHelper.update()
         this.onCameraManualChange()
@@ -153,6 +221,31 @@ export class ComposerScene {
       this.onTransformChange()
     })
     this.scene.add(this.gizmo.getHelper())
+
+    this.moveGizmo = new TransformControls(this.editorCamera, canvas)
+    this.moveGizmo.setMode('translate')
+    this.moveGizmo.setSpace('local')
+    this.moveGizmo.setSize(0.75)
+    this.moveGizmo.addEventListener('dragging-changed', event => {
+      const dragging = (event as unknown as { value: boolean }).value
+      this.controls.enabled = !dragging
+      if (dragging && this.selectedId && this.selectedJoint) this.beginPoseDrag(this.selectedId, this.selectedJoint)
+      else if (!dragging) this.endPoseDrag()
+      this.onDragStateChange(dragging)
+    })
+    this.moveGizmo.addEventListener('objectChange', () => {
+      if (this.poseDrag) this.poseDragTo(this.moveHandle.getWorldPosition(new THREE.Vector3()))
+    })
+    this.moveGizmo.addEventListener('axis-changed', event => {
+      if (this.poseDrag || !this.selectedJoint) return
+      const hint = axisHint(this.selectedJoint, (event as unknown as { value: string | null }).value)
+      this.onPoseReadout(hint ? { text: hint, tone: 'hint' } : null)
+    })
+    this.scene.add(this.moveHandle)
+    this.overlay.add(this.moveGizmo.getHelper())
+    this.overlay.add(this.dragGuide.group)
+    this.scene.add(this.overlay)
+    this.disposables.push(this.dragGuide)
 
     // Lights
     const hemisphere = new THREE.HemisphereLight('#cfd8e8', '#20222a', 0.9)
@@ -200,24 +293,26 @@ export class ComposerScene {
     canvas.addEventListener('pointerdown', this.handlePointerDown)
     canvas.addEventListener('pointermove', this.handlePointerMove)
     canvas.addEventListener('pointerup', this.handlePointerUp)
+    canvas.addEventListener('dblclick', this.handleDoubleClick)
 
     this.renderLoop()
   }
 
   // ---- Object lifecycle -------------------------------------------------
 
-  private nextColor(): string {
-    const used = this.entities.size
-    return FIGURE_COLORS[used % FIGURE_COLORS.length]
+  private colorsInUse(): string[] {
+    return [...this.entities.values()].map(e => e.data.color).filter((c): c is string => Boolean(c))
   }
 
   addObject(data: CompositionObject): void {
     let node: THREE.Object3D
     let rig: FigureRig | null = null
+    if (data.type !== 'camera') {
+      // Every object its own colour, so separate assets read apart at a glance.
+      data.color = pickAssetColor(data.color, this.colorsInUse())
+    }
     if (data.type === 'figure') {
-      const color = data.color || this.nextColor()
-      data.color = color
-      rig = buildFigure(data.figure_variant, color)
+      rig = buildFigure(data.figure_variant, data.color)
       node = rig.root
       applyPose(rig, data.pose)
     } else if (data.type === 'camera') {
@@ -225,7 +320,7 @@ export class ComposerScene {
     } else {
       const spec = PRIMITIVES[data.type] ?? PRIMITIVES.cube
       const geometry = spec.geometry()
-      const material = new THREE.MeshStandardMaterial({ color: data.color || '#8a93a6', roughness: 0.8 })
+      const material = new THREE.MeshStandardMaterial({ color: data.color, roughness: 0.8 })
       const mesh = new THREE.Mesh(geometry, material)
       mesh.castShadow = true
       mesh.position.y = spec.y
@@ -245,7 +340,7 @@ export class ComposerScene {
   removeObject(id: string): void {
     const entity = this.entities.get(id)
     if (!entity) return
-    if (this.gizmo.object === entity.node) this.gizmo.detach()
+    if (this.gizmo.object && this.isWithin(this.gizmo.object, entity.node)) this.gizmo.detach()
     this.scene.remove(entity.node)
     entity.rig?.dispose()
     this.entities.delete(id)
@@ -313,8 +408,65 @@ export class ComposerScene {
 
   // ---- Selection / gizmo -----------------------------------------------
 
+  private isWithin(object: THREE.Object3D, root: THREE.Object3D): boolean {
+    for (let current: THREE.Object3D | null = object; current; current = current.parent) {
+      if (current === root) return true
+    }
+    return false
+  }
+
+  private tintEdit(entity: ComposerEntity | null | undefined, joint: JointName | null): void {
+    tintMeshes(this.editSection, null)
+    this.editSection = entity?.rig && joint && this.gizmoModeValue === 'pose' ? sectionMeshes(entity.rig, joint) : []
+    tintMeshes(this.editSection, EDIT_TINT)
+  }
+
+  private setTintsShown(shown: boolean): void {
+    tintMeshes([...this.hoverSection, ...this.editSection], null)
+    if (!shown) return
+    tintMeshes(this.hoverSection, HOVER_TINT)
+    tintMeshes(this.editSection, EDIT_TINT)
+  }
+
+  private tintHover(meshes: THREE.Mesh[]): void {
+    const keep = new Set(this.editSection)
+    tintMeshes(this.hoverSection.filter(m => !keep.has(m)), null)
+    this.hoverSection = meshes.filter(m => !keep.has(m))
+    tintMeshes(this.hoverSection, HOVER_TINT)
+    this.canvas.style.cursor = this.hoverSection.length ? 'pointer' : ''
+  }
+
+  /** Pose mode: rotate one joint of a figure with the gizmo. */
+  selectJoint(id: string, joint: JointName): void {
+    const entity = this.entities.get(id)
+    if (!entity?.rig) return
+    this.selectedId = id
+    this.selectedJoint = joint
+    this.tintHover([])
+    this.tintEdit(entity, joint)
+    this.attachPoseGizmo(entity, joint)
+    this.applyGizmoConstraints(entity)
+    this.onSelect(id)
+    this.onJointSelect(joint)
+  }
+
   select(id: string | null): void {
     this.selectedId = id
+    this.moveGizmo.detach()
+    const posing = this.gizmoModeValue === 'pose' ? this.entities.get(id ?? '') : undefined
+    if (posing?.rig && !this.selectedJoint) {
+      // Entering pose mode starts on a hand (MEASURED r36: with no joint the
+      // gizmo fell back to spinning the whole figure).
+      this.selectedJoint = 'l_wrist'
+      this.onJointSelect('l_wrist')
+    }
+    this.tintEdit(posing, posing?.rig ? this.selectedJoint : null)
+    if (posing?.rig && this.selectedJoint && !posing.data.locked) {
+      this.attachPoseGizmo(posing, this.selectedJoint)
+      this.applyGizmoConstraints(posing)
+      this.onSelect(id)
+      return
+    }
     if (id === SHOT_CAMERA_ID) {
       this.gizmo.attach(this.shotCamera)
       this.applyGizmoConstraints(null)
@@ -345,14 +497,140 @@ export class ComposerScene {
   }
 
   setGizmoMode(mode: GizmoMode): void {
+    const wasPosing = this.gizmoModeValue === 'pose'
     this.gizmoModeValue = mode
-    this.gizmo.setMode(mode)
-    this.applyGizmoConstraints(this.selected)
+    this.setFreeSpin(mode !== 'pose')
+    if (mode !== 'pose') this.tintHover([])
+    this.gizmo.setMode(mode === 'pose' ? 'rotate' : mode)
+    // A joint turns about its own axes; whole objects move in world space.
+    this.gizmo.setSpace(mode === 'pose' ? 'local' : 'world')
+    if (mode === 'pose' || wasPosing) this.select(this.selectedId)
+    else this.applyGizmoConstraints(this.selected)
+  }
+
+  /**
+   * The rotate gizmo's trackball sphere ('XYZE') and view ring ('E') cover
+   * the joint they sit on: posing, a press on the hand under them spun the
+   * wrist instead of dragging the hand (MEASURED, r32). They are taken out
+   * of the gizmo while posing - its picker and its look; the X/Y/Z rings stay.
+   */
+  private setFreeSpin(on: boolean): void {
+    const inner = (this.gizmo as unknown as { _gizmo?: { picker?: Record<string, THREE.Object3D>; gizmo?: Record<string, THREE.Object3D> } })._gizmo
+    if (!inner?.picker?.rotate || !inner.gizmo?.rotate) return
+    if (!on && !this.freeSpinHandles.length) {
+      for (const group of [inner.picker.rotate, inner.gizmo.rotate]) {
+        for (const handle of [...group.children]) {
+          if (handle.name === 'XYZE' || handle.name === 'E') {
+            this.freeSpinHandles.push({ parent: group, handle })
+            group.remove(handle)
+          }
+        }
+      }
+    } else if (on && this.freeSpinHandles.length) {
+      for (const { parent, handle } of this.freeSpinHandles) parent.add(handle)
+      this.freeSpinHandles = []
+    }
+  }
+
+  /** The joint pose mode is rotating, if any. */
+  get poseJoint(): JointName | null {
+    return this.gizmoModeValue === 'pose' ? this.selectedJoint : null
+  }
+
+  get poseTool(): PoseTool {
+    return this.poseToolValue
+  }
+
+  /** Pose mode: arrows that move the selected part, or rings that turn its joint. */
+  setPoseTool(tool: PoseTool): void {
+    this.poseToolValue = tool
+    this.onPoseReadout(null)
+    if (this.gizmoModeValue === 'pose') this.select(this.selectedId)
+  }
+
+  /** The figure being posed, if pose mode has one selected. */
+  private posingEntity(): ComposerEntity | null {
+    const entity = this.gizmoModeValue === 'pose' ? this.selected : null
+    return entity?.rig ? entity : null
+  }
+
+  private attachPoseGizmo(entity: ComposerEntity, joint: JointName): void {
+    if (entity.data.locked || !entity.rig) {
+      this.gizmo.detach()
+      this.moveGizmo.detach()
+    } else if (this.poseToolValue === 'move') {
+      this.gizmo.detach()
+      this.syncMoveHandle(entity, joint)
+      this.moveGizmo.attach(this.moveHandle)
+    } else {
+      this.moveGizmo.detach()
+      this.gizmo.attach(entity.rig.joints[joint])
+    }
+  }
+
+  /** The arrows sit on the part's handle (a hand, the end of a limb), pointing the figure's way. */
+  private syncMoveHandle(entity: ComposerEntity, joint: JointName): void {
+    if (!entity.rig) return
+    this.moveHandle.position.copy(dragHandle(entity.rig, joint))
+    this.moveHandle.quaternion.copy(entity.node.getWorldQuaternion(new THREE.Quaternion()))
+    this.moveHandle.updateMatrixWorld()
+  }
+
+  private beginPoseDrag(id: string, joint: JointName): void {
+    const rig = this.entities.get(id)?.rig
+    if (!rig) return
+    const start = dragHandle(rig, joint)
+    this.poseDrag = { id, joint, start }
+    this.dragGuide.show(start)
+  }
+
+  /**
+   * Drag the part toward `target` (world), as anatomy allows: joints stay
+   * in range and the limb stops where it would pass into the body. Reports
+   * how far the part has gone in the figure's own directions.
+   */
+  private poseDragTo(target: THREE.Vector3): void {
+    const drag = this.poseDrag
+    const entity = drag ? this.entities.get(drag.id) : undefined
+    if (!drag || !entity?.rig) return
+    const before = snapshotPose(entity.rig)
+    dragJoint(entity.rig, drag.joint, target)
+    const result = constrainPose(entity.rig, before)
+    const at = dragHandle(entity.rig, drag.joint)
+    const root = entity.rig.root
+    const moved = root.worldToLocal(at.clone()).sub(root.worldToLocal(drag.start.clone()))
+    // A hand or foot is placed (IK); any other part only points at the cursor.
+    const placed = /(wrist|ankle)$/.test(drag.joint)
+    const reached = !placed || at.distanceTo(target) < 0.01
+    const stopped = Boolean(result.blocked) || result.limited.length > 0 || !reached
+    this.dragGuide.update(at, placed || stopped ? target : at, stopped)
+    this.onPoseReadout(dragReadout(drag.joint, moved, result.blocked, result.limited, reached))
+    this.onTransformChange()
+  }
+
+  private endPoseDrag(): void {
+    this.poseDrag = null
+    this.dragGuide.hide()
+    this.onPoseReadout(null)
+  }
+
+  /** Put one joint back at rest. */
+  resetJoint(id: string, joint: JointName): void {
+    this.setJointRotation(id, joint, [0, 0, 0])
+  }
+
+  setPoseJoint(joint: JointName): void {
+    this.selectedJoint = joint
+    if (this.gizmoModeValue === 'pose') this.select(this.selectedId)
   }
 
   private applyGizmoConstraints(entity: ComposerEntity | null): void {
     const isFigure = entity?.data.type === 'figure'
     const mode = this.gizmoModeValue
+    if (mode === 'pose') {
+      this.gizmo.showX = this.gizmo.showY = this.gizmo.showZ = true
+      return
+    }
     // Figures: slide on the floor, spin around Y, scale uniformly.
     this.gizmo.showX = true
     this.gizmo.showZ = true
@@ -376,6 +654,11 @@ export class ComposerScene {
   }
 
   private entityAtPointer(event: PointerEvent): ComposerEntity | null {
+    return this.hitAtPointer(event)?.entity ?? null
+  }
+
+  /** The entity under the pointer and the exact part of it that was hit. */
+  private hitAtPointer(event: PointerEvent): { entity: ComposerEntity; object: THREE.Object3D } | null {
     this.raycaster.setFromCamera(this.pointerNdc(event), this.editorCamera)
     const nodes = [...this.entities.values()].filter(e => e.node.visible).map(e => e.node)
     const hits = this.raycaster.intersectObjects(nodes, true)
@@ -383,7 +666,10 @@ export class ComposerScene {
       let current: THREE.Object3D | null = hit.object
       while (current) {
         const id = current.userData.entityId as string | undefined
-        if (id) return this.entities.get(id) ?? null
+        if (id) {
+          const entity = this.entities.get(id)
+          return entity ? { entity, object: hit.object } : null
+        }
         current = current.parent
       }
     }
@@ -398,10 +684,35 @@ export class ComposerScene {
 
   private handlePointerDown = (event: PointerEvent) => {
     if (event.button !== 0) return
-    // The gizmo owns the pointer while a handle is hovered/dragged.
-    if (this.gizmo.axis || this.gizmo.dragging) return
+    // The gizmos own the pointer while a handle is hovered/dragged.
+    if (this.gizmo.axis || this.gizmo.dragging || this.moveGizmo.axis || this.moveGizmo.dragging) return
     this.pointerDownAt = { x: event.clientX, y: event.clientY }
-    const entity = this.entityAtPointer(event)
+    const hit = this.hitAtPointer(event)
+    const entity = hit?.entity ?? null
+    if (entity && this.gizmoModeValue === 'pose') {
+      // Pose mode: a limb picks its joint and follows the cursor while the
+      // button is down (a hand / foot goes where it is dragged, any other
+      // part swings from its joint); nothing slides across the floor.
+      const joint = entity.rig ? jointForObject(hit?.object ?? null) : null
+      if (!joint || !entity.rig) {
+        this.select(entity.data.id)
+        return
+      }
+      this.selectJoint(entity.data.id, joint)
+      if (entity.data.locked) return
+      const handle = dragHandle(entity.rig, joint)
+      const facing = this.editorCamera.getWorldDirection(new THREE.Vector3()).negate()
+      const plane = new THREE.Plane().setFromNormalAndCoplanarPoint(facing, handle)
+      this.raycaster.setFromCamera(this.pointerNdc(event), this.editorCamera)
+      const grabbed = new THREE.Vector3()
+      if (!this.raycaster.ray.intersectPlane(plane, grabbed)) return
+      this.limbDrag = { id: entity.data.id, joint, plane, grab: handle.sub(grabbed) }
+      this.beginPoseDrag(entity.data.id, joint)
+      this.controls.enabled = false
+      this.canvas.setPointerCapture(event.pointerId)
+      this.onDragStateChange(true)
+      return
+    }
     if (entity) {
       this.select(entity.data.id)
       if (entity.data.locked) return
@@ -419,6 +730,21 @@ export class ComposerScene {
   }
 
   private handlePointerMove = (event: PointerEvent) => {
+    if (this.limbDrag) {
+      const entity = this.entities.get(this.limbDrag.id)
+      this.raycaster.setFromCamera(this.pointerNdc(event), this.editorCamera)
+      const point = new THREE.Vector3()
+      if (entity?.rig && this.raycaster.ray.intersectPlane(this.limbDrag.plane, point)) {
+        this.poseDragTo(point.add(this.limbDrag.grab))
+      }
+      return
+    }
+    if (!this.dragging && this.gizmoModeValue === 'pose' && !this.gizmo.dragging) {
+      // Pose mode: light up the section a click would pick.
+      const hit = this.gizmo.axis || this.moveGizmo.axis ? null : this.hitAtPointer(event)
+      const joint = hit?.entity.rig ? jointForObject(hit.object) : null
+      this.tintHover(hit?.entity.rig && joint ? sectionMeshes(hit.entity.rig, joint) : [])
+    }
     if (!this.dragging) return
     const entity = this.entities.get(this.dragging.id)
     if (!entity) return
@@ -435,19 +761,40 @@ export class ComposerScene {
   }
 
   private handlePointerUp = (event: PointerEvent) => {
+    if (this.limbDrag) {
+      this.limbDrag = null
+      this.endPoseDrag()
+      this.controls.enabled = true
+      if (this.canvas.hasPointerCapture(event.pointerId)) this.canvas.releasePointerCapture(event.pointerId)
+      this.onDragStateChange(false)
+      this.pointerDownAt = null
+      return
+    }
     if (this.dragging) {
       this.dragging = null
       this.controls.enabled = true
       if (this.canvas.hasPointerCapture(event.pointerId)) {
         this.canvas.releasePointerCapture(event.pointerId)
       }
-    } else if (this.pointerDownAt && !this.gizmo.dragging && !this.gizmo.axis) {
+    } else if (this.pointerDownAt && !this.gizmo.dragging && !this.gizmo.axis && !this.moveGizmo.dragging && !this.moveGizmo.axis) {
       // A true click (not an orbit drag) on empty space clears the selection.
       const moved =
         Math.abs(event.clientX - this.pointerDownAt.x) + Math.abs(event.clientY - this.pointerDownAt.y)
       if (moved < 4 && !this.entityAtPointer(event) && !this.cameraAtPointer(event)) this.select(null)
     }
     this.pointerDownAt = null
+  }
+
+  /** A double-click on a figure's limb, in any mode, goes straight to posing that joint. */
+  private handleDoubleClick = (event: MouseEvent) => {
+    const hit = this.hitAtPointer(event as PointerEvent)
+    const joint = hit?.entity.rig ? jointForObject(hit.object) : null
+    if (!hit || !joint) return
+    if (this.gizmoModeValue !== 'pose') {
+      this.setGizmoMode('pose')
+      this.onGizmoModeChange('pose')
+    }
+    this.selectJoint(hit.entity.data.id, joint)
   }
 
   // ---- Transforms / poses ----------------------------------------------
@@ -487,12 +834,16 @@ export class ComposerScene {
   setJointRotation(id: string, joint: string, euler: Vec3): void {
     const entity = this.entities.get(id)
     const group = entity?.rig?.joints[joint as keyof FigureRig['joints']]
-    if (group) {
+    if (entity?.rig && group) {
+      const before = snapshotPose(entity.rig)
       group.rotation.set(
         (euler[0] * Math.PI) / 180,
         (euler[1] * Math.PI) / 180,
         (euler[2] * Math.PI) / 180,
       )
+      // Typed angles obey the body too: in range, and not into the body.
+      const result = constrainPose(entity.rig, before)
+      this.onPoseReadout(result.blocked || result.limited.length ? dragReadout(joint as JointName, null, result.blocked, result.limited, true) : null)
       this.onTransformChange()
     }
   }
@@ -586,6 +937,21 @@ export class ComposerScene {
     this.cameraHelper.update()
     this.cameraKeyframes = []
     this.previewTime = null
+  }
+
+  /**
+   * The first figure's pose in words for the live preview: only limbs that
+   * differ from `baseline` (the photo's pose), sided as the shot camera sees
+   * them.
+   */
+  describePose(baseline: Record<string, Vec3> | null): string {
+    const id = this.firstFigureId()
+    const entity = id ? this.entities.get(id) : undefined
+    if (!entity?.rig) return ''
+    const forward = new THREE.Vector3(0, 0, 1).applyQuaternion(entity.node.getWorldQuaternion(new THREE.Quaternion())).setY(0).normalize()
+    const toCamera = this.shotCamera.position.clone().sub(entity.node.getWorldPosition(new THREE.Vector3())).setY(0).normalize()
+    const facing = forward.dot(toCamera)
+    return poseWords(entity.rig, baseline, facing > 0.5 ? 'camera' : facing < -0.5 ? 'away' : 'side')
   }
 
   firstFigureId(): string | null {
@@ -716,7 +1082,92 @@ export class ComposerScene {
         entity.node.position.fromArray(objectSample.position)
         entity.node.rotation.set(...objectSample.rotation)
       }
+      if (entity.rig) {
+        // Figures walk their keyframed path: stride tied to distance, faded at the ends of a leg.
+        const { distance, speed } = travelAlong(entity.data.keyframes, time)
+        applyWalkCycle(entity.rig, entity.data.pose, distance, speed)
+      }
     }
+  }
+
+  /** A library move (Blockout presets) around the first figure — or the origin. */
+  applyLibraryMove(presetId: string, durationSeconds: number): boolean {
+    const preset = presetById(presetId)
+    if (!preset) return false
+    this.endPreview()
+    const first = this.firstFigureId()
+    const entity = first ? this.entities.get(first) : null
+    const subject = entity
+      ? { position: entity.node.position.clone(), heading: entity.node.rotation.y, height: entity.rig?.height ?? 1.7 }
+      : { position: new THREE.Vector3(0, 0, 0), heading: 0, height: 1.7 }
+    this.cameraKeyframes = keyframesFromPreset(preset, this.shotCamera, subject, durationSeconds)
+    this.onTransformChange()
+    return true
+  }
+
+  /**
+   * One Deliver frame: the scene at `time` through the shot camera as a
+   * clean, depth or normal pass. Helpers, gizmo and the underlay never leak
+   * into a pass. Returns base64 PNG bytes (no data: prefix).
+   */
+  renderPassAt(time: number, pass: DeliverPass, width: number, height: number): string {
+    this.setPreviewTime(time)
+    const previousSize = new THREE.Vector2()
+    this.renderer.getSize(previousSize)
+    const previousPixelRatio = this.renderer.getPixelRatio()
+    const gizmoHelper = this.gizmo.getHelper()
+    const visible = { helper: this.cameraHelper.visible, ring: this.selectionRing.visible, gizmo: gizmoHelper.visible, underlay: this.underlay.visible }
+    this.setTintsShown(false) // editing tints never reach a pass
+    this.overlay.visible = false
+    this.cameraHelper.visible = false
+    this.selectionRing.visible = false
+    gizmoHelper.visible = false
+    this.underlay.mesh.visible = false
+    const previousOverride = this.scene.overrideMaterial
+    const previousBackground = this.scene.background
+    const previousFog = this.scene.fog
+    let override: THREE.Material | null = null
+    if (pass === 'depth') {
+      override = new THREE.MeshDepthMaterial({ depthPacking: THREE.BasicDepthPacking })
+      this.scene.background = new THREE.Color('#000000')
+      this.scene.fog = null
+    } else if (pass === 'normal') {
+      override = new THREE.MeshNormalMaterial()
+      this.scene.background = new THREE.Color('#8080ff')
+      this.scene.fog = null
+    }
+    this.scene.overrideMaterial = override
+    this.renderer.setPixelRatio(1)
+    this.renderer.setSize(width, height, false)
+    this.shotCamera.aspect = width / height
+    // Depth is normalised over a fixed near/far so it does not pump across the shot.
+    const savedNear = this.shotCamera.near
+    const savedFar = this.shotCamera.far
+    if (pass === 'depth') {
+      this.shotCamera.near = 0.5
+      this.shotCamera.far = 40
+    }
+    this.shotCamera.updateProjectionMatrix()
+    this.renderer.setViewport(0, 0, width, height)
+    this.renderer.setScissorTest(false)
+    this.renderer.render(this.scene, this.shotCamera)
+    const dataUrl = this.canvas.toDataURL('image/png')
+    this.shotCamera.near = savedNear
+    this.shotCamera.far = savedFar
+    this.shotCamera.updateProjectionMatrix()
+    this.scene.overrideMaterial = previousOverride
+    this.scene.background = previousBackground
+    this.scene.fog = previousFog
+    override?.dispose()
+    this.renderer.setPixelRatio(previousPixelRatio)
+    this.renderer.setSize(previousSize.x, previousSize.y, false)
+    this.cameraHelper.visible = visible.helper
+    this.selectionRing.visible = visible.ring
+    gizmoHelper.visible = visible.gizmo
+    this.underlay.mesh.visible = visible.underlay
+    this.setTintsShown(true)
+    this.overlay.visible = true
+    return dataUrl.replace(/^data:image\/png;base64,/, '')
   }
 
   get isPreviewing(): boolean {
@@ -731,6 +1182,7 @@ export class ComposerScene {
         entity.node.position.fromArray(snapshot.position)
         entity.node.rotation.set(...snapshot.rotation)
         entity.node.scale.fromArray(snapshot.scale)
+        if (entity.rig && entity.data.keyframes.length > 0) applyPose(entity.rig, entity.data.pose)
       }
       this.liveTransforms = null
     }
@@ -776,7 +1228,7 @@ export class ComposerScene {
     return [...this.entities.values()].map(e => this.snapshotObject(e))
   }
 
-  serialize(framing: ShotFraming, cameraMove: CameraMove, durationSeconds: number): CompositionScene {
+  serialize(framing: ShotFraming, cameraMove: CameraMove, durationSeconds: number, moveIntensity = 1): CompositionScene {
     this.endPreview()
     const objects = this.snapshotObjects()
     const state = this.getCameraState()
@@ -799,12 +1251,15 @@ export class ComposerScene {
       camera,
       framing: { ...framing, fov_deg: state.fov },
       camera_move: cameraMove,
+      move_intensity: moveIntensity,
       duration_seconds: durationSeconds,
     }
   }
 
   /** Restore a saved composition (objects + camera + keyframes). */
   hydrate(composition: CompositionScene): void {
+    this.hoverSection = []
+    this.editSection = []
     for (const id of [...this.entities.keys()]) this.removeObject(id)
     for (const object of composition.objects) this.addObject(object)
     if (composition.camera) {
@@ -825,6 +1280,34 @@ export class ComposerScene {
    * Render the shot camera at the output aspect and return a PNG data URL.
    * The renderer is resized for the capture and restored afterwards.
    */
+  /**
+   * The shot camera's picture of figure `id` from `view` (a multi-angle / LoRA
+   * angle) through a 40° lens, as a PNG data URL. The scene's own camera is
+   * left exactly as it was.
+   */
+  captureAngle(id: string, view: AngleView, width = 768, height = 1024): string | null {
+    const entity = this.entities.get(id)
+    if (!entity?.rig) return null
+    const saved = { position: this.shotCamera.position.clone(), quaternion: this.shotCamera.quaternion.clone(), fov: this.shotCamera.fov }
+    this.shotCamera.fov = 40
+    const { position, target } = angleCamera(
+      { position: entity.node.position.toArray() as Vec3, yaw: entity.node.rotation.y, height: entity.rig.height * entity.node.scale.y },
+      view,
+      this.shotCamera.fov,
+    )
+    this.shotCamera.position.set(...position)
+    this.shotCamera.lookAt(new THREE.Vector3(...target))
+    try {
+      return this.capture(width, height)
+    } finally {
+      this.shotCamera.position.copy(saved.position)
+      this.shotCamera.quaternion.copy(saved.quaternion)
+      this.shotCamera.fov = saved.fov
+      this.shotCamera.updateProjectionMatrix()
+      this.cameraHelper.update()
+    }
+  }
+
   capture(width = 1280, height = 720): string {
     const previousSize = new THREE.Vector2()
     this.renderer.getSize(previousSize)
@@ -833,9 +1316,13 @@ export class ComposerScene {
     const ringWasVisible = this.selectionRing.visible
     const gizmoHelper = this.gizmo.getHelper()
     const gizmoWasVisible = gizmoHelper.visible
+    const underlayWasVisible = this.underlay.visible
+    this.setTintsShown(false) // nor the captured reference frame
+    this.overlay.visible = false
     this.cameraHelper.visible = false
     this.selectionRing.visible = false
     gizmoHelper.visible = false
+    this.underlay.mesh.visible = false // the capture is the I2V reference; the real frame must not leak into it
     this.renderer.setPixelRatio(1)
     this.renderer.setSize(width, height, false)
     this.shotCamera.aspect = width / height
@@ -844,11 +1331,14 @@ export class ComposerScene {
     this.renderer.setScissorTest(false)
     this.renderer.render(this.scene, this.shotCamera)
     const dataUrl = this.canvas.toDataURL('image/png')
+    this.underlay.mesh.visible = underlayWasVisible
+    this.setTintsShown(true)
     this.renderer.setPixelRatio(previousPixelRatio)
     this.renderer.setSize(previousSize.x, previousSize.y, false)
     this.cameraHelper.visible = helperWasVisible
     this.selectionRing.visible = ringWasVisible
     gizmoHelper.visible = gizmoWasVisible
+    this.overlay.visible = true
     return dataUrl
   }
 
@@ -885,6 +1375,9 @@ export class ComposerScene {
     if (width === 0 || height === 0) return
 
     const gizmoHelper = this.gizmo.getHelper()
+    // The move arrows ride the selected part (after an undo, a typed angle...).
+    const posing = this.moveGizmo.object && !this.moveGizmo.dragging ? this.posingEntity() : null
+    if (posing && this.selectedJoint) this.syncMoveHandle(posing, this.selectedJoint)
 
     // Main editor view.
     this.renderer.setScissorTest(false)
@@ -893,7 +1386,11 @@ export class ComposerScene {
     this.editorCamera.updateProjectionMatrix()
     this.cameraHelper.visible = true
     gizmoHelper.visible = this.gizmo.object !== undefined && this.gizmo.object !== null
+    this.overlay.visible = true
+    const underlayOn = this.underlay.visible
+    this.underlay.mesh.visible = false
     this.renderer.render(this.scene, this.editorCamera)
+    this.underlay.mesh.visible = underlayOn
 
     // Picture-in-picture viewfinder through the shot camera (bottom-right).
     const pipWidth = Math.round(Math.min(width * 0.32, 420))
@@ -902,11 +1399,13 @@ export class ComposerScene {
     this.cameraHelper.visible = false
     this.selectionRing.visible = false
     gizmoHelper.visible = false
+    this.overlay.visible = false
     this.renderer.setScissorTest(true)
     this.renderer.setScissor(width - pipWidth - pad, pad, pipWidth, pipHeight)
     this.renderer.setViewport(width - pipWidth - pad, pad, pipWidth, pipHeight)
     this.shotCamera.aspect = 16 / 9
     this.shotCamera.updateProjectionMatrix()
+    if (underlayOn) this.underlay.fit()
     this.renderer.render(this.scene, this.shotCamera)
     this.renderer.setScissorTest(false)
   }
@@ -917,11 +1416,15 @@ export class ComposerScene {
     this.canvas.removeEventListener('pointerdown', this.handlePointerDown)
     this.canvas.removeEventListener('pointermove', this.handlePointerMove)
     this.canvas.removeEventListener('pointerup', this.handlePointerUp)
+    this.canvas.removeEventListener('dblclick', this.handleDoubleClick)
     this.gizmo.detach()
     this.gizmo.dispose()
+    this.moveGizmo.detach()
+    this.moveGizmo.dispose()
     this.controls.dispose()
     for (const id of [...this.entities.keys()]) this.removeObject(id)
     for (const disposable of this.disposables) disposable.dispose()
+    this.underlay.dispose()
     this.renderer.dispose()
   }
 }

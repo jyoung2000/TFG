@@ -26,7 +26,8 @@ def route_generate(
     handler: AppHandler = Depends(get_state_service),
 ) -> GenerateVideoResponse:
     """POST /api/generate — video generation from JSON body."""
-    return handler.video_generation.generate(req)
+    # A saved style: the video starts on a frame drawn in it (handlers/style_library_handler.py).
+    return handler.video_generation.generate(handler.styles.styled_video(req) if req.styleId else req)
 
 
 @router.post("/generate/cancel", response_model=CancelResponse)
@@ -104,4 +105,11 @@ def route_generation_queue(handler: AppHandler = Depends(get_state_service)) -> 
         )
         for path in paths[:5]
     ]
-    return GenerationQueueResponse(active=active, recent=recent)
+    # LoRAs that finished training (or were imported) sit beside the renders
+    # (user, 2026-10-02: "add LoRA generation to the ... activity tab").
+    for entry in handler.training.list_loras():
+        file = Path(entry.file)
+        if file.is_file():
+            recent.append(GenerationQueueItem(path=entry.file, prompt=f"{entry.name} · {entry.trigger}" if entry.trigger else entry.name, completed_at=entry.created_at, type="lora", size_mb=round(file.stat().st_size / (1024 * 1024), 4)))
+    recent.sort(key=lambda item: item.completed_at, reverse=True)
+    return GenerationQueueResponse(active=active, recent=recent[:5])

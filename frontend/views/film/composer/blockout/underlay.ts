@@ -1,0 +1,85 @@
+/**
+ * Reference underlay for the composer: the analysed frame (or its depth map)
+ * behind the shot camera's view, so figures and the camera can be matched to
+ * the real shot by eye.
+ *
+ * The concept follows Blockout's `ReferenceUnderlay` (wassermanproductions/
+ * blockout, Apache-2.0 — NOTICE in this folder), which ghosts a reference
+ * video over the viewport in sync with the timeline. Here the underlay is a
+ * plain three.js plane parented to the shot camera, sized to fill its frustum
+ * at a fixed distance, rendered only through the viewfinder (PiP / capture).
+ *
+ * It is drawn as a see-through layer over the viewfinder, outside the fog and
+ * without a depth test: at 60 m inside the 26-60 m fog it rendered as pure fog
+ * colour, and the floor hid its lower half (MEASURED, r21) - the whole frame
+ * has to show for figures and camera to be matched against it.
+ */
+
+import * as THREE from 'three'
+
+export class ReferenceUnderlay {
+  readonly mesh: THREE.Mesh<THREE.PlaneGeometry, THREE.MeshBasicMaterial>
+  private texture: THREE.Texture | null = null
+  private readonly distance = 60
+  /** Width over height of the loaded image (0 = unknown: fill the frame). */
+  imageAspect = 0
+
+  constructor(private readonly camera: THREE.PerspectiveCamera) {
+    const material = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.55, depthWrite: false, depthTest: false, fog: false, toneMapped: false })
+    this.mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), material)
+    this.mesh.position.set(0, 0, -this.distance)
+    this.mesh.visible = false
+    this.mesh.renderOrder = 10
+    this.mesh.userData.underlay = true
+    camera.add(this.mesh)
+  }
+
+  get visible(): boolean {
+    return this.mesh.visible
+  }
+
+  set opacity(value: number) {
+    this.mesh.material.opacity = Math.max(0, Math.min(1, value))
+  }
+
+  get opacity(): number {
+    return this.mesh.material.opacity
+  }
+
+  /** Fit the plane to the camera frustum's height at the underlay distance,
+   * at the image's own aspect: the composer camera carries the source's
+   * vertical field of view, so the frame height is what lines up (MEASURED,
+   * r24: a 9:16 portrait stretched across the 16:9 viewfinder). */
+  fit(): void {
+    const height = 2 * this.distance * Math.tan((this.camera.fov * Math.PI) / 360)
+    this.mesh.scale.set(height * (this.imageAspect > 0 ? this.imageAspect : this.camera.aspect), height, 1)
+  }
+
+  async load(url: string): Promise<void> {
+    const loader = new THREE.TextureLoader()
+    const texture = await loader.loadAsync(url)
+    texture.colorSpace = THREE.SRGBColorSpace
+    const image = texture.image as { width?: number; height?: number } | undefined
+    this.imageAspect = image?.width && image?.height ? image.width / image.height : 0
+    this.texture?.dispose()
+    this.texture = texture
+    this.mesh.material.map = texture
+    this.mesh.material.needsUpdate = true
+    this.mesh.visible = true
+    this.fit()
+  }
+
+  clear(): void {
+    this.mesh.visible = false
+    this.mesh.material.map = null
+    this.texture?.dispose()
+    this.texture = null
+  }
+
+  dispose(): void {
+    this.clear()
+    this.mesh.geometry.dispose()
+    this.mesh.material.dispose()
+    this.camera.remove(this.mesh)
+  }
+}

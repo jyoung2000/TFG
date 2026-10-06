@@ -13,10 +13,13 @@ import {
   Redo2,
   SlidersHorizontal,
   Sparkles,
+  ChevronDown,
+  ChevronUp,
   Trash2,
   Undo2,
   XCircle,
 } from 'lucide-react'
+import { describeBatch } from './batchNote'
 import { useFilm } from '../../contexts/FilmContext'
 import { filmApi } from '../../lib/film-api'
 import { useUiMode } from '../../lib/ui-mode'
@@ -52,14 +55,28 @@ function SceneRow({
   selectedShotId,
   onSelectShot,
   onComposeShot,
+  onMove,
+  canMoveUp = false,
+  canMoveDown = false,
 }: {
   scene: FilmScene
   sceneNumber: number
   selectedShotId: string | null
   onSelectShot: (shot: FilmShot | null) => void
   onComposeShot: (shot: FilmShot) => void
+  /** Move this scene one place earlier (-1) or later (+1); absent at that end. */
+  onMove?: (step: -1 | 1) => void
+  canMoveUp?: boolean
+  canMoveDown?: boolean
 }) {
   const { film, refresh, setFilm } = useFilm()
+  // A failed action or a batch result, shown beside the scene title (QA 2026-10-01:
+  // failures were unhandled rejections, and batches said nothing).
+  const [sceneNote, setSceneNote] = useState('')
+  const guard = useCallback(async (label: string, action: () => Promise<unknown>) => {
+    setSceneNote('')
+    try { await action() } catch (e) { setSceneNote(`${label} failed: ${e instanceof Error ? e.message : String(e)}`) }
+  }, [])
   const [dragShotId, setDragShotId] = useState<string | null>(null)
   const [titleDraft, setTitleDraft] = useState<string | null>(null)
 
@@ -68,45 +85,50 @@ function SceneRow({
 
   const addShot = useCallback(async () => {
     if (!projectId) return
-    await filmApi.createShot(projectId, scene.id, {})
-    await refresh()
-  }, [projectId, scene.id, refresh])
+    await guard('Adding a shot', async () => { await filmApi.createShot(projectId, scene.id, {}); await refresh() })
+  }, [projectId, scene.id, refresh, guard])
 
   const duplicateShot = useCallback(
     async (shot: FilmShot) => {
       if (!projectId) return
-      await filmApi.duplicateShot(projectId, scene.id, shot.id)
-      await refresh()
+      await guard('Duplicating the shot', async () => { await filmApi.duplicateShot(projectId, scene.id, shot.id); await refresh() })
     },
-    [projectId, scene.id, refresh],
+    [projectId, scene.id, refresh, guard],
   )
 
   const deleteShot = useCallback(
     async (shot: FilmShot) => {
       if (!projectId) return
       if (!window.confirm(`Delete ${shot.title || 'this shot'}?`)) return
-      await filmApi.deleteShot(projectId, scene.id, shot.id)
-      if (selectedShotId === shot.id) onSelectShot(null)
-      await refresh()
+      await guard('Deleting the shot', async () => {
+        await filmApi.deleteShot(projectId, scene.id, shot.id)
+        if (selectedShotId === shot.id) onSelectShot(null)
+        await refresh()
+      })
     },
-    [projectId, scene.id, selectedShotId, onSelectShot, refresh],
+    [projectId, scene.id, selectedShotId, onSelectShot, refresh, guard],
   )
 
   const deleteScene = useCallback(async () => {
     if (!projectId) return
     if (!window.confirm(`Delete ${scene.title || 'this scene'} and its ${shots.length} shots?`)) return
-    await filmApi.deleteScene(projectId, scene.id)
-    onSelectShot(null)
-    await refresh()
-  }, [projectId, scene.id, scene.title, shots.length, onSelectShot, refresh])
+    await guard('Deleting the scene', async () => {
+      await filmApi.deleteScene(projectId, scene.id)
+      onSelectShot(null)
+      await refresh()
+    })
+  }, [projectId, scene.id, scene.title, shots.length, onSelectShot, refresh, guard])
 
   const generateScene = useCallback(
     async (kind: VersionKind) => {
       if (!projectId) return
-      await filmApi.generateBatch(projectId, { kind, scene_id: scene.id })
-      await refresh()
+      await guard('Generating the scene', async () => {
+        const result = await filmApi.generateBatch(projectId, { kind, scene_id: scene.id })
+        await refresh()
+        setSceneNote(describeBatch(result))
+      })
     },
-    [projectId, scene.id, refresh],
+    [projectId, scene.id, refresh, guard],
   )
 
   const dropOn = useCallback(
@@ -117,16 +139,18 @@ function SceneRow({
       const to = ids.indexOf(targetShot.id)
       if (from < 0 || to < 0) return
       ids.splice(to, 0, ...ids.splice(from, 1))
-      const updatedScene = await filmApi.reorderShots(projectId, scene.id, ids)
-      if (film) {
-        setFilm({
-          ...film,
-          scenes: film.scenes.map(s => (s.id === updatedScene.id ? updatedScene : s)),
-        })
-      }
       setDragShotId(null)
+      await guard('Reordering', async () => {
+        const updatedScene = await filmApi.reorderShots(projectId, scene.id, ids)
+        if (film) {
+          setFilm({
+            ...film,
+            scenes: film.scenes.map(s => (s.id === updatedScene.id ? updatedScene : s)),
+          })
+        }
+      })
     },
-    [projectId, dragShotId, shots, scene.id, film, setFilm],
+    [projectId, dragShotId, shots, scene.id, film, setFilm, guard],
   )
 
   const saveTitle = useCallback(async () => {
@@ -134,10 +158,10 @@ function SceneRow({
       setTitleDraft(null)
       return
     }
-    await filmApi.updateScene(projectId, scene.id, { title: titleDraft })
+    const title = titleDraft
     setTitleDraft(null)
-    await refresh()
-  }, [projectId, scene.id, scene.title, titleDraft, refresh])
+    await guard('Renaming the scene', async () => { await filmApi.updateScene(projectId, scene.id, { title }); await refresh() })
+  }, [projectId, scene.id, scene.title, titleDraft, refresh, guard])
 
   const sceneDuration = shots.reduce((sum, s) => sum + s.duration_seconds, 0)
   const projectGap = film?.settings.inter_shot_gap_seconds ?? 0
@@ -148,15 +172,17 @@ function SceneRow({
   const saveSceneGap = useCallback(async () => {
     if (!projectId || gapDraft === null) return
     const trimmed = gapDraft.trim()
-    if (trimmed === '') {
-      await filmApi.updateScene(projectId, scene.id, { clear_gap: true })
-    } else {
-      const value = Math.max(0, Number(trimmed) || 0)
-      await filmApi.updateScene(projectId, scene.id, { inter_shot_gap_seconds: value })
-    }
     setGapDraft(null)
-    await refresh()
-  }, [projectId, scene.id, gapDraft, refresh])
+    await guard('Saving the gap', async () => {
+      if (trimmed === '') {
+        await filmApi.updateScene(projectId, scene.id, { clear_gap: true })
+      } else {
+        const value = Math.max(0, Number(trimmed) || 0)
+        await filmApi.updateScene(projectId, scene.id, { inter_shot_gap_seconds: value })
+      }
+      await refresh()
+    })
+  }, [projectId, scene.id, gapDraft, refresh, guard])
 
   return (
     <div className="border-b border-zinc-800/70">
@@ -216,6 +242,16 @@ function SceneRow({
         >
           <Sparkles className="h-3 w-3" /> Generate scene
         </button>
+        {onMove && (
+          <>
+            <button onClick={() => onMove(-1)} disabled={!canMoveUp} className="p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-white disabled:opacity-30" title="Move scene earlier" aria-label="Move scene earlier">
+              <ChevronUp className="h-3.5 w-3.5" />
+            </button>
+            <button onClick={() => onMove(1)} disabled={!canMoveDown} className="p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-white disabled:opacity-30" title="Move scene later" aria-label="Move scene later">
+              <ChevronDown className="h-3.5 w-3.5" />
+            </button>
+          </>
+        )}
         <button
           onClick={() => void deleteScene()}
           className="p-1 rounded hover:bg-red-950/60 text-zinc-600 hover:text-red-400"
@@ -224,9 +260,10 @@ function SceneRow({
           <Trash2 className="h-3.5 w-3.5" />
         </button>
       </div>
+      {sceneNote && <p className={`px-4 pb-1 text-[11px] ${/failed/.test(sceneNote) ? 'text-red-300' : 'text-zinc-400'}`} role="status" data-testid="scene-note">{sceneNote}</p>}
 
       {/* Shot strip with timing gaps */}
-      <div className="flex items-stretch gap-2 px-4 pb-3 overflow-x-auto">
+      <div className="flex items-stretch gap-2 px-4 pb-3 overflow-x-auto" onDragEnd={() => setDragShotId(null)}>
         {shots.map((shot, index) => (
           <div key={shot.id} className="flex items-center gap-2">
             {index > 0 && gapBefore(shot) > 0 && (
@@ -346,10 +383,26 @@ export function FilmSpace() {
     await refresh()
   }, [film, refresh])
 
+  const [batchNote, setBatchNote] = useState('')
   const generateAll = useCallback(async () => {
     if (!film) return
-    await filmApi.generateBatch(film.id, { kind: 'preview' })
-    await refresh()
+    setBatchNote('')
+    try {
+      const result = await filmApi.generateBatch(film.id, { kind: 'preview' })
+      await refresh()
+      setBatchNote(describeBatch(result))
+    } catch (e) { setBatchNote(`Generate all failed: ${e instanceof Error ? e.message : String(e)}`) }
+  }, [film, refresh])
+  // Scenes reorder with the up / down buttons (QA 2026-10-01: no way to reorder them).
+  const moveScene = useCallback(async (sceneId: string, step: -1 | 1) => {
+    if (!film) return
+    const ids = [...film.scenes].sort((a, b) => a.order - b.order).map(sc => sc.id)
+    const from = ids.indexOf(sceneId)
+    const to = from + step
+    if (from < 0 || to < 0 || to >= ids.length) return
+    ids.splice(to, 0, ...ids.splice(from, 1))
+    try { await filmApi.reorderScenes(film.id, ids); await refresh() }
+    catch (e) { setBatchNote(`Moving the scene failed: ${e instanceof Error ? e.message : String(e)}`) }
   }, [film, refresh])
 
   const cancelQueue = useCallback(async () => {
@@ -509,6 +562,7 @@ export function FilmSpace() {
                 <Redo2 className="h-3.5 w-3.5" />
               </button>
               {historyNote && <span className="text-[10px] text-zinc-500 ml-1" role="status">{historyNote}</span>}
+              {batchNote && <span className={`text-[10px] ml-1 ${/failed/.test(batchNote) ? 'text-red-300' : 'text-zinc-400'}`} role="status" data-testid="batch-note">{batchNote}</span>}
             </div>
             <span className="text-[11px] text-zinc-600 tabular-nums">
               {scenes.length} scenes · {totalShots} shots · {totalDuration.toFixed(1)}s
@@ -547,6 +601,9 @@ export function FilmSpace() {
                   selectedShotId={selectedShotId}
                   onSelectShot={shot => setSelectedShotId(shot?.id ?? null)}
                   onComposeShot={shot => setComposerShotId(shot.id)}
+                  onMove={step => void moveScene(scene.id, step)}
+                  canMoveUp={index > 0}
+                  canMoveDown={index < scenes.length - 1}
                 />
               ))}
               {/* Render defaults belong to this film, so they stay with it —

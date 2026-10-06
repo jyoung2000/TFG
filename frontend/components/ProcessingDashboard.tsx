@@ -1,7 +1,10 @@
 import { useEffect, useState, useCallback } from 'react'
-import { Activity, Loader2, Clock, Film, ImageIcon, ChevronDown, ChevronUp } from 'lucide-react'
+import { Activity, Loader2, Clock, Film, ImageIcon, ChevronDown, ChevronUp, Sparkles } from 'lucide-react'
 import { backendFetch } from '../lib/backend'
 import { filmOutputUrl } from '../lib/film-api'
+import { jobsApi } from '../lib/jobs-api'
+import { JOB_KIND_LABEL, type Job } from '../types/jobs'
+import { backgroundJobs, backgroundLabel } from './activityJobs'
 
 interface ActiveJob {
   status: string
@@ -17,7 +20,7 @@ interface RecentOutput {
   path: string
   prompt: string
   completed_at: number
-  type: 'video' | 'image'
+  type: 'video' | 'image' | 'lora'
   size_mb: number
 }
 
@@ -28,7 +31,12 @@ interface QueueState {
 
 function RecentPreview({ item }: { item: RecentOutput }) {
   const [url, setUrl] = useState('')
-  useEffect(() => { let live = true; void filmOutputUrl(item.path).then(u => { if (live) setUrl(u) }).catch(() => {}); return () => { live = false } }, [item.path])
+  useEffect(() => {
+    if (item.type === 'lora') return
+    let live = true; void filmOutputUrl(item.path).then(u => { if (live) setUrl(u) }).catch(() => {}); return () => { live = false }
+  }, [item.path, item.type])
+  // A LoRA that finished training (2026-10-02): a file, not a picture.
+  if (item.type === 'lora') return <div className="h-12 w-16 rounded bg-fuchsia-950/60 flex items-center justify-center shrink-0" title="LoRA" data-testid="recent-lora"><Sparkles className="h-4 w-4 text-fuchsia-300" /></div>
   if (!url) return <div className="h-12 w-16 rounded bg-zinc-800 flex items-center justify-center shrink-0">{item.type === 'video' ? <Film className="h-4 w-4 text-zinc-500" /> : <ImageIcon className="h-4 w-4 text-zinc-500" />}</div>
   return item.type === 'video'
     ? <video src={url} muted preload="metadata" controls className="h-12 w-16 rounded bg-black object-cover shrink-0" aria-label={`Recent video ${formatPath(item.path)}`} />
@@ -50,6 +58,8 @@ function formatPath(path: string): string {
 
 export function ProcessingDashboard() {
   const [state, setState] = useState<QueueState>({ active: null, recent: [] })
+  // Training runs, downloads and analyses: not in the render queue (2026-10-02).
+  const [background, setBackground] = useState<Job[]>([])
   const [expanded, setExpanded] = useState(false)
   const [error, setError] = useState('')
 
@@ -60,6 +70,7 @@ export function ProcessingDashboard() {
       const data = await res.json() as QueueState
       setState(data)
       setError('')
+      try { setBackground(backgroundJobs((await jobsApi.list({ status: 'active', limit: 10 })).jobs)) } catch { /* the queue still shows */ }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     }
@@ -72,7 +83,7 @@ export function ProcessingDashboard() {
   }, [poll])
 
   const isProcessing = !!state.active && ['running', 'queued'].includes(state.active.status)
-  const hasActivity = isProcessing || state.recent.length > 0
+  const hasActivity = isProcessing || background.length > 0 || state.recent.length > 0
 
   if (!hasActivity && !error) return null
 
@@ -88,11 +99,13 @@ export function ProcessingDashboard() {
               <Loader2 className="h-3.5 w-3.5 animate-spin text-violet-400" />
               <span className="text-xs text-zinc-300">{state.active?.progress ?? 0}%</span>
             </>
+          ) : background.length > 0 ? (
+            <Loader2 className="h-3.5 w-3.5 animate-spin text-fuchsia-400" />
           ) : (
             <Activity className="h-3.5 w-3.5 text-zinc-500" />
           )}
-          <span className="text-[10px] text-zinc-400">
-            {isProcessing ? 'In progress' : state.recent.length + ' recent'}
+          <span className="text-[10px] text-zinc-400" data-testid="activity-chip">
+            {isProcessing ? 'In progress' : background.length > 0 ? backgroundLabel(background) : state.recent.length + ' recent'}
           </span>
           <ChevronUp className="h-3 w-3 text-zinc-600" />
         </button>
@@ -126,6 +139,19 @@ export function ProcessingDashboard() {
             </div>
           )}
 
+          {background.map(job => (
+            <div key={job.id} className="px-3 py-2 border-b border-zinc-800" data-testid="activity-background-job">
+              <div className="flex items-center justify-between mb-1 gap-2">
+                <span className="text-[10px] text-zinc-300 truncate">{JOB_KIND_LABEL[job.kind]} · {job.title || job.prompt}</span>
+                <span className="text-[10px] text-fuchsia-300 font-medium shrink-0">{Math.round(job.progress)}%</span>
+              </div>
+              <div className="w-full h-1 bg-zinc-800 rounded-full overflow-hidden">
+                <div className="h-full bg-fuchsia-500 rounded-full transition-all duration-500" style={{ width: Math.max(2, job.progress) + '%' }} />
+              </div>
+              {job.phase && <p className="text-[10px] text-zinc-500 mt-1">{job.phase}</p>}
+            </div>
+          ))}
+
           {state.recent.length > 0 && (
             <div className="max-h-48 overflow-y-auto">
               {state.recent.map((item, i) => (
@@ -144,7 +170,7 @@ export function ProcessingDashboard() {
             </div>
           )}
 
-          {!isProcessing && !state.recent.length && <p className="px-3 py-3 text-[10px] text-zinc-600 text-center">Nothing processing right now</p>}
+          {!isProcessing && !background.length && !state.recent.length && <p className="px-3 py-3 text-[10px] text-zinc-600 text-center">Nothing processing right now</p>}
         </div>
       )}
     </div>

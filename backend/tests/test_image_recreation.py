@@ -68,14 +68,17 @@ def test_bad_image_and_bounded_budget(client, test_state, tmp_path, monkeypatch)
     good = tmp_path / "good.png"
     _png(good, (4, 5, 6))
     imported = client.post("/api/image-analysis/import", json={"path":str(good)}).json()
+    # Without any vision model (local stack off, no VLM) there is nothing to analyse with.
+    client.post("/api/settings", json={"vision": {"enabled": False, "vlmProvider": "off"}})
     assert client.post(f"/api/image-analysis/{imported['id']}/analyze").status_code == 400
+    client.post("/api/settings", json={"vision": {"enabled": True, "vlmProvider": "director"}})
     assert client.post(f"/api/image-analysis/{imported['id']}/render",json={"candidates":9,"rounds":9}).status_code == 422
     assert client.post("/api/image-analysis/import",json={"path":"relative.png"}).status_code == 400
     assert client.get("/api/image-analysis/no-such-id").status_code == 400
 
 
 def test_comparison_is_spatial_not_just_average_color():
-    from film.image_recreation import score_images
+    from film.image_recreation import composite_score
     ref = Image.new("RGB", (64, 64), "#191928")
     good = ref.copy()
     bad = ref.copy()
@@ -84,8 +87,8 @@ def test_comparison_is_spatial_not_just_average_color():
             ref.putpixel((x,y), (255,0,0))
             good.putpixel((x,y), (230,0,0))
             bad.putpixel((x+32,y+32), (255,0,0))
-    assert score_images(ref, good) > score_images(ref, bad)
-    assert score_images(ref, ref) == 1.0
+    assert composite_score(ref, good) > composite_score(ref, bad)
+    assert composite_score(ref, ref) == 1.0
 
 
 def test_refine_accepts_structured_differences_from_small_vision_models():

@@ -10,7 +10,11 @@ param(
     [switch]$Signed,
     [string]$Publish = "",
     # Optional electron-builder config override (e.g. electron-builder-wangp.yml).
-    [string]$Config = ""
+    [string]$Config = "",
+    # Extra arguments passed straight to electron-builder, e.g.
+    # @('-c.directories.output=release-wangp-2'). Rebuilding into a folder that
+    # still holds app.asar fails with EBUSY (F-065).
+    [string[]]$BuilderArgs = @()
 )
 
 $ErrorActionPreference = "Stop"
@@ -18,6 +22,14 @@ $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectDir = Split-Path -Parent $ScriptDir
 $ReleaseDir = Join-Path $ProjectDir "release"
+# An output folder moved with -c.directories.output=... is where the installer
+# lands; looking in release\ instead failed a finished build (r79, 2026-10-05).
+foreach ($arg in $BuilderArgs) {
+    if ($arg -match '^-c\.directories\.output=(.+)$') {
+        $out = $Matches[1]
+        $ReleaseDir = if ([System.IO.Path]::IsPathRooted($out)) { $out } else { Join-Path $ProjectDir $out }
+    }
+}
 
 Set-Location $ProjectDir
 
@@ -50,14 +62,14 @@ if ($Config -ne "") {
 # Build with electron-builder
 if ($Unpack) {
     Write-Host "Packaging unpacked app (fast mode)..." -ForegroundColor Yellow
-    pnpm exec electron-builder --win @ConfigArgs --dir
+    pnpm exec electron-builder --win @ConfigArgs @BuilderArgs --dir
 } else {
     Write-Host "Packaging installer..." -ForegroundColor Yellow
     $PublishArgs = @()
     if ($Publish -ne "") {
         $PublishArgs = @("--publish", $Publish)
     }
-    pnpm exec electron-builder --win @ConfigArgs @PublishArgs
+    pnpm exec electron-builder --win @ConfigArgs @PublishArgs @BuilderArgs
 }
 
 if ($LASTEXITCODE -ne 0) {
@@ -77,7 +89,8 @@ if ($Unpack) {
     Write-Host "Run: $ExePath" -ForegroundColor Cyan
     Write-Host "`nTip: Just restart the app after code changes - no rebuild needed!" -ForegroundColor Green
 } else {
-    $Installer = Get-ChildItem -Path $ReleaseDir -Filter "*.exe" | Where-Object { $_.Name -like "*Setup*" } | Select-Object -First 1
+    . (Join-Path $PSScriptRoot "lib/find-built-installer.ps1")
+    $Installer = Find-BuiltInstaller -ReleaseDir $ReleaseDir
     if ($Installer) {
         $InstallerSize = [math]::Round($Installer.Length / 1MB, 2)
         Write-Host "`nInstaller: $($Installer.Name)" -ForegroundColor Cyan

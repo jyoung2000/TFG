@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import io
 import logging
 from pathlib import Path
 from threading import Event
 
+from logging_policy import console_handler
 from services.task_runner.threading_runner import ThreadingRunner
 
 
@@ -108,3 +110,26 @@ def test_logger_exception_usage_is_restricted_to_boundaries() -> None:
         if "logger.exception(" in content:
             rel_path = path.relative_to(backend_dir)
             assert rel_path in allowed, f"logger.exception usage is only allowed in boundary files: {rel_path}"
+
+
+def test_console_handler_survives_wangp_progress_bars_on_a_cp1252_pipe(capsys) -> None:
+    # On Windows the backend's stdout is a pipe in the ANSI code page (cp1252).
+    # Round 5 on the RTX 4070: every tqdm bar the WanGP bridge relays carries
+    # block characters such as U+258F, and each one raised UnicodeEncodeError
+    # inside the handler -- a 20-line "--- Logging error ---" per progress line
+    # (49 in one render), with the line itself lost from the session log.
+    raw = io.BytesIO()
+    stream = io.TextIOWrapper(raw, encoding="cp1252", write_through=True)
+    handler = console_handler(stream)
+    logger = logging.getLogger("test.console_cp1252")
+    logger.propagate = False
+    logger.setLevel(logging.INFO)
+    logger.addHandler(handler)
+    try:
+        logger.info("[wangp] %s", "Encoding Text Prompt:   2%|▏         | 1/48 — orphan guard armed")
+    finally:
+        logger.removeHandler(handler)
+
+    assert "Logging error" not in capsys.readouterr().err
+    written = raw.getvalue().decode("utf-8")
+    assert "▏" in written and "—" in written

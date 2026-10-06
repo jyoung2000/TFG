@@ -10,7 +10,7 @@ import sys
 import threading
 import time
 from collections import deque
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, cast
@@ -36,6 +36,68 @@ _QWEN_IMAGE_RESOLUTIONS: tuple[tuple[int, int], ...] = (
     (1472, 1140),
     (1140, 1472),
 )
+#: ~1 MP sizes Qwen-Image-Edit renders as asked: LoRA dataset angles (1024x1024,
+#: fitted to the photo's shape) and style-guide storyboard frames (16:9 / 9:16).
+_QWEN_EDIT_EXACT: frozenset[tuple[int, int]] = frozenset({(1024, 1024), (1360, 768), (768, 1360)})
+#: Wan 14B models (2.1 and 2.2) are 16 fps models; on the 12 GB card they render
+#: at 720p at most (1080p would not fit their latents beside the weights).
+_WAN_14B_PREFIXES: tuple[str, ...] = ("i2v", "t2v", "vace_14B")
+#: Image models WanGP can run img2img with: FLUX.2's "Masked Denoising"
+#: inpaint mode starts from the guide image's latents when
+#: `denoising_strength` < 1 (models/flux/sampling.py:629-639). Z-Image has no
+#: partial-denoise path, so it is absent on purpose.
+IMG2IMG_MODEL_TYPES: tuple[str, ...] = ("flux2_klein_4b", "flux2_klein_9b", "flux2_dev")
+#: Denoising strength is quantised to whole steps (first step =
+#: int(steps * (1 - strength))), so the few-step default leaves low strengths
+#: with no resolution at all.
+IMG2IMG_MIN_STEPS = 24
+#: Image models that compose from ordered reference images (`image_refs`):
+#: FLUX.2 ("KI" = scene first, then people/objects; "I" = people/objects), and
+#: Qwen-Image-Edit-2511 (same letters; WanGP models/qwen/qwen_handler.py) - last,
+#: so the few-step FLUX.2 stays the fallback for general compositing. FLUX.1 USO Dev
+#: (style transfer, film/style_transfer.py) is last: it only redraws in a style.
+REFERENCE_IMAGE_MODEL_TYPES: tuple[str, ...] = ("flux2_klein_4b", "flux2_klein_9b", "flux2_dev", "qwen_image_edit_plus2_20B", "flux_dev_uso")
+#: `video_prompt_type` letters of a reference render: "KI" scene then people (USO:
+#: the content picture, then the style picture), "I" people only, "IJ" (USO) styles only.
+REFERENCE_MODES: tuple[str, ...] = ("KI", "I", "IJ")
+#: FLUX.1 Dev models (USO) are not few-step models: the app's default 4 steps is noise.
+FLUX1_DEV_MIN_STEPS = 28
+#: Qwen-Image-Edit is not a few-step model: the app's default of 4 steps is noise.
+QWEN_EDIT_MIN_STEPS = 30
+#: Qwen-Image-Edit with a Lightning LoRA: its distilled step count, CFG off.
+QWEN_LIGHTNING_STEPS = 8
+#: A VACE render with a guide video needs no CFG and few steps (see `_vace_settings`).
+VACE_GUIDED_STEPS = 6
+
+def pin_int8_kernels(config_path: Path) -> bool:
+    """Use Triton when WanGP's INT8 math kernels are on "auto". WanGP's "auto"
+    picks Comfy Kitchen after a 256x256 probe that never reaches Kitchen's
+    cuBLASLt path; on this app's CUDA 12 torch the first real Qwen-Image
+    text-encoder matmul then failed: "cuBLASLt 13.x library not found (requires
+    CUDA 13+)" (2026-10-04). Triton worked and was faster on Z-Image (12.4 s vs
+    14.0 s warm). A deliberate choice (disabled / kitchen / triton) is kept."""
+    try:
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if not isinstance(data, dict) or cast(dict[str, object], data).get("int8_kernels", "auto") != "auto":
+        return False
+    config = cast(dict[str, object], data)
+    config["int8_kernels"] = "triton"
+    config_path.write_text(json.dumps(config, indent=4), encoding="utf-8")
+    logger.info("WanGP INT8 kernels: auto -> triton (%s)", config_path)
+    return True
+
+
+def _with_default_attention(args: tuple[str, ...]) -> tuple[str, ...]:
+    """`--attention auto` unless the caller chose one: WanGP's saved config can
+    pin `sdpa` (it did on the installed app), and `auto` picks the fastest
+    kernel actually installed (SageAttention ships with the app)."""
+    if any(a == "--attention" or a.startswith("--attention=") for a in args):
+        return args
+    return (*args, "--attention", "auto")
+
+
 _TQDM_PROGRESS_RE = re.compile(r"(?:(?P<label>.*?):\s+)?(?P<percent>\d{1,3})%\|[^|]*\|\s*(?P<current>\d+)/(?P<total>\d+)")
 
 
@@ -69,7 +131,7 @@ class WanGPBridge:
         self._video_model_type = video_model_type
         self._image_model_type = image_model_type
         self._camera_motion_prompts = camera_motion_prompts
-        self._extra_args = tuple(extra_args)
+        self._extra_args = _with_default_attention(tuple(extra_args))
         self._session = None
         self._submitted_manifest_once = False
         self._session_lock = threading.Lock()
@@ -132,6 +194,26 @@ class WanGPBridge:
             python_executable=self._python,
         )
 
+    def _checkpoint_roots(self) -> list[Path]:
+        """Where WanGP finds weights: ``ckpts``, then the config's other
+        ``checkpoints_paths`` (FLUX.1 USO lives on D: since 2026-10-05, C: is full)."""
+        assert self._root is not None
+        roots = [self._root / "ckpts"]
+        listed: object = []
+        try:
+            config: object = json.loads(self._resolve_session_config_path().read_text(encoding="utf-8"))
+            if isinstance(config, dict):
+                listed = cast(dict[str, object], config).get("checkpoints_paths", [])
+        except (OSError, ValueError):
+            pass
+        for entry in cast(list[object], listed) if isinstance(listed, list) else []:
+            if isinstance(entry, str) and entry.strip() not in ("", "."):
+                path = Path(entry.strip())
+                path = path if path.is_absolute() else self._root / path
+                if path.is_dir() and all(path.resolve() != r.resolve() for r in roots):
+                    roots.append(path)
+        return [r for r in roots if r.is_dir()]
+
     def list_model_definitions(self) -> list[dict[str, object]]:
         """Model definitions from the WanGP checkout (``defaults/*.json``) —
         the same files WanGP itself loads — plus whether their weights are
@@ -141,14 +223,24 @@ class WanGPBridge:
         defaults = self._root / "defaults"
         if not defaults.is_dir():
             return []
-        ckpts = self._root / "ckpts"
         existing: set[str] = set()
-        if ckpts.is_dir():
+        for ckpts in self._checkpoint_roots():
             try:
-                existing = {p.name for p in ckpts.rglob("*") if p.is_file()}
+                existing |= {p.name for p in ckpts.rglob("*") if p.is_file()}
             except OSError:
-                existing = set()
+                continue
         definitions: list[dict[str, object]] = []
+        # A definition may name another model instead of listing files
+        # (FastWan 5B: "URLs": "ti2v_2_2"); it uses that model's weights.
+        own_urls: dict[str, list[str]] = {}
+        for path in sorted(defaults.glob("*.json")):
+            try:
+                model = json.loads(path.read_text(encoding="utf-8")).get("model")
+            except (OSError, ValueError, AttributeError):
+                continue
+            listed = cast(dict[str, object], model).get("URLs") if isinstance(model, dict) else None
+            if isinstance(listed, list):
+                own_urls[path.stem] = [str(u) for u in cast(list[object], listed) if isinstance(u, str)]
         for path in sorted(defaults.glob("*.json")):
             try:
                 raw = json.loads(path.read_text(encoding="utf-8"))
@@ -165,7 +257,7 @@ class WanGPBridge:
             if isinstance(urls_raw, list):
                 urls = [str(u) for u in cast(list[object], urls_raw) if isinstance(u, str)]
             elif isinstance(urls_raw, str):
-                urls = [urls_raw]
+                urls = own_urls.get(urls_raw, [urls_raw]) if not urls_raw.startswith("http") else [urls_raw]
             filenames = [u.rsplit("/", 1)[-1] for u in urls]
             installed = any(name in existing for name in filenames) if filenames else False
             architecture = str(model_dict.get("architecture", "") or "")
@@ -184,6 +276,22 @@ class WanGPBridge:
             )
         return definitions
 
+    def weights_installed(self, model_type: str) -> bool | None:
+        """Whether the model's checkpoint files are present under ``ckpts``.
+
+        ``None`` means "cannot tell" (no local checkout — the remote bridge —
+        or an unknown model id) and callers must not refuse on it. ``False``
+        is the state in which ``wgp.py`` would silently start a multi-GB
+        checkpoint download the moment a render asks for the model; render
+        handlers check this first and point at the Models tab instead, where
+        the same download runs as an explicit job with progress and cancel."""
+        if self._root is None:
+            return None
+        for definition in self.list_model_definitions():
+            if str(definition.get("id", "")) == model_type:
+                return bool(definition.get("installed", False))
+        return None
+
     def generate_video(
         self,
         *,
@@ -200,21 +308,35 @@ class WanGPBridge:
         audio_path: str | None,
         on_progress: ProgressCallback,
         is_cancelled: CancelledCallback,
+        control_video_path: str | None = None,
+        depth_video_path: str | None = None,
+        loras: Sequence[tuple[str, float]] = (),
+        reference_images: Sequence[str] = (),
+        end_frame_path: str | None = None,
+        control_strength: float | None = None,
+        model_type: str | None = None,
     ) -> str:
+        chosen = (model_type or "").strip() or self._video_model_type
+        wan_14b = chosen.startswith(_WAN_14B_PREFIXES)
+        if wan_14b and resolution_label in ("1080p", "1440p", "2160p"):
+            resolution_label = "720p"
         resolution = self._map_video_resolution(resolution_label, aspect_ratio)
         merged_prompt = prompt + self._camera_motion_prompts.get(camera_motion, "")
+        if chosen.startswith("vace") or wan_14b:
+            # A 16 fps model: at 24 fps a 10 s shot is 241 frames, at 16 it is 161.
+            fps = 16
         video_length = self.compute_num_frames(duration_seconds, fps)
 
         settings: dict[str, object] = {
-            "model_type": self._video_model_type,
+            "model_type": chosen,
             "prompt": merged_prompt,
             "resolution": resolution,
-            "num_inference_steps": max(1, steps),
+            "num_inference_steps": self._video_steps(chosen, steps),
             "video_length": video_length,
             "duration_seconds": duration_seconds,
             "force_fps": fps,
         }
-        if self._video_model_type.startswith("ltx2_"):
+        if chosen.startswith("ltx2_"):
             settings["sliding_window_size"] = video_length
         if negative_prompt.strip():
             settings["negative_prompt"] = negative_prompt.strip()
@@ -223,9 +345,33 @@ class WanGPBridge:
         if image_path:
             settings["image_prompt_type"] = "S"
             settings["image_start"] = str(Path(image_path).resolve())
+        if end_frame_path:
+            # "E" = end frame (wgp.py image_end); combined with a start frame as "SE".
+            settings["image_prompt_type"] = str(settings.get("image_prompt_type", "")) + "E"
+            settings["image_end"] = str(Path(end_frame_path).resolve())
+        self._apply_loras(settings, loras)
+        if reference_images:
+            settings["image_refs"] = [str(Path(p).resolve()) for p in reference_images]
+            settings["video_prompt_type"] = str(settings.get("video_prompt_type", "")) + "I"
         if audio_path:
             settings["audio_prompt_type"] = "A"
             settings["audio_guide"] = str(Path(audio_path).resolve())
+        # Control video (VACE / depth) from a Deliver export. `video_guide` +
+        # `video_prompt_type` are WanGP's documented settings keys for a guide
+        # video; the exact per-model semantics could not be verified in this
+        # build (session-notes VF-011), so the depth pass is preferred when the
+        # model type is a VACE/control variant and the clean pass otherwise.
+        guide = depth_video_path if (depth_video_path and "vace" in self._video_model_type.lower()) else (control_video_path or depth_video_path)
+        if guide:
+            settings["video_prompt_type"] = str(settings.get("video_prompt_type", "")).replace("V", "") + "V"
+            settings["video_guide"] = str(Path(guide).resolve())
+            if control_strength is not None:
+                # "G" makes the guide's strength count (wgp.py:1411-1415); for
+                # LTX-2 "VG" is the raw control video and higher = closer to it.
+                settings["video_prompt_type"] = str(settings["video_prompt_type"]).replace("G", "") + "G"
+                settings["denoising_strength"] = round(min(1.0, max(0.0, control_strength)), 4)
+        if chosen.startswith("vace"):
+            self._vace_settings(settings, image_path, end_frame_path, video_length, aspect_ratio)
 
         outputs = self._run_manifest(
             manifest=[{"id": 1, "params": settings, "plugin_data": {}}],
@@ -235,7 +381,18 @@ class WanGPBridge:
         )
         if not outputs:
             raise RuntimeError("WanGP completed without producing a video")
-        return outputs[0]
+        # A sliding-window render saves each window as it ends; the last file is the whole video.
+        return outputs[-1]
+
+    @staticmethod
+    def _apply_loras(settings: dict[str, object], loras: Sequence[tuple[str, float]]) -> None:
+        """`activated_loras` takes absolute paths (wgp.py `get_lora_URL` returns
+        them unchanged) and `loras_multipliers` is the space-separated strengths."""
+        chosen = [(path, mult) for path, mult in loras if path and Path(path).is_file()]
+        if not chosen:
+            return
+        settings["activated_loras"] = [str(Path(path).resolve()) for path, _ in chosen]
+        settings["loras_multipliers"] = " ".join(f"{mult:g}" for _, mult in chosen)
 
     def generate_images(
         self,
@@ -248,20 +405,47 @@ class WanGPBridge:
         seed: int | None,
         on_progress: ProgressCallback,
         is_cancelled: CancelledCallback,
+        loras: Sequence[tuple[str, float]] = (),
+        model_type: str | None = None,
+        init_image: str | None = None,
+        denoise_strength: float = 1.0,
+        reference_images: Sequence[str] = (),
+        reference_mode: str = "KI",
     ) -> list[str]:
-        mapped_width, mapped_height = self._map_image_resolution(width, height)
-        normalized_steps = self._normalize_image_steps(num_steps)
+        """Text-to-image, img2img from `init_image`, or a composition from
+        ordered `reference_images` (FLUX.2: `reference_mode` "KI" puts the
+        scene first, then the people; "I" is people/objects only)."""
+        chosen = model_type or self._image_model_type
+        if reference_images and chosen not in REFERENCE_IMAGE_MODEL_TYPES:
+            raise RuntimeError(f"'{chosen}' cannot compose from reference images; that needs one of {', '.join(REFERENCE_IMAGE_MODEL_TYPES)}")
+        if init_image and not self.supports_img2img(chosen):
+            raise RuntimeError(f"'{chosen}' cannot render from a reference image; img2img needs one of {', '.join(IMG2IMG_MODEL_TYPES)}")
+        mapped_width, mapped_height = self._map_image_resolution(width, height, chosen)
+        normalized_steps = self._normalize_image_steps(num_steps, chosen)
         settings: dict[str, object] = {
-            "model_type": self._image_model_type,
+            "model_type": chosen,
             "prompt": prompt,
             "resolution": f"{mapped_width}x{mapped_height}",
             "num_inference_steps": normalized_steps,
             "batch_size": max(1, num_images),
             "image_mode": 1,
         }
+        if chosen.startswith("qwen_image"):
+            # MEASURED 2026-10-04 (RTX 4070): SageAttention, which `--attention auto`
+            # picks, turned Qwen-Image-Edit-2511 into NaN (all black); SDPA renders it.
+            settings["override_attention"] = "sdpa"
         if seed is not None:
             settings["seed"] = seed
+        if init_image:
+            settings.update(self._img2img_settings(Path(init_image), denoise_strength, normalized_steps))
+        elif reference_images:
+            settings["video_prompt_type"] = reference_mode if reference_mode in REFERENCE_MODES else "KI"
+            settings["image_refs"] = [str(Path(p).resolve()) for p in reference_images]
 
+        self._apply_loras(settings, loras)
+        if chosen.startswith("qwen_image_edit") and any("lightning" in Path(path).name.lower() for path, _ in loras):
+            settings["num_inference_steps"] = QWEN_LIGHTNING_STEPS
+            settings["guidance_scale"] = 1.0
         outputs = self._run_manifest(
             manifest=[{"id": 1, "params": settings, "plugin_data": {}}],
             media_suffixes={".png", ".jpg", ".jpeg", ".webp"},
@@ -271,6 +455,35 @@ class WanGPBridge:
         if not outputs:
             raise RuntimeError("WanGP completed without producing any images")
         return outputs
+
+    @staticmethod
+    def supports_img2img(model_type: str) -> bool:
+        return model_type in IMG2IMG_MODEL_TYPES
+
+    def _img2img_settings(self, init_image: Path, strength: float, steps: int) -> dict[str, object]:
+        """Masked Denoising over the whole frame: the reference is the guide,
+        an all-white mask regenerates every pixel, and the strength decides
+        how far from the reference the result may move."""
+        from PIL import Image
+
+        guide = init_image.resolve()
+        with Image.open(guide) as image:
+            size = image.size
+        masks = self._output_dir / "img2img_masks"
+        masks.mkdir(parents=True, exist_ok=True)
+        mask = masks / f"white-{size[0]}x{size[1]}.png"
+        if not mask.is_file():
+            Image.new("L", size, 255).save(mask)
+        return {
+            "image_mode": 2,
+            "video_prompt_type": "VAG",
+            "model_mode": 0,
+            "image_guide": str(guide),
+            "image_mask": str(mask.resolve()),
+            "denoising_strength": round(min(1.0, max(0.0, strength)), 4),
+            "masking_strength": 1.0,
+            "num_inference_steps": max(steps, IMG2IMG_MIN_STEPS),
+        }
 
     @staticmethod
     def compute_num_frames(duration_seconds: int, fps: int) -> int:
@@ -285,8 +498,12 @@ class WanGPBridge:
             raise RuntimeError(f"Unsupported WanGP aspect ratio: {aspect_ratio}")
         return mapped
 
-    def _map_image_resolution(self, width: int, height: int) -> tuple[int, int]:
-        if "qwen_image" not in self._image_model_type:
+    def _map_image_resolution(self, width: int, height: int, model_type: str | None = None) -> tuple[int, int]:
+        """Qwen renders at its native presets; the model rendering decides, not
+        the configured default (a Qwen angle render while Z-Image is the default)."""
+        if "qwen_image" not in (model_type or self._image_model_type):
+            return width, height
+        if (width, height) in _QWEN_EDIT_EXACT and "qwen_image_edit" in (model_type or self._image_model_type):
             return width, height
 
         requested_ratio = width / max(height, 1)
@@ -308,9 +525,14 @@ class WanGPBridge:
             )
         return mapped
 
-    def _normalize_image_steps(self, num_steps: int) -> int:
+    def _normalize_image_steps(self, num_steps: int, model_type: str | None = None) -> int:
         normalized_steps = max(1, num_steps)
-        if not self._image_model_type.startswith("z_image"):
+        chosen = model_type or self._image_model_type
+        if chosen.startswith("qwen_image_edit"):
+            return max(QWEN_EDIT_MIN_STEPS, normalized_steps)
+        if chosen.startswith("flux_dev"):
+            return max(FLUX1_DEV_MIN_STEPS, normalized_steps)
+        if not chosen.startswith("z_image"):
             return normalized_steps
 
         adjusted_steps = max(8, normalized_steps)
@@ -339,6 +561,76 @@ class WanGPBridge:
             raise RuntimeError(f"shared.api resolved to {module_path}, expected {expected_path}")
         return module
 
+    def warm_session(self) -> str:
+        """Construct the WanGP session now — this imports ``wgp.py``, the
+        heaviest module — so the first render does not pay for it inside its
+        job thread (round-2 F-038 note (a)). Returns '' on success, else the
+        reason renders will fail with."""
+        try:
+            self._get_session()
+            return ""
+        except Exception as exc:  # noqa: BLE001 - reported by the caller, renders re-raise it
+            return str(exc)
+
+    @staticmethod
+    def _vace_settings(settings: dict[str, object], start: str | None, end: str | None, video_length: int, aspect_ratio: str) -> None:
+        """VACE takes no start/end image: those frames are injected by
+        position ("FI" + image_refs + frames_positions), a guide video is raw
+        ("V", VACE has no guide strength), and it renders at its native 480p."""
+        for key in ("image_prompt_type", "image_start", "image_end", "denoising_strength"):
+            settings.pop(key, None)
+        letters = "V" if settings.get("video_guide") else ""
+        refs: list[str] = []
+        positions: list[str] = []
+        if start:
+            refs.append(str(Path(start).resolve()))
+            positions.append("1")
+        if end:
+            refs.append(str(Path(end).resolve()))
+            positions.append(str(video_length))
+        if refs:
+            letters += "FI"
+            settings["image_refs"] = refs
+            settings["frames_positions"] = " ".join(positions)
+        settings["video_prompt_type"] = letters
+        settings["resolution"] = "480x832" if aspect_ratio == "9:16" else "832x480"
+        # One window for the whole clip. With windows WanGP saves a file after
+        # each one and the first (short) file came back as the take; smaller
+        # windows were not faster either (MEASURED, r18: 4 x 49 frames ~ 1 x 161).
+        settings["sliding_window_size"] = video_length
+        if settings.get("video_guide"):
+            # The guide carries the motion and layout: CFG's unconditional pass
+            # doubled the cost and pulled the take off the source (MEASURED, r18,
+            # 10 s shot vs source SSIM: CFG 5/8 steps 0.971 ~390 s; CFG 1/6 steps
+            # 0.982 206 s; CFG 1/4 steps 0.981 166 s).
+            settings["guidance_scale"] = 1.0
+            steps = settings.get("num_inference_steps")
+            settings["num_inference_steps"] = min(steps, VACE_GUIDED_STEPS) if isinstance(steps, int) else VACE_GUIDED_STEPS
+
+    def _video_steps(self, model_type: str, requested: int) -> int:
+        """An accelerated model (FastWan: 3 steps) renders with its own step
+        count; the app's step setting is tuned for LTX-2."""
+        if not model_type.startswith("ltx2_"):
+            default = next((d.get("default_steps") for d in self.list_model_definitions() if d.get("id") == model_type), None)
+            if isinstance(default, int) and 0 < default <= 8:
+                return default
+        return max(1, requested)
+
+    def held_vram_mb(self) -> int:
+        """VRAM held by this bridge's own WanGP process that a render may
+        reuse. In-process WanGP shares the app's process: nothing to add."""
+        return 0
+
+    def release_models(self) -> bool:
+        """Release whatever model WanGP holds (VRAM + pinned RAM). The next
+        render reloads it. False when no session was ever started."""
+        with self._session_lock:
+            session = self._session
+        if session is None:
+            return False
+        session.close()
+        return True
+
     def _get_session(self):
         status = self.get_status()
         if not status.available or status.root is None:
@@ -347,13 +639,26 @@ class WanGPBridge:
         with self._session_lock:
             if self._session is None:
                 api_module = self._load_api_module()
+                config_path = self._resolve_session_config_path()
+                pin_int8_kernels(config_path)
                 self._session = api_module.WanGPSession(
                     root=status.root,
-                    config_path=self._resolve_session_config_path(),
+                    config_path=config_path,
                     output_dir=self._output_dir,
                     cli_args=self._extra_args,
                 )
             return self._session
+
+    def run_manifest(
+        self,
+        *,
+        manifest: list[dict[str, object]],
+        media_suffixes: set[str],
+        on_progress: ProgressCallback,
+        is_cancelled: CancelledCallback,
+    ) -> list[str]:
+        """Run one already-built manifest (the remote WanGP server route calls this)."""
+        return self._run_manifest(manifest=manifest, media_suffixes=media_suffixes, on_progress=on_progress, is_cancelled=is_cancelled)
 
     def _run_manifest(
         self,

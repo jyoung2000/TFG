@@ -29,7 +29,7 @@ from film.knowledge_models import (
 
 logger = logging.getLogger(__name__)
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_info (version INTEGER NOT NULL);
@@ -109,10 +109,19 @@ class KnowledgeStore:
             connection.execute("PRAGMA journal_mode=WAL")
             connection.executescript(_SCHEMA)
             row = connection.execute("SELECT version FROM schema_info").fetchone()
+            existing = {str(col[1]) for col in connection.execute("PRAGMA table_info(events)").fetchall()}
+            # v2: Reproduce evidence columns. Additive, so v1 rows keep working.
+            for column, definition in (
+                ("seed", "INTEGER"),
+                ("target", "TEXT NOT NULL DEFAULT ''"),
+                ("spec_keys_json", "TEXT NOT NULL DEFAULT '[]'"),
+                ("metrics_json", "TEXT NOT NULL DEFAULT '{}'"),
+            ):
+                if column not in existing:
+                    connection.execute(f"ALTER TABLE events ADD COLUMN {column} {definition}")
             if row is None:
                 connection.execute("INSERT INTO schema_info (version) VALUES (?)", (_SCHEMA_VERSION,))
             elif int(row["version"]) < _SCHEMA_VERSION:
-                # Each future bump adds its migration here before this update.
                 connection.execute("UPDATE schema_info SET version = ?", (_SCHEMA_VERSION,))
 
     # ---- events ----------------------------------------------------------
@@ -125,14 +134,16 @@ class KnowledgeStore:
                 """INSERT OR REPLACE INTO events (
                     id, created_at, kind, category, project_id, scene_id, shot_id, version_number,
                     model, provider, task, execution_mode, prompt, negative_prompt,
-                    outcome, duration_seconds, error, rating, note
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    outcome, duration_seconds, error, rating, note,
+                    seed, target, spec_keys_json, metrics_json
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     event.id, event.created_at, event.kind, event.category,
                     event.project_id, event.scene_id, event.shot_id, event.version_number,
                     event.model, event.provider, event.task, event.execution_mode,
                     event.prompt, event.negative_prompt, event.outcome,
                     event.duration_seconds, event.error, event.rating, event.note,
+                    event.seed, event.target, json.dumps(sorted(event.spec_keys)), json.dumps(event.metrics, sort_keys=True),
                 ),
             )
         return event
@@ -143,6 +154,7 @@ class KnowledgeStore:
         model: str = "",
         project_id: str = "",
         kinds: Sequence[str] = (),
+        target: str = "",
         limit: int = 200,
     ) -> list[KnowledgeEvent]:
         clauses: list[str] = []
@@ -156,6 +168,9 @@ class KnowledgeStore:
         if kinds:
             clauses.append(f"kind IN ({','.join('?' * len(kinds))})")
             params.extend(kinds)
+        if target:
+            clauses.append("target = ?")
+            params.append(target)
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         params.append(max(1, limit))
         with self._connect() as connection:
@@ -280,7 +295,23 @@ def _event_from_row(row: sqlite3.Row) -> KnowledgeEvent:
         negative_prompt=row["negative_prompt"], outcome=row["outcome"],
         duration_seconds=row["duration_seconds"], error=row["error"], rating=row["rating"],
         note=row["note"],
+        seed=_int_or_none(_column(row, "seed")),
+        target=str(_column(row, "target") or ""),
+        spec_keys=[str(k) for k in cast(list[object], json.loads(str(_column(row, "spec_keys_json") or "[]")))],
+        metrics={str(k): float(v) for k, v in cast(dict[str, object], json.loads(str(_column(row, "metrics_json") or "{}"))).items() if isinstance(v, (int, float))},
     )
+
+
+def _int_or_none(value: object) -> int | None:
+    return int(value) if isinstance(value, (int, float)) else None
+
+
+def _column(row: sqlite3.Row, name: str) -> object:
+    """A column that may be absent on a row read before the v2 migration."""
+    try:
+        return row[name]
+    except (IndexError, KeyError):
+        return None
 
 
 def _observation_from_row(row: sqlite3.Row) -> Observation:

@@ -88,6 +88,8 @@ function normalizeAppSettings(data: Partial<AppSettings>): AppSettings {
     hasReplicateApiKey: data.hasReplicateApiKey ?? DEFAULT_APP_SETTINGS.hasReplicateApiKey,
     defaultVideoModel: data.defaultVideoModel ?? DEFAULT_APP_SETTINGS.defaultVideoModel,
     defaultImageModel: data.defaultImageModel ?? DEFAULT_APP_SETTINGS.defaultImageModel,
+    characterAngleModel: data.characterAngleModel ?? DEFAULT_APP_SETTINGS.characterAngleModel,
+    objectAngleModel: data.objectAngleModel ?? DEFAULT_APP_SETTINGS.objectAngleModel,
     recentModelIds: data.recentModelIds ?? DEFAULT_APP_SETTINGS.recentModelIds,
     useLocalTextEncoder: data.useLocalTextEncoder ?? DEFAULT_APP_SETTINGS.useLocalTextEncoder,
     fastModel: data.fastModel ?? DEFAULT_APP_SETTINGS.fastModel,
@@ -95,8 +97,13 @@ function normalizeAppSettings(data: Partial<AppSettings>): AppSettings {
     promptCacheSize: data.promptCacheSize ?? DEFAULT_APP_SETTINGS.promptCacheSize,
     promptEnhancerEnabledT2V: data.promptEnhancerEnabledT2V ?? DEFAULT_APP_SETTINGS.promptEnhancerEnabledT2V,
     promptEnhancerEnabledI2V: data.promptEnhancerEnabledI2V ?? DEFAULT_APP_SETTINGS.promptEnhancerEnabledI2V,
+    vision: { ...DEFAULT_APP_SETTINGS.vision, ...(data.vision ?? {}) },
     seedLocked: data.seedLocked ?? DEFAULT_APP_SETTINGS.seedLocked,
     lockedSeed: data.lockedSeed ?? DEFAULT_APP_SETTINGS.lockedSeed,
+    hardwarePreset: data.hardwarePreset ?? DEFAULT_APP_SETTINGS.hardwarePreset,
+    mediaTiers: data.mediaTiers && typeof data.mediaTiers === 'object' ? data.mediaTiers : {},
+    videoProfile: data.videoProfile === 'balanced' ? 'balanced' : 'fast',
+    imageSteps: data.imageSteps ?? DEFAULT_APP_SETTINGS.imageSteps,
   }
 }
 

@@ -7,6 +7,8 @@ them. Nothing here needs a video file, a decoder or a model.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from film.shot_detection import (
@@ -133,10 +135,14 @@ class TestAnalysisPipeline:
         analyzed = client.post(f"/api/video-analysis/{analysis['id']}/analyze", json={}).json()
         assert analyzed["stage"] == "complete"
         first = analyzed["shots"][0]
-        # No model ran, so measured fields are filled and inference stays empty.
+        # No language model ran: timing fields are measured, and the local
+        # vision stack (Florence detection + caption) grounds the visual read
+        # with *measured* provenance — never an inferred one.
         assert first["editorial"]["cut_type"] == "cut"
         assert first["provenance"] == "measured"
-        assert first["visual"]["confidence"] == 0.0
+        assert first["visual"]["subjects"] == ["person"]
+        assert first["visual"]["description"]
+        assert 0.0 < first["visual"]["confidence"] <= 0.5
         assert "without a model" in analyzed["message"]
 
     def test_analyze_before_detect_is_refused(self, client, video):
@@ -258,3 +264,38 @@ class TestReconstruction:
     def test_reconstructing_before_detection_is_refused(self, client, video):
         analysis = _import(client, video)
         assert client.post(f"/api/video-analysis/{analysis['id']}/reconstruct", json={}).status_code == 400
+
+
+class TestRecreation:
+    """The recreate endpoint is the entry point of Video Reproduce v2; the
+    loop itself is covered in `test_video_reproduce.py`."""
+
+    def test_recreating_before_analysis_is_refused(self, client, video):
+        analysis = _import(client, video)
+        client.post(f"/api/video-analysis/{analysis['id']}/detect")
+        response = client.post(f"/api/video-analysis/{analysis['id']}/recreate", json={"candidates": 1})
+        assert response.status_code == 400
+
+    def test_recreation_generates_candidates_from_analyzed_shots(
+        self, client, video, test_state, create_fake_model_files
+    ):
+        """Every requested candidate must exist as a playable file; a 'failed' status is a failure."""
+        from tests.test_generation import _enable_local_text_encoding
+
+        create_fake_model_files()
+        _enable_local_text_encoding(test_state)
+
+        analysis = _import(client, video)
+        client.post(f"/api/video-analysis/{analysis['id']}/detect")
+        client.post(f"/api/video-analysis/{analysis['id']}/analyze", json={})
+
+        response = client.post(f"/api/video-analysis/{analysis['id']}/recreate", json={"candidates": 2})
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["status"] == "complete"
+        assert payload["shots_generated"] == 6
+        assert payload["video_paths"], "at least one candidate per shot is required"
+        assert len(payload["video_paths"]) >= 6
+        for candidate in payload["video_paths"]:
+            assert Path(candidate).is_file(), candidate
+            assert Path(candidate).stat().st_size > 0, candidate

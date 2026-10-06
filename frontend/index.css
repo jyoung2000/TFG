@@ -64,3 +64,13 @@ body {
   border-color: rgb(var(--accent)) !important;
   background-color: rgb(var(--accent) / 0.1) !important;
 }
+
+/* Small action chips + selects shared by History and Reproduce */
+@layer components {
+  .btn-chip {
+    @apply inline-flex items-center gap-1 px-2 py-1 rounded-md bg-zinc-800 hover:bg-zinc-700 text-[11px] text-zinc-200 disabled:opacity-40 disabled:cursor-not-allowed;
+  }
+  .select-chip {
+    @apply bg-zinc-900 border border-zinc-800 rounded-lg px-2 py-1 text-xs text-zinc-300 focus:outline-none focus:border-violet-600;
+  }
+}

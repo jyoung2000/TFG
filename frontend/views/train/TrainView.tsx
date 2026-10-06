@@ -1,0 +1,687 @@
+import { nextDatasetName } from './datasetName'
+import { WEIGHT_LABELS, trainerChip, weightStatus, type WeightRow } from './trainerWeights'
+import { estimateMinutes, estimateVramMb, maxBlocksToSwap } from './vramEstimate'
+import { PREVIEW_LABELS, weightBadge } from './itemWeight'
+import { newestFirst, whenLabel } from './loraList'
+import { HoverGallery, MediaLightbox, type MediaResolver } from '../../components/HoverGallery'
+import { loraGallery, runGallery, type MediaRef } from '../../lib/hoverGallery'
+import { ThumbVote } from '../../components/ThumbVote'
+import { speedForTaste, tasteApi, type TasteSummary } from '../../lib/taste'
+import { faceSummary } from '../film/assets/faceMatch'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Eye, Pencil, ArrowLeft, Ban, FolderOpen, Images, Layers, Loader2, Play, Plus, RefreshCw, Sparkles, Trash2, Video, Wand2 } from 'lucide-react'
+import { useProjects } from '../../contexts/ProjectContext'
+import { jobsApi } from '../../lib/jobs-api'
+import { logger } from '../../lib/logger'
+import { datasetMediaUrl, trainingApi } from '../../lib/training-api'
+import { videoAnalysisApi } from '../../lib/video-analysis-api'
+import { filmOutputUrl } from '../../lib/film-api'
+import { getBackendCredentials } from '../../lib/backend'
+import { mediaResolver } from '../../lib/media-resolver'
+import type { Job } from '../../types/jobs'
+import { type DatasetItem, LORA_TARGETS, PRESET_LABEL, isRunActive, type Dataset, type DatasetPreset, type LoraEntry, type TrainingConfig, type TrainingRun, type TrainingStatusResponse } from '../../types/training'
+import { LossSparkline } from './LossSparkline'
+
+const selectClass = 'bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs text-zinc-200 focus:outline-none focus:border-violet-600'
+const inputClass = selectClass + ' w-full'
+const POLL_MS = 1500
+
+type Panel = { kind: 'dataset'; id: string } | { kind: 'run'; id: string } | { kind: 'loras' } | { kind: 'empty' }
+
+async function runMediaUrl(runId: string, path: string): Promise<string> {
+  const standalone = mediaResolver()
+  if (standalone) return standalone.output(path)
+  const { url, token } = await getBackendCredentials()
+  return `${url}/api/training/runs/${encodeURIComponent(runId)}/media?path=${encodeURIComponent(path)}&token=${encodeURIComponent(token)}`
+}
+
+const resolveMedia: MediaResolver = ref =>
+  ref.datasetId ? datasetMediaUrl(ref.datasetId, ref.path) : ref.runId ? runMediaUrl(ref.runId, ref.path) : filmOutputUrl(ref.path)
+
+/** The full-screen viewer over some of Train's pictures, opened at one of them. */
+type Viewer = { items: MediaRef[]; index: number }
+
+function TrainLightbox({ viewer, onChange }: { viewer: Viewer | null; onChange: (next: Viewer | null) => void }) {
+  if (!viewer) return null
+  return <MediaLightbox items={viewer.items} resolve={resolveMedia} index={viewer.index} onClose={() => onChange(null)} onIndexChange={index => onChange({ ...viewer, index })} />
+}
+
+function useUrl(resolve: () => Promise<string>, deps: unknown[]): string {
+  const [url, setUrl] = useState('')
+  useEffect(() => {
+    let cancelled = false
+    resolve().then(u => { if (!cancelled) setUrl(u) }).catch(() => { if (!cancelled) setUrl('') })
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps)
+  return url
+}
+
+function DatasetThumb({ datasetId, file, alt, onOpen }: { datasetId: string; file: string; alt: string; onOpen?: () => void }) {
+  const url = useUrl(() => datasetMediaUrl(datasetId, file), [datasetId, file])
+  if (!url) return <div className="w-full h-28 rounded bg-zinc-900" />
+  const image = <img src={url} alt={alt} className="w-full h-28 object-cover rounded bg-zinc-900" />
+  return onOpen ? <button type="button" onClick={onOpen} className="block w-full cursor-zoom-in" aria-label={`Open ${alt || file} full screen`}>{image}</button> : image
+}
+
+function SampleThumb({ runId, path, step, onOpen }: { runId: string; path: string; step: number; onOpen: () => void }) {
+  const url = useUrl(() => runMediaUrl(runId, path), [runId, path])
+  return (
+    <figure className="m-0 w-28 shrink-0">
+      {url
+        ? <button type="button" onClick={onOpen} className="block cursor-zoom-in" aria-label={`Open the sample at step ${step} full screen`}><img src={url} alt={`Sample at step ${step}`} className="w-28 h-28 object-cover rounded bg-zinc-900" /></button>
+        : <div className="w-28 h-28 rounded bg-zinc-900" />}
+      <figcaption className="text-[10px] text-zinc-500 text-center">step {step}</figcaption>
+    </figure>
+  )
+}
+
+/**
+ * A list row's square thumbnail: the LoRA's rendered close-up or the run's last
+ * sample at rest; under the mouse it walks every picture the row has
+ * (lib/hoverGallery.ts). With `onOpen`, a click opens them full screen.
+ */
+function RowThumb({ items, alt, onOpen }: { items: MediaRef[]; alt: string; onOpen?: (index: number) => void }) {
+  return (
+    <HoverGallery items={items} resolve={resolveMedia} alt={alt} onOpen={onOpen} testId="row-thumb"
+      className="w-10 h-10 rounded bg-zinc-900 shrink-0" mediaClassName="object-cover object-top"
+      fallback={<div className="w-10 h-10 rounded bg-zinc-900 shrink-0 flex items-center justify-center" aria-hidden="true"><Layers className="h-3.5 w-3.5 text-zinc-700" /></div>} />
+  )
+}
+
+function HistoryThumb({ job }: { job: Job }) {
+  const first = job.outputs[0]
+  const url = useUrl(() => (first ? filmOutputUrl(first.thumb || first.path) : Promise.resolve('')), [first?.path])
+  return url ? <img src={url} alt={job.title} className="w-10 h-10 object-cover rounded bg-zinc-900" /> : <div className="w-10 h-10 rounded bg-zinc-900" />
+}
+
+function formatEta(seconds: number | null): string {
+  if (seconds === null || !Number.isFinite(seconds)) return ''
+  const m = Math.floor(seconds / 60)
+  const s = Math.round(seconds % 60)
+  return m > 0 ? `${m}m ${s}s` : `${s}s`
+}
+
+/** The Train tab: build a dataset, train a LoRA within 12 GB, keep the registry. */
+export function TrainView() {
+  const { goHome, openHistory, pendingTrainDatasetId, clearPendingTrainDataset } = useProjects()
+  const [status, setStatus] = useState<TrainingStatusResponse | null>(null)
+  const [datasets, setDatasets] = useState<Dataset[]>([])
+  const [runs, setRuns] = useState<TrainingRun[]>([])
+  const [loras, setLoras] = useState<LoraEntry[]>([])
+  const [panel, setPanel] = useState<Panel>({ kind: 'empty' })
+  const [error, setError] = useState('')
+
+  const refresh = useCallback(async () => {
+    const [s, d, r, l] = await Promise.all([trainingApi.status(), trainingApi.listDatasets(), trainingApi.listRuns(), trainingApi.listLoras()])
+    setStatus(s); setDatasets(d); setRuns(r); setLoras(l)
+  }, [])
+
+  useEffect(() => { refresh().catch(e => setError(String(e))) }, [refresh])
+  // Opened from an asset's "LoRA dataset" or Reproduce's "Send to Train": show
+  // that dataset (QA 2026-10-01: Train opened on an empty panel).
+  useEffect(() => {
+    if (!pendingTrainDatasetId) return
+    if (!datasets.some(d => d.id === pendingTrainDatasetId)) return
+    setPanel({ kind: 'dataset', id: pendingTrainDatasetId })
+    clearPendingTrainDataset()
+  }, [pendingTrainDatasetId, datasets, clearPendingTrainDataset])
+
+  const anyActive = runs.some(isRunActive)
+  useEffect(() => {
+    if (!anyActive) return
+    const timer = window.setInterval(() => { trainingApi.listRuns().then(setRuns).catch(e => logger.warn(`runs poll: ${String(e)}`)) }, POLL_MS)
+    return () => window.clearInterval(timer)
+  }, [anyActive])
+  useEffect(() => {
+    // When a run finishes, the registry and status change too.
+    if (!anyActive) refresh().catch(() => undefined)
+  }, [anyActive, refresh])
+
+  const createDataset = useCallback(async () => {
+    try {
+      const dataset = await trainingApi.createDataset({ name: nextDatasetName(datasets.map(d => d.name)), preset: 'character', trigger: '' })
+      await refresh()
+      setPanel({ kind: 'dataset', id: dataset.id })
+    } catch (e) { setError(String(e)) }
+  }, [datasets, refresh])
+
+  const selectedDataset = panel.kind === 'dataset' ? datasets.find(d => d.id === panel.id) ?? null : null
+  const selectedRun = panel.kind === 'run' ? runs.find(r => r.id === panel.id) ?? null : null
+
+  return (
+    <div className="h-full flex flex-col bg-zinc-950 text-zinc-200">
+      <header className="flex items-center gap-3 px-4 py-2 border-b border-zinc-800">
+        <button onClick={goHome} aria-label="Back to home" className="p-1 rounded hover:bg-zinc-800 text-zinc-400"><ArrowLeft className="h-4 w-4" /></button>
+        <h1 className="text-sm font-semibold text-white flex items-center gap-2"><Layers className="h-4 w-4 text-fuchsia-300" /> Train</h1>
+        <div className="flex items-center gap-1.5 flex-wrap ml-2" data-testid="trainer-status">
+          {status?.trainers.map(t => {
+            const chip = trainerChip(t, status.weights)
+            return (
+              <span key={t.id} title={chip.title} className={`text-[10px] px-1.5 py-0.5 rounded border ${chip.tone === 'ready' ? 'border-emerald-800 text-emerald-300' : chip.tone === 'idle' ? 'border-zinc-700 text-zinc-400' : 'border-amber-900 text-amber-400'}`}>
+                {t.name} · {chip.text}
+              </span>
+            )
+          })}
+          {status && <span className="text-[10px] text-zinc-500">{Math.round(status.machine_vram_mb / 1024)} GB card</span>}
+        </div>
+        <div className="ml-auto flex items-center gap-2">
+          {error && <span className="text-[11px] text-red-300 max-w-md truncate" title={error}>{error}</span>}
+          <button onClick={() => refresh().catch(e => setError(String(e)))} aria-label="Refresh" className="p-1 rounded hover:bg-zinc-800 text-zinc-400"><RefreshCw className="h-3.5 w-3.5" /></button>
+        </div>
+      </header>
+      <div className="flex-1 min-h-0 flex">
+        <aside className="w-64 shrink-0 border-r border-zinc-800 overflow-y-auto p-2 space-y-4">
+          <section>
+            <div className="flex items-center justify-between px-2 mb-1">
+              <h2 className="text-[10px] uppercase tracking-wide text-zinc-500 font-semibold">Datasets</h2>
+              <button onClick={() => void createDataset()} className="text-[11px] text-fuchsia-300 hover:text-fuchsia-200 flex items-center gap-0.5"><Plus className="h-3 w-3" /> New</button>
+            </div>
+            {datasets.length === 0 && <p className="px-2 text-xs text-zinc-600">Start with a dataset: a folder, a video, or images from History.</p>}
+            {datasets.map(d => (
+              <button key={d.id} onClick={() => setPanel({ kind: 'dataset', id: d.id })} className={`w-full text-left px-2 py-1.5 rounded text-xs hover:bg-zinc-800 ${panel.kind === 'dataset' && panel.id === d.id ? 'bg-zinc-800 text-white' : 'text-zinc-300'}`} data-testid="dataset-item">
+                <div className="truncate">{d.name || 'Untitled'}</div>
+                <div className="text-[10px] text-zinc-500">{PRESET_LABEL[d.preset]} · {d.items.length} images{d.trigger ? ` · ${d.trigger}` : ''}</div>
+              </button>
+            ))}
+          </section>
+          <section>
+            <h2 className="px-2 mb-1 text-[10px] uppercase tracking-wide text-zinc-500 font-semibold">Training runs</h2>
+            {runs.length === 0 && <p className="px-2 text-xs text-zinc-600">No runs yet.</p>}
+            {newestFirst(runs).map(r => (
+              <button key={r.id} onClick={() => setPanel({ kind: 'run', id: r.id })} className={`w-full text-left px-2 py-1.5 rounded text-xs hover:bg-zinc-800 flex items-center gap-2 ${panel.kind === 'run' && panel.id === r.id ? 'bg-zinc-800 text-white' : 'text-zinc-300'}`} data-testid="run-item">
+                <RowThumb items={runGallery(r, loras, PREVIEW_LABELS)} alt={`${r.name} preview`} />
+                <div className="min-w-0 flex-1">
+                  <div className="truncate">{r.name}</div>
+                  <div className="text-[10px] text-zinc-500 truncate">{r.status}{isRunActive(r) ? ` · ${r.step}/${r.total_steps}` : ''} · {r.config.target}</div>
+                  <div className="text-[10px] text-zinc-600" data-testid="run-when">{whenLabel(r.created_at)}</div>
+                </div>
+              </button>
+            ))}
+          </section>
+          <section>
+            <button onClick={() => setPanel({ kind: 'loras' })} className={`w-full text-left px-2 py-1.5 rounded text-xs hover:bg-zinc-800 ${panel.kind === 'loras' ? 'bg-zinc-800 text-white' : 'text-zinc-300'}`}>
+              <div className="flex items-center gap-1"><Layers className="h-3 w-3" /> LoRA registry</div>
+              <div className="text-[10px] text-zinc-500">{loras.length} LoRA{loras.length === 1 ? '' : 's'}</div>
+            </button>
+          </section>
+        </aside>
+        <main className="flex-1 min-w-0 overflow-y-auto p-4">
+          {panel.kind === 'empty' && (
+            <div className="h-full flex flex-col items-center justify-center text-center max-w-lg mx-auto">
+              <Layers className="h-8 w-8 text-zinc-800 mb-2" />
+              <p className="text-sm text-zinc-300">Teach the image model a character, a style or an object.</p>
+              <p className="text-xs text-zinc-500 mt-1">Build a dataset (a folder, video frames or your own History outputs), let Florence caption it with your trigger word, and train a LoRA that fits this 12 GB card. Video LoRAs (Wan 2.2, LTX-2) need bigger cards and are refused here rather than crashing.</p>
+              <button onClick={() => void createDataset()} className="mt-4 btn-chip bg-fuchsia-700 hover:bg-fuchsia-600 text-white"><Plus className="h-3.5 w-3.5" /> New dataset</button>
+            </div>
+          )}
+          {selectedDataset && <DatasetBuilder key={selectedDataset.id} dataset={selectedDataset} status={status} onChanged={refresh} onStarted={run => { refresh().then(() => setPanel({ kind: 'run', id: run.id })).catch(() => setPanel({ kind: 'run', id: run.id })) }} onDeleted={() => { setPanel({ kind: 'empty' }); void refresh() }} onError={setError} />}
+          {selectedRun && <RunDetail run={selectedRun} dataset={datasets.find(d => d.id === selectedRun.dataset_id) ?? null} onChanged={refresh} onDeleted={() => { setPanel({ kind: 'empty' }); void refresh() }} onResumed={run => setPanel({ kind: 'run', id: run.id })} onOpenHistory={openHistory} onError={setError} />}
+          {panel.kind === 'loras' && <Registry loras={loras} runs={runs} onChanged={refresh} onError={setError} />}
+        </main>
+      </div>
+    </div>
+  )
+}
+
+// ---- dataset builder ------------------------------------------------------------------------
+
+function DatasetBuilder({ dataset, status, onChanged, onStarted, onDeleted, onError }: { dataset: Dataset; status: TrainingStatusResponse | null; onChanged: () => Promise<void>; onStarted: (run: TrainingRun) => void; onDeleted: () => void; onError: (message: string) => void }) {
+  const [busy, setBusy] = useState('')
+  const [meta, setMeta] = useState({ name: dataset.name, preset: dataset.preset, trigger: dataset.trigger })
+  const [target, setTarget] = useState('z_image')
+  // Balanced (default): about twenty minutes, the fast recipe with twice the steps;
+  // Fast: about ten, with more run-to-run swing; Standard: the long run (training_presets).
+  const [speed, setSpeed] = useState<'standard' | 'balanced' | 'fast'>('balanced')
+  // The training settings of the LoRAs the user gave a thumbs up (lib/taste.ts):
+  // shown, and the matching speed pre-selected until the user picks one.
+  const [likedTraining, setLikedTraining] = useState<TasteSummary['training']>(null)
+  const [speedTouched, setSpeedTouched] = useState(false)
+  useEffect(() => {
+    let cancelled = false
+    tasteApi.summary().then(summary => {
+      if (cancelled || !summary.enabled) return
+      setLikedTraining(summary.training)
+      const liked = speedForTaste(summary.training)
+      if (liked) setSpeed(current => (speedTouched ? current : liked))
+    }).catch(() => undefined)
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  const [config, setConfig] = useState<TrainingConfig | null>(null)
+  const [runName, setRunName] = useState('')
+  const [historyJobs, setHistoryJobs] = useState<Job[] | null>(null)
+  const [analyses, setAnalyses] = useState<{ id: string; title: string }[] | null>(null)
+  const [videoFps, setVideoFps] = useState(1)
+
+  useEffect(() => { setMeta({ name: dataset.name, preset: dataset.preset, trigger: dataset.trigger }) }, [dataset.id, dataset.name, dataset.preset, dataset.trigger])
+
+  const run = useCallback(async (label: string, fn: () => Promise<unknown>) => {
+    setBusy(label)
+    try { await fn(); await onChanged() } catch (e) { onError(String(e)) } finally { setBusy('') }
+  }, [onChanged, onError])
+
+  // Saved quietly: marking the screen busy here disabled the button the user was
+  // clicking (leaving the trigger field for Auto-caption lost the click, QA 2026-10-01).
+  const saveMeta = useCallback(() => {
+    if (meta.name === dataset.name && meta.preset === dataset.preset && meta.trigger === dataset.trigger) return
+    trainingApi.updateDataset(dataset.id, meta).then(() => onChanged()).catch(e => onError(String(e)))
+  }, [dataset, meta, onChanged, onError])
+
+  useEffect(() => {
+    if (dataset.items.length === 0) { setConfig(null); return }
+    let cancelled = false
+    trainingApi.suggest(dataset.id, target, speed).then(c => { if (!cancelled) setConfig(c) }).catch(e => onError(String(e)))
+    return () => { cancelled = true }
+  }, [dataset.id, dataset.items.length, dataset.preset, target, speed, onError])
+
+  const addFolder = () => run('Importing', async () => {
+    const folder = await window.electronAPI.showOpenDirectoryDialog({ title: 'Choose an image folder' })
+    if (folder) await trainingApi.importItems(dataset.id, { folder })
+  })
+  const addImages = () => run('Importing', async () => {
+    const paths = await window.electronAPI.showOpenFileDialog({ title: 'Choose images', filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp'] }], properties: ['openFile', 'multiSelections'] })
+    if (paths?.length) await trainingApi.importItems(dataset.id, { image_paths: paths })
+  })
+  const addVideo = () => run('Importing', async () => {
+    const paths = await window.electronAPI.showOpenFileDialog({ title: 'Choose a video', filters: [{ name: 'Video', extensions: ['mp4', 'mov', 'mkv', 'webm'] }], properties: ['openFile'] })
+    if (paths?.[0]) await trainingApi.importItems(dataset.id, { video_path: paths[0], video_fps: videoFps, video_max_frames: 48 })
+  })
+  const loadHistory = () => run('Loading', async () => {
+    const { jobs } = await jobsApi.list({ kind: 'image_gen', status: 'complete', limit: 40 })
+    setHistoryJobs(jobs.filter(j => j.outputs.some(o => o.kind === 'image')))
+    setAnalyses((await videoAnalysisApi.list()).map(a => ({ id: a.id, title: a.title })))
+  })
+  const fromJob = (job: Job) => run('Importing', () => trainingApi.importItems(dataset.id, { job_ids: [job.id] }))
+  const fromAnalysis = (id: string) => run('Importing', () => trainingApi.importItems(dataset.id, { analysis_id: id }))
+
+  const machine = status?.machine_vram_mb ?? 12288
+  const estimate = config ? estimateVramMb(config) : 0
+  const fits = config ? estimate <= machine : true
+  const trainer = status?.trainers.find(t => t.id === config?.trainer)
+  // The target's model files (QA 2026-10-01: nothing set them, so runs failed minutes in).
+  const weights = weightStatus(status?.weights, target)
+  const canTrain = dataset.items.length >= 4 && config !== null && fits && (trainer?.installed ?? false) && weights.ready
+  const blocker = dataset.items.length < 4 ? 'Add at least 4 images (12 or more is the sweet spot).' : !fits ? `Estimated ${(estimate / 1024).toFixed(1)} GB does not fit this ${Math.round(machine / 1024)} GB card${maxBlocksToSwap(config!.target) ? ' - raise Block swap' : ''}.` : trainer && !trainer.installed ? trainer.reason : weights.blocker
+
+  return (
+    <div className="max-w-5xl space-y-4" data-testid="dataset-builder">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
+        <label className="block"><span className="text-[10px] text-zinc-500 uppercase tracking-wide">Name</span><input className={inputClass} value={meta.name} onChange={e => setMeta(m => ({ ...m, name: e.target.value }))} onBlur={saveMeta} aria-label="Dataset name" /></label>
+        <label className="block"><span className="text-[10px] text-zinc-500 uppercase tracking-wide">Preset</span>
+          <select className={inputClass} value={meta.preset} onChange={e => { const preset = e.target.value as DatasetPreset; setMeta(m => ({ ...m, preset })); void run('Saving', () => trainingApi.updateDataset(dataset.id, { preset })) }} aria-label="Dataset preset">
+            {(Object.keys(PRESET_LABEL) as DatasetPreset[]).map(p => <option key={p} value={p}>{PRESET_LABEL[p]}</option>)}
+          </select></label>
+        <label className="block"><span className="text-[10px] text-zinc-500 uppercase tracking-wide">Trigger word</span><input className={inputClass} value={meta.trigger} placeholder="e.g. mara_v1" onChange={e => setMeta(m => ({ ...m, trigger: e.target.value }))} onBlur={saveMeta} aria-label="Trigger word" /></label>
+      </div>
+      <div className="flex items-center gap-1.5 flex-wrap">
+        <button onClick={() => void addFolder()} disabled={!!busy} className="btn-chip"><FolderOpen className="h-3.5 w-3.5" /> Add folder</button>
+        <button onClick={() => void addImages()} disabled={!!busy} className="btn-chip"><Images className="h-3.5 w-3.5" /> Add images</button>
+        <button onClick={() => void addVideo()} disabled={!!busy} className="btn-chip"><Video className="h-3.5 w-3.5" /> Add video frames</button>
+        <label className="text-[10px] text-zinc-500 flex items-center gap-1">at <input type="number" min="0.1" step="0.5" value={videoFps} onChange={e => setVideoFps(Number(e.target.value) || 1)} className={selectClass + ' w-14'} aria-label="Frames per second" /> fps</label>
+        <button onClick={() => void loadHistory()} disabled={!!busy} className="btn-chip"><Sparkles className="h-3.5 w-3.5" /> From History</button>
+        <button onClick={() => void run('Captioning', () => trainingApi.caption(dataset.id))} disabled={!!busy || dataset.items.length === 0} className="btn-chip bg-violet-800/70 hover:bg-violet-700 text-violet-100"><Wand2 className="h-3.5 w-3.5" /> Auto-caption</button>
+        <span className="ml-auto text-[11px] text-zinc-500">{busy ? <span className="flex items-center gap-1"><Loader2 className="h-3 w-3 animate-spin" /> {busy}…</span> : `${dataset.items.length} images${dataset.caption_model ? ` · captioned by ${dataset.caption_model}` : ''}`}</span>
+        <button onClick={() => { if (window.confirm('Delete this dataset and its images?')) void trainingApi.deleteDataset(dataset.id).then(onDeleted).catch(e => onError(String(e))) }} aria-label="Delete dataset" className="p-1 text-zinc-600 hover:text-red-300"><Trash2 className="h-3.5 w-3.5" /></button>
+      </div>
+      {historyJobs && (
+        <section className="rounded border border-zinc-800 p-2 space-y-1" data-testid="history-picker">
+          <div className="flex items-center justify-between"><span className="text-[10px] text-zinc-500 uppercase tracking-wide">Recent image outputs</span><button onClick={() => { setHistoryJobs(null); setAnalyses(null) }} className="text-[10px] text-zinc-500 hover:text-zinc-300">close</button></div>
+          {historyJobs.length === 0 && <p className="text-xs text-zinc-600">No finished image jobs in History yet.</p>}
+          <div className="grid grid-cols-2 lg:grid-cols-3 gap-1">
+            {historyJobs.map(job => (
+              <button key={job.id} onClick={() => void fromJob(job)} disabled={!!busy} className="flex items-center gap-2 text-left text-xs px-1.5 py-1 rounded hover:bg-zinc-800">
+                <HistoryThumb job={job} /><span className="truncate flex-1">{job.title}</span><Plus className="h-3 w-3 text-zinc-500" />
+              </button>
+            ))}
+          </div>
+          {analyses && analyses.length > 0 && (
+            <>
+              <span className="text-[10px] text-zinc-500 uppercase tracking-wide">Analysed videos (all frames)</span>
+              <div className="flex flex-wrap gap-1">{analyses.map(a => <button key={a.id} onClick={() => void fromAnalysis(a.id)} disabled={!!busy} className="btn-chip">{a.title || a.id}</button>)}</div>
+            </>
+          )}
+        </section>
+      )}
+      {dataset.items.length > 0 && (
+        <section>
+          <h2 className="text-[10px] uppercase tracking-wide text-zinc-500 font-semibold mb-1">Review captions</h2>
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2" data-testid="dataset-grid">
+            {dataset.items.map(item => <ItemCard key={item.id} datasetId={dataset.id} item={item} disabled={!!busy} onSave={caption => run('Saving', () => trainingApi.updateItem(dataset.id, item.id, caption))} onRemove={() => run('Removing', () => trainingApi.removeItem(dataset.id, item.id))} />)}
+          </div>
+        </section>
+      )}
+      <section className="rounded border border-zinc-800 p-3 space-y-2" data-testid="train-panel">
+        <div className="flex items-center gap-2 flex-wrap">
+          <h2 className="text-[10px] uppercase tracking-wide text-zinc-500 font-semibold">Train a LoRA</h2>
+          <label className="text-[11px] text-zinc-400 flex items-center gap-1">Target
+            <select className={selectClass} value={target} onChange={e => setTarget(e.target.value)} aria-label="Training target">
+              {LORA_TARGETS.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
+            </select>
+          </label>
+          <label className="text-[11px] text-zinc-400 flex items-center gap-1">Speed
+            <select className={selectClass} value={speed} onChange={e => { setSpeedTouched(true); setSpeed(e.target.value as 'standard' | 'balanced' | 'fast') }} aria-label="Training speed" data-testid="training-speed">
+              <option value="balanced">Balanced · about 15 min</option>
+              <option value="fast">Fast · about 10 min, less consistent</option>
+              <option value="standard">Standard · about 35 min</option>
+            </select>
+          </label>
+          {likedTraining && (
+            <span className="text-[10px] text-emerald-300/80" data-testid="liked-training" title="From your thumbs up on LoRAs">
+              You liked LoRAs trained at {likedTraining.resolution} px · {likedTraining.steps} steps
+            </span>
+          )}
+          <input className={selectClass + ' w-56'} placeholder={`${dataset.name || 'Dataset'} · ${target}`} value={runName} onChange={e => setRunName(e.target.value)} aria-label="Run name" />
+        </div>
+        {config && (
+          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-2 text-[11px]">
+            {([['rank', 'Rank'], ['steps', 'Steps'], ['learning_rate', 'LR'], ['resolution', 'Resolution'], ['blocks_to_swap', 'Block swap'], ['save_every', 'Save every'], ['sample_every', 'Sample every']] as const).map(([key, label]) => (
+              <label key={key} className="block"><span className="text-[10px] text-zinc-500 uppercase tracking-wide">{label}</span>
+                <input type="number" step={key === 'learning_rate' ? '0.00001' : '1'} className={inputClass} value={config[key]} onChange={e => setConfig(c => (c ? { ...c, [key]: Number(e.target.value) } : c))} aria-label={label} /></label>
+            ))}
+            <label className="flex items-center gap-1 text-zinc-400 self-end"><input type="checkbox" checked={config.fp8} onChange={e => setConfig(c => (c ? { ...c, fp8: e.target.checked } : c))} /> fp8</label>
+            <div className="col-span-2 md:col-span-4 lg:col-span-7 text-[11px] text-zinc-500">
+              {config.trainer} · estimated <span className={fits ? 'text-emerald-300' : 'text-amber-300'}>{(estimate / 1024).toFixed(1)} GB</span> of {Math.round(machine / 1024)} GB · buckets {config.buckets.join('/')}{estimateMinutes(config) ? ` · about ${estimateMinutes(config)} min` : ''}{maxBlocksToSwap(config.target) ? ` · Block swap up to ${maxBlocksToSwap(config.target)} (about 0.2 GB of VRAM each, slower)` : ''}
+            </div>
+          </div>
+        )}
+        {weights.rows.length > 0 && <TrainerWeights key={target} target={target} rows={weights.rows} ready={weights.ready} onSaved={onChanged} onError={onError} />}
+        <div className="flex items-center gap-2">
+          <button onClick={() => run('Starting', async () => { const started = await trainingApi.start({ dataset_id: dataset.id, name: runName, config }); onStarted(started) })} disabled={!canTrain || !!busy} className="btn-chip bg-fuchsia-700 hover:bg-fuchsia-600 text-white disabled:opacity-40" data-testid="start-training"><Play className="h-3.5 w-3.5" /> Start training</button>
+          {blocker && <span className="text-[11px] text-amber-300" data-testid="train-blocker">{blocker}</span>}
+        </div>
+      </section>
+    </div>
+  )
+}
+
+/** Trainer settings: the model files the trainer needs for `target`, each with its state. */
+function TrainerWeights({ target, rows, ready, onSaved, onError }: { target: string; rows: WeightRow[]; ready: boolean; onSaved: () => Promise<void>; onError: (message: string) => void }) {
+  const [open, setOpen] = useState(!ready)
+  const [values, setValues] = useState<Record<string, string>>(() => Object.fromEntries(rows.map(r => [r.key, r.path])))
+  const [saving, setSaving] = useState(false)
+  const browse = async (key: string) => {
+    const paths = await window.electronAPI.showOpenFileDialog({ title: `Choose the ${WEIGHT_LABELS[key] ?? key} file`, filters: [{ name: 'Model weights', extensions: ['safetensors', 'pt', 'pth', 'ckpt', 'bin', 'gguf'] }], properties: ['openFile'] })
+    if (paths?.[0]) setValues(v => ({ ...v, [key]: paths[0] }))
+  }
+  const save = async () => {
+    setSaving(true)
+    try { await trainingApi.setWeights(target, values); await onSaved() }
+    catch (e) { onError(e instanceof Error ? e.message : String(e)) }
+    finally { setSaving(false) }
+  }
+  const badge = (state: WeightRow['state'], key: string) =>
+    key === 'name_or_path' && state === 'unset' ? <span className="text-zinc-500">default</span>
+      : state === 'ok' ? <span className="text-emerald-300">found</span>
+      : state === 'missing' ? <span className="text-red-300">file missing</span>
+      : <span className="text-amber-300">not set</span>
+  return (
+    <div className="rounded border border-zinc-800 p-2 space-y-1.5" data-testid="trainer-settings">
+      <button onClick={() => setOpen(o => !o)} className="flex items-center gap-1 text-[10px] uppercase tracking-wide text-zinc-500 font-semibold" aria-expanded={open}>
+        Trainer settings · model files {ready ? <span className="normal-case text-emerald-300">ready</span> : <span className="normal-case text-amber-300">needed</span>}
+      </button>
+      {open && (
+        <>
+          {rows.map(row => (
+            <div key={row.key} className="flex items-center gap-2 text-[11px]">
+              <span className="w-32 text-zinc-400">{row.label}</span>
+              <input className={inputClass + ' flex-1'} value={values[row.key] ?? ''} onChange={e => setValues(v => ({ ...v, [row.key]: e.target.value }))} placeholder={row.key === 'name_or_path' ? 'model name or folder (optional)' : 'path to the .safetensors file'} aria-label={row.label} />
+              {row.key !== 'name_or_path' && <button onClick={() => void browse(row.key)} className="btn-chip" aria-label={`Browse for ${row.label}`}><FolderOpen className="h-3 w-3" /> Browse</button>}
+              <span className="w-20 text-right">{badge(row.state, row.key)}</span>
+            </div>
+          ))}
+          <div className="flex items-center gap-2">
+            <button onClick={() => void save()} disabled={saving} className="btn-chip" data-testid="save-trainer-weights">{saving ? <Loader2 className="h-3 w-3 animate-spin" /> : null} Save model files</button>
+            <span className="text-[10px] text-zinc-500">The trainer reads these files; the musubi-tuner docs list which to use for each model.</span>
+          </div>
+        </>
+      )}
+    </div>
+  )
+}
+
+function ItemCard({ datasetId, item, disabled, onSave, onRemove }: { datasetId: string; item: Dataset['items'][number]; disabled: boolean; onSave: (caption: string) => void; onRemove: () => void }) {
+  const [caption, setCaption] = useState(item.caption)
+  useEffect(() => setCaption(item.caption), [item.caption])
+  const [viewer, setViewer] = useState<Viewer | null>(null)
+  return (
+    <div className="rounded border border-zinc-800 bg-zinc-900/40 p-1.5 space-y-1" data-testid="dataset-item-card">
+      <TrainLightbox viewer={viewer} onChange={setViewer} />
+      <div className="relative">
+        <DatasetThumb datasetId={datasetId} file={item.file} alt={item.caption || item.file}
+          onOpen={() => setViewer({ items: [{ kind: 'image', path: item.file, datasetId, label: item.caption || item.file }], index: 0 })} />
+        {weightBadge(item) && <span className="absolute top-1 left-1 px-1 py-0.5 rounded bg-black/70 text-[10px] text-fuchsia-200" title="How often an epoch trains on this image, and its face match to the photo" data-testid="item-weight">{weightBadge(item)}</span>}
+        <span className="absolute top-1 left-1 text-[9px] px-1 rounded bg-black/60 text-zinc-300">{item.source}{item.edited ? ' · edited' : ''}</span>
+        <button onClick={onRemove} disabled={disabled} aria-label={`Remove ${item.file}`} className="absolute top-1 right-1 p-0.5 rounded bg-black/60 text-zinc-400 hover:text-red-300"><Trash2 className="h-3 w-3" /></button>
+      </div>
+      <textarea value={caption} onChange={e => setCaption(e.target.value)} onBlur={() => { if (caption !== item.caption) onSave(caption) }} rows={2} placeholder="Caption (auto-caption fills this)" aria-label={`Caption for ${item.file}`} className="w-full bg-zinc-950 border border-zinc-800 rounded px-1.5 py-1 text-[11px] text-zinc-300 resize-none focus:outline-none focus:border-violet-600" />
+    </div>
+  )
+}
+
+// ---- run detail -----------------------------------------------------------------------------
+
+function RunDetail({ run, dataset, onChanged, onDeleted, onResumed, onOpenHistory, onError }: { run: TrainingRun; dataset: Dataset | null; onChanged: () => Promise<void>; onDeleted: () => void; onResumed: (run: TrainingRun) => void; onOpenHistory: () => void; onError: (message: string) => void }) {
+  const active = isRunActive(run)
+  const pct = run.total_steps ? Math.round((100 * run.step) / run.total_steps) : 0
+  const canResume = !active && run.checkpoints.length > 0 && run.status !== 'complete'
+  const samples = useMemo(() => run.samples.slice(-8), [run.samples])
+  const [viewer, setViewer] = useState<Viewer | null>(null)
+  const sampleRefs = useMemo(() => samples.map((s): MediaRef => ({ kind: 'image', path: s.path, runId: run.id, label: `step ${s.step}` })), [samples, run.id])
+  return (
+    <div className="max-w-4xl space-y-4" data-testid="run-detail">
+      <div className="flex items-center gap-2 flex-wrap">
+        <h2 className="text-sm font-semibold text-white">{run.name}</h2>
+        <span className={`text-xs ${run.status === 'failed' ? 'text-red-300' : active ? 'text-fuchsia-300' : run.status === 'complete' ? 'text-emerald-300' : 'text-zinc-400'}`} data-testid="run-status">{run.status}{run.phase && run.phase !== run.status ? ` · ${run.phase}` : ''}</span>
+        <span className="text-[11px] text-zinc-500">{run.config.target} · {run.config.trainer} · rank {run.config.rank} · {dataset ? `${dataset.items.length} images` : ''}{run.trigger ? ` · trigger “${run.trigger}”` : ''}</span>
+        <div className="ml-auto flex gap-1.5">
+          {active && <button onClick={() => trainingApi.cancel(run.id).then(() => onChanged()).catch(e => onError(String(e)))} className="btn-chip text-red-300"><Ban className="h-3.5 w-3.5" /> Cancel</button>}
+          {canResume && <button onClick={() => trainingApi.start({ dataset_id: run.dataset_id, resume_run_id: run.id, name: `${run.name} (resumed)` }).then(r => { onResumed(r); return onChanged() }).catch(e => onError(String(e)))} className="btn-chip"><Play className="h-3.5 w-3.5" /> Resume from step {run.checkpoints.length ? run.checkpoints[run.checkpoints.length - 1].match(/-(\d+)\.safetensors$/)?.[1]?.replace(/^0+/, '') ?? '' : ''}</button>}
+          {run.job_id && <button onClick={onOpenHistory} className="btn-chip">Open in History</button>}
+          {!active && <button onClick={() => { if (window.confirm('Delete this run? Its LoRA stays in the registry.')) void trainingApi.deleteRun(run.id).then(onDeleted).catch(e => onError(String(e))) }} aria-label="Delete run" className="p-1 text-zinc-600 hover:text-red-300"><Trash2 className="h-3.5 w-3.5" /></button>}
+        </div>
+      </div>
+      <div className="h-1.5 rounded bg-zinc-800 overflow-hidden" role="progressbar" aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100} aria-label="Training progress">
+        <div className={`h-full transition-all ${run.status === 'failed' ? 'bg-red-500' : 'bg-fuchsia-500'}`} style={{ width: `${Math.max(active ? 2 : 0, pct)}%` }} />
+      </div>
+      <div className="flex items-center gap-4 text-[11px] text-zinc-400 flex-wrap">
+        <span data-testid="run-step">step {run.step}/{run.total_steps}</span>
+        {active && run.eta_seconds !== null && <span>ETA {formatEta(run.eta_seconds)}</span>}
+        {run.peak_vram_mb !== null && <span>peak {(run.peak_vram_mb / 1024).toFixed(1)} GB</span>}
+        {run.loss_history.length > 0 && <span>loss {run.loss_history[run.loss_history.length - 1].toFixed(4)}</span>}
+        {run.error && <span className="text-red-300">{run.error}</span>}
+      </div>
+      <LossSparkline values={run.loss_history} width={480} height={72} />
+      {samples.length > 0 && (
+        <section>
+          <h3 className="text-[10px] uppercase tracking-wide text-zinc-500 font-semibold mb-1">Samples</h3>
+          <div className="flex gap-2 overflow-x-auto pb-1" data-testid="sample-grid">{samples.map((s, i) => <SampleThumb key={s.path} runId={run.id} path={s.path} step={s.step} onOpen={() => setViewer({ items: sampleRefs, index: i })} />)}</div>
+          <TrainLightbox viewer={viewer} onChange={setViewer} />
+        </section>
+      )}
+      {run.status === 'complete' && run.lora_path && (
+        <p className="text-xs text-emerald-300">LoRA saved to the registry: <code className="text-zinc-300">{run.lora_path}</code>. It now shows in the LoRA pickers for {run.config.target}.</p>
+      )}
+      {run.checkpoints.length > 0 && <p className="text-[11px] text-zinc-500">{run.checkpoints.length} checkpoint{run.checkpoints.length === 1 ? '' : 's'} kept for resume.</p>}
+      {run.log_tail && <details className="text-[11px]"><summary className="text-zinc-500 cursor-pointer">Trainer log</summary><pre className="mt-1 max-h-48 overflow-auto bg-zinc-900 rounded p-2 text-zinc-400 whitespace-pre-wrap">{run.log_tail}</pre></details>}
+    </div>
+  )
+}
+
+// ---- registry -------------------------------------------------------------------------------
+
+function Registry({ loras, runs, onChanged, onError }: { loras: LoraEntry[]; runs: TrainingRun[]; onChanged: () => Promise<void>; onError: (message: string) => void }) {
+  const [target, setTarget] = useState('z_image')
+  const [busy, setBusy] = useState(false)
+  const importLora = async () => {
+    setBusy(true)
+    try {
+      const paths = await window.electronAPI.showOpenFileDialog({ title: 'Choose a LoRA (.safetensors)', filters: [{ name: 'LoRA', extensions: ['safetensors'] }], properties: ['openFile'] })
+      if (paths?.[0]) { await trainingApi.importLora({ path: paths[0], target }); await onChanged() }
+    } catch (e) { onError(String(e)) } finally { setBusy(false) }
+  }
+  return (
+    <div className="max-w-4xl space-y-3" data-testid="lora-registry">
+      <div className="flex items-center gap-2 flex-wrap">
+        <h2 className="text-sm font-semibold text-white">LoRA registry</h2>
+        <span className="text-[11px] text-zinc-500">Trained here or imported. Each knows its base model and trigger, so pickers only offer what fits.</span>
+        <div className="ml-auto flex items-center gap-1.5">
+          <select className={selectClass} value={target} onChange={e => setTarget(e.target.value)} aria-label="Import target">{LORA_TARGETS.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}</select>
+          <button onClick={() => void importLora()} disabled={busy} className="btn-chip"><Plus className="h-3.5 w-3.5" /> Import .safetensors</button>
+        </div>
+      </div>
+      <DownloadFromUrl target={target} onChanged={onChanged} />
+      {loras.length === 0 && <p className="text-xs text-zinc-600">Nothing yet. Finish a training run, import a file, or paste a link above.</p>}
+      <div className="space-y-1">
+        {newestFirst(loras).map(entry => <LoraRow key={entry.id} entry={entry} runs={runs} onChanged={onChanged} onError={onError} />)}
+      </div>
+    </div>
+  )
+}
+
+/** Paste a Hugging Face / Civitai / direct .safetensors link; the backend
+ *  downloads it as a History job and registers it for the chosen target. */
+function DownloadFromUrl({ target, onChanged }: { target: string; onChanged: () => Promise<void> }) {
+  const [url, setUrl] = useState('')
+  const [trigger, setTrigger] = useState('')
+  const [apiKey, setApiKey] = useState('')
+  const [job, setJob] = useState<Job | null>(null)
+  const [error, setError] = useState('')
+  const running = job !== null && (job.status === 'queued' || job.status === 'running')
+  const jobId = running && job ? job.id : ''
+
+  useEffect(() => {
+    if (!jobId) return
+    const timer = window.setInterval(() => {
+      jobsApi.get(jobId).then(({ job: fresh }) => {
+        setJob(fresh)
+        if (fresh.status === 'complete') { setUrl(''); setTrigger(''); setApiKey(''); void onChanged() }
+      }).catch(() => undefined)
+    }, 1000)
+    return () => window.clearInterval(timer)
+  }, [jobId, onChanged])
+
+  const start = async () => {
+    setError('')
+    setJob(null)
+    try {
+      const { job_id } = await trainingApi.downloadLora({ url: url.trim(), target, trigger: trigger.trim(), api_key: apiKey })
+      const { job: fresh } = await jobsApi.get(job_id)
+      setJob(fresh)
+      if (fresh.status === 'complete') { setUrl(''); setTrigger(''); setApiKey(''); void onChanged() }
+    } catch (e) { setError(e instanceof Error ? e.message : String(e)) }
+  }
+
+  return (
+    <div className="rounded border border-zinc-800 bg-zinc-900/40 p-2 space-y-1.5" data-testid="lora-url-panel">
+      <div className="flex items-center gap-2 flex-wrap">
+        <input className={selectClass + ' flex-1 min-w-64'} placeholder="Paste a Hugging Face or Civitai link, or a direct .safetensors URL" value={url} onChange={e => setUrl(e.target.value)} aria-label="LoRA link" data-testid="lora-url-input" disabled={running} />
+        <input className={selectClass + ' w-28'} placeholder="trigger word" value={trigger} onChange={e => setTrigger(e.target.value)} aria-label="Trigger for the downloaded LoRA" disabled={running} />
+        <input type="password" className={selectClass + ' w-44'} placeholder="API key (used once, not saved)" value={apiKey} onChange={e => setApiKey(e.target.value)} aria-label="API key, used once and never saved" disabled={running} />
+        <button onClick={() => void start()} disabled={running || !url.trim()} className="btn-chip" data-testid="lora-url-download">
+          {running ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />} Download
+        </button>
+      </div>
+      <p className="text-[10px] text-zinc-600">Downloads into the {target} LoRA folder and registers it. Gated files may need your Civitai or Hugging Face key — it is sent once with this request and never stored.</p>
+      {running && job && <p className="text-[11px] text-violet-300" data-testid="lora-url-status">{job.phase || 'starting'}{job.progress > 0 ? ` · ${job.progress}%` : ''}</p>}
+      {job?.status === 'failed' && <p className="text-[11px] text-red-300" data-testid="lora-url-status">{job.error || 'Download failed'}</p>}
+      {job?.status === 'cancelled' && <p className="text-[11px] text-zinc-500" data-testid="lora-url-status">Download cancelled.</p>}
+      {job?.status === 'complete' && <p className="text-[11px] text-emerald-300" data-testid="lora-url-status">Added to the registry.</p>}
+      {error && <p className="text-[11px] text-red-300" data-testid="lora-url-status">{error}</p>}
+    </div>
+  )
+}
+
+function LoraRow({ entry, runs, onChanged, onError }: { entry: LoraEntry; runs: TrainingRun[]; onChanged: () => Promise<void>; onError: (message: string) => void }) {
+  const [draft, setDraft] = useState({ name: entry.name, trigger: entry.trigger, default_multiplier: entry.default_multiplier })
+  useEffect(() => setDraft({ name: entry.name, trigger: entry.trigger, default_multiplier: entry.default_multiplier }), [entry])
+  // Saves on blur or Enter; says so (user, 2026-10-02: nothing showed the name
+  // and trigger were editable, nor that an edit had been kept).
+  const [saved, setSaved] = useState('')
+  const save = () => {
+    if (draft.name === entry.name && draft.trigger === entry.trigger && draft.default_multiplier === entry.default_multiplier) return
+    if (!draft.name.trim()) { onError('A LoRA needs a name'); setDraft(d => ({ ...d, name: entry.name })); return }
+    trainingApi.updateLora(entry.id, draft).then(() => { setSaved('Saved'); window.setTimeout(() => setSaved(''), 2000); return onChanged() }).catch(e => onError(String(e)))
+  }
+  const onEnter = (e: React.KeyboardEvent<HTMLInputElement>) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur() }
+  // The preview: the standard views rendered from the trigger alone, and the
+  // images the LoRA was trained on with their weights (user, 2026-10-02).
+  const [open, setOpen] = useState(false)
+  const [rendering, setRendering] = useState(false)
+  const [viewer, setViewer] = useState<Viewer | null>(null)
+  const gallery = loraGallery(entry, runs, PREVIEW_LABELS)
+  const [items, setItems] = useState<DatasetItem[]>([])
+  useEffect(() => {
+    if (!open || !entry.dataset_id) { setItems([]); return }
+    let live = true
+    trainingApi.getDataset(entry.dataset_id).then(d => { if (live) setItems(d.items) }).catch(() => { if (live) setItems([]) })
+    return () => { live = false }
+  }, [open, entry.dataset_id])
+  const renderPreview = async () => {
+    setRendering(true)
+    try { await trainingApi.previewLora(entry.id); setOpen(true); await onChanged() }
+    catch (e) { onError(e instanceof Error ? e.message : String(e)) }
+    finally { setRendering(false) }
+  }
+  return (
+    <div className="rounded border border-zinc-800 text-xs" data-testid="lora-row">
+    <TrainLightbox viewer={viewer} onChange={setViewer} />
+    <div className="grid grid-cols-[1fr_auto_auto_auto_auto_auto_auto] items-center gap-2 px-2 py-1.5">
+      <div className="min-w-0 flex items-center gap-1.5">
+        <RowThumb items={gallery} alt={`${entry.name} preview`} onOpen={index => setViewer({ items: gallery, index })} />
+        <Pencil className="h-3 w-3 text-zinc-600 shrink-0" aria-hidden="true" />
+        <div className="min-w-0 flex-1">
+        <input className="bg-transparent text-zinc-100 w-full focus:outline-none border-b border-dashed border-zinc-700 focus:border-violet-600" value={draft.name} onChange={e => setDraft(d => ({ ...d, name: e.target.value }))} onBlur={save} onKeyDown={onEnter} aria-label={`Name of ${entry.name}`} title="Click to rename; Enter or click away saves" data-testid="lora-name" />
+        <div className="text-[10px] text-zinc-500 truncate" title={entry.file}>{entry.target}{entry.imported ? ' · imported' : entry.run_id ? ' · trained here' : ''} · {(entry.size_bytes / 1_048_576).toFixed(1)} MB{saved && <span className="ml-2 text-emerald-300" role="status" data-testid="lora-saved">{saved}</span>}</div>
+        </div>
+      </div>
+      <label className="text-[10px] text-zinc-500">trigger <input className={selectClass + ' w-28'} value={draft.trigger} onChange={e => setDraft(d => ({ ...d, trigger: e.target.value }))} onBlur={save} onKeyDown={onEnter} aria-label={`Trigger for ${entry.name}`} title="The word that calls this LoRA in a prompt; Enter or click away saves" data-testid="lora-trigger" /></label>
+      <label className="text-[10px] text-zinc-500">strength <input type="number" step="0.05" min="0" max="2" className={selectClass + ' w-16'} value={draft.default_multiplier} onChange={e => setDraft(d => ({ ...d, default_multiplier: Number(e.target.value) }))} onBlur={save} aria-label={`Default strength for ${entry.name}`} /></label>
+      <span className="text-[10px] text-zinc-600 whitespace-nowrap" data-testid="lora-when">{whenLabel(entry.created_at)}</span>
+      <ThumbVote target={{ kind: 'lora', subject: entry.id, prompt: entry.trigger, model: entry.target }} />
+      <button onClick={() => setOpen(o => !o)} className="btn-chip" aria-expanded={open} data-testid="lora-preview-toggle"><Eye className="h-3.5 w-3.5" /> Preview{entry.preview_paths?.length ? ` (${entry.preview_paths.length})` : ''}</button>
+      <button onClick={() => { if (window.confirm(`Delete ${entry.name}? The file is removed from the LoRA folder.`)) void trainingApi.deleteLora(entry.id).then(() => onChanged()).catch(e => onError(String(e))) }} aria-label={`Delete ${entry.name}`} className="p-1 text-zinc-600 hover:text-red-300"><Trash2 className="h-3.5 w-3.5" /></button>
+    </div>
+    {open && (
+      <div className="border-t border-zinc-800 px-2 py-2 space-y-2" data-testid="lora-preview">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-[10px] uppercase tracking-wide text-zinc-500 font-semibold">LoRA preview · from the trigger alone</span>
+          <button onClick={() => void renderPreview()} disabled={rendering} className="btn-chip" data-testid="lora-render-preview">{rendering ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />} {entry.preview_paths?.length ? 'Re-render preview' : 'Render preview'}</button>
+          {entry.preview_scores && <span className="text-[10px] text-zinc-500">{faceSummary(entry.preview_scores).replace(/^ · /, '')}</span>}
+        </div>
+        {entry.preview_paths?.length ? (
+          <div className="flex gap-2 overflow-x-auto">
+            {entry.preview_paths.map((path, i) => <PreviewThumb key={path} path={path} label={PREVIEW_LABELS[i] ?? `View ${i + 1}`} score={entry.preview_scores?.[i] ?? null} onOpen={() => setViewer({ items: gallery, index: i })} />)}
+          </div>
+        ) : <p className="text-[10px] text-zinc-600">Nothing rendered yet - Render preview makes a close-up, a medium shot and two full-body views with only the trigger word.</p>}
+        {items.length > 0 && (
+          <>
+            <span className="text-[10px] uppercase tracking-wide text-zinc-500 font-semibold">Trained on {items.length} images</span>
+            <div className="flex gap-1.5 overflow-x-auto" data-testid="lora-training-images">
+              {items.map((item, i) => (
+                <figure key={item.id} className="m-0 w-20 shrink-0 relative">
+                  <DatasetThumb datasetId={entry.dataset_id} file={item.file} alt={item.caption}
+                    onOpen={() => setViewer({ items: items.map((each): MediaRef => ({ kind: 'image', path: each.file, datasetId: entry.dataset_id, label: each.caption || each.file })), index: i })} />
+                  {weightBadge(item) && <figcaption className="text-[9px] text-fuchsia-200 text-center truncate">{weightBadge(item)}</figcaption>}
+                </figure>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+    )}
+    </div>
+  )
+}
+
+function PreviewThumb({ path, label, score, onOpen }: { path: string; label: string; score: number | null; onOpen: () => void }) {
+  const url = useUrl(() => filmOutputUrl(path), [path])
+  return (
+    <figure className="m-0 w-28 shrink-0">
+      {url
+        ? <button type="button" onClick={onOpen} className="block cursor-zoom-in" aria-label={`Open the ${label} preview full screen`} data-testid="lora-preview-image"><img src={url} alt={label} className="w-28 h-36 object-cover object-top rounded bg-zinc-900" /></button>
+        : <div className="w-28 h-36 rounded bg-zinc-900" />}
+      <figcaption className="text-[10px] text-zinc-500 text-center">{label}{score !== null ? ` · ${score.toFixed(2)}` : ''}</figcaption>
+    </figure>
+  )
+}

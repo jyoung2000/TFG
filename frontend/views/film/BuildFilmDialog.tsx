@@ -1,3 +1,4 @@
+import { dropIndex, dropIndexKey } from './indexKeys'
 import { useCallback, useMemo, useState } from 'react'
 import { ChevronDown, ChevronRight, Loader2, RefreshCw, Sparkles, Wand2, X } from 'lucide-react'
 import { useAppSettings } from '../../contexts/AppSettingsContext'
@@ -107,8 +108,12 @@ export function BuildFilmDialog({ onClose, onApplied }: { onClose: () => void; o
         ? { ...p, scenes: p.scenes.map((s, i) => (i === sceneIndex ? { ...s, shots: s.shots.filter((_, j) => j !== shotIndex) } : s)) }
         : p,
     )
-  const removeScene = (sceneIndex: number) =>
+  const removeScene = (sceneIndex: number) => {
     setPlan(p => (p ? { ...p, scenes: p.scenes.filter((_, i) => i !== sceneIndex) } : p))
+    // The unchecked / expanded marks are by position: move them with the scenes (QA 2026-10-01).
+    setExcluded(prev => dropIndex(prev, sceneIndex))
+    setOpenScenes(prev => dropIndexKey(prev, sceneIndex))
+  }
 
   const totalShots = plan?.scenes.reduce((n, s) => n + s.shots.length, 0) ?? 0
   const selectedShots = selectedPlan?.scenes.reduce((n, s) => n + s.shots.length, 0) ?? 0

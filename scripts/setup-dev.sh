@@ -36,7 +36,10 @@ ok "pnpm install complete"
 echo ""
 echo "Setting up Python backend venv..."
 cd "$PROJECT_DIR/backend"
-uv sync --extra dev
+# `test` is included on purpose: the documented gates (docs/TESTING.md, README)
+# run `pytest` and `pyright` from this venv, and `uv sync` prunes any extra that
+# is not requested, so a dev-only sync leaves `python -m pytest` unrunnable.
+uv sync --extra dev --extra test
 ok "uv sync complete"
 
 echo ""
@@ -48,6 +51,15 @@ if [ "$SYSTEM_NAME" = "Darwin" ]; then
 else
   echo "Verifying PyTorch CUDA support..."
   .venv/bin/python -c "import torch; cuda=torch.cuda.is_available(); print(f'CUDA available: {cuda}')" || true
+  # WanGP gets its OWN environment (Wan2GP/.venv), never the backend venv —
+  # `uv sync` owns that one and removes anything not in uv.lock. Skip with
+  # TFG_SKIP_WANGP_VENV=1 (e.g. CI without a GPU or network to the CUDA index).
+  if [ "${TFG_SKIP_WANGP_VENV:-0}" != "1" ]; then
+    echo ""
+    echo "Setting up the WanGP environment (Wan2GP/.venv)..."
+    bash "$SCRIPT_DIR/ensure-wangp-venv.sh"
+    ok "WanGP environment ready"
+  fi
 fi
 
 echo ""

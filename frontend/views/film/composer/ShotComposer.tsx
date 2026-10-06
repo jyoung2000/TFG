@@ -31,16 +31,22 @@ import {
   Unlock,
   Video,
   X,
+  Undo2,
+  Redo2,
+  Layers,
 } from 'lucide-react'
 import { Button } from '../../../components/ui/button'
 import { useFilm } from '../../../contexts/FilmContext'
-import { filmApi, filmOutputUrl } from '../../../lib/film-api'
+import { filmApi, filmMediaUrl, filmOutputUrl } from '../../../lib/film-api'
+import { analysisFrameUrl, videoAnalysisApi } from '../../../lib/video-analysis-api'
+import { sceneApi } from '../../../lib/scene-api'
 import { logger } from '../../../lib/logger'
 import type {
   CameraMove,
   CompositionKeyframe,
   CompositionObject,
   CompositionObjectType,
+  CompositionScene,
   FigureVariant,
   FilmAsset,
   FilmScene,
@@ -51,15 +57,44 @@ import type {
 } from '../../../types/film'
 import { CAMERA_ANGLES, CAMERA_ELEVATIONS, CAMERA_MOVES, COMPOSITIONS, SHOT_SIZES } from '../../../types/film'
 import { useShotWorkflow } from '../useShotWorkflow'
-import { ComposerScene, SHOT_CAMERA_ID, type GizmoMode } from './composerScene'
-import { JOINT_LABELS, JOINT_NAMES, mirrorPose } from './figure'
+import { ComposerScene, SHOT_CAMERA_ID, type GizmoMode, type PoseTool } from './composerScene'
+import type { DragReadout } from './dragReadout'
+import { JOINT_LABELS, JOINT_NAMES, mirrorPose, type JointName } from './figure'
 import { mergePoseLibrary, type PoseEntry } from './poses'
+import { libraryCategories } from './blockout/moves'
+import { renderDeliver, type DeliverPass } from './blockout/deliver'
+import { validateKeyframes } from './keyframes'
+import { CompositionHistory } from './history'
+import { layoutFromComposition, underlaySource } from './sceneFromAnalysis'
+import { LORA_ANGLES } from './angleViews'
+import { PosePreviewPanel } from './PosePreviewPanel'
+import { FramingTracker } from './framingTracker'
+import { faceSummary } from '../assets/faceMatch'
+
+/** One generated angle, through the authenticated film media route. */
+function AngleThumb({ projectId, path }: { projectId: string; path: string }) {
+  const [url, setUrl] = useState('')
+  useEffect(() => {
+    let active = true
+    filmMediaUrl(projectId, path).then(u => { if (active) setUrl(u) }).catch(() => undefined)
+    return () => { active = false }
+  }, [projectId, path])
+  return <div className="aspect-[3/4] rounded bg-zinc-800 overflow-hidden">{url && <img src={url} alt={path} className="w-full h-full object-cover" />}</div>
+}
+
+/** The composer on an asset rather than a storyboard shot (Assets tab). */
+export interface ComposerStudio {
+  title: string
+  onSave: (composition: CompositionScene) => Promise<void>
+}
 
 interface ShotComposerProps {
   projectId: string
   scene: FilmScene
   shot: FilmShot
   onClose: () => void
+  /** Asset studio: save to the asset, no shot capture / deliver / render. */
+  studio?: ComposerStudio
 }
 
 let objectCounter = 0
@@ -181,7 +216,7 @@ function NumberField({
   )
 }
 
-export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerProps) {
+export function ShotComposer({ projectId, scene, shot, onClose, studio }: ShotComposerProps) {
   const { film, refresh, isGenerating } = useFilm()
   const workflow = useShotWorkflow(scene, shot)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -193,14 +228,33 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
   const [framing, setFraming] = useState<ShotFraming>(shot.framing)
   const [cameraMove, setCameraMove] = useState<CameraMove>(shot.camera_move)
   const [moveIntensity, setMoveIntensity] = useState(1)
+  // The framing the 3D scene already shows: re-applying it would re-solve the
+  // camera and wipe its keyframes (QA 2026-10-01, see framingTracker.ts).
+  const framingTracker = useRef(new FramingTracker())
+  // Current values for callbacks bound once at mount (the drag history).
+  const framingRef = useRef(framing)
+  framingRef.current = framing
+  const cameraMoveRef = useRef(cameraMove)
+  cameraMoveRef.current = cameraMove
+  const moveIntensityRef = useRef(moveIntensity)
+  moveIntensityRef.current = moveIntensity
   const [previewT, setPreviewT] = useState(0)
+  const previewSecondsRef = useRef(0)
   const [motionPreviewOn, setMotionPreviewOn] = useState(false)
   const [selectedJoint, setSelectedJoint] = useState<string>('l_arm')
   const [jointEuler, setJointEuler] = useState<Vec3>([0, 0, 0])
-  const [busy, setBusy] = useState<'save' | 'capture' | 'close' | null>(null)
+  const [busy, setBusy] = useState<'save' | 'capture' | 'close' | 'angles' | null>(null)
+  // Multi-angle set (LoRA): which angles, and what the last run produced.
+  const [angleChoice, setAngleChoice] = useState<Set<string>>(() => new Set(LORA_ANGLES.map(v => v.name)))
+  const [angleResults, setAngleResults] = useState<string[]>([])
   const [statusNote, setStatusNote] = useState('')
   const [poseNameDraft, setPoseNameDraft] = useState('')
   const [gizmoMode, setGizmoModeState] = useState<GizmoMode>('translate')
+  // Pose mode: arrows move the selected part, rings turn its joint.
+  const [poseTool, setPoseToolState] = useState<PoseTool>('move')
+  // What is being dragged and how far / why it stopped (kept a moment after release).
+  const [poseReadout, setPoseReadout] = useState<DragReadout | null>(null)
+  const readoutTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameDraft, setRenameDraft] = useState('')
   const [transformTick, setTransformTick] = useState(0)
@@ -209,6 +263,22 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
   const [compare, setCompare] = useState<[number, number] | null>(null)
   const [genWarnings, setGenWarnings] = useState<string[]>([])
   const dirtyRef = useRef(false)
+  // Phase 6: reference underlay, camera words from the 3D layout, undo history, Deliver.
+  const underlay = underlaySource(shot)
+  const [underlayOn, setUnderlayOn] = useState(underlay !== null)
+  const [underlayOpacity, setUnderlayOpacity] = useState(0.55)
+  const [underlayReady, setUnderlayReady] = useState(false)
+  const [cameraWords, setCameraWords] = useState('')
+  const [libraryPreset, setLibraryPreset] = useState('')
+  const [historyTick, setHistoryTick] = useState(0)
+  const historyRef = useRef<CompositionHistory<CompositionScene> | null>(null)
+  // An undo/redo restore refreshes the panels but is not an edit: recording
+  // it (a reload can differ by rounding) wiped the redo stack (MEASURED, r32).
+  const restoringRef = useRef(false)
+  const [deliverPasses, setDeliverPasses] = useState<Record<DeliverPass, boolean>>({ clean: true, depth: true, normal: false })
+  const [deliverSize, setDeliverSize] = useState<'640' | '1280'>('640')
+  const [deliverProgress, setDeliverProgress] = useState<{ done: number; total: number } | null>(null)
+  const [deliverResult, setDeliverResult] = useState<{ control_video: string; depth_video: string; package_dir: string } | null>(null)
 
   const markDirty = useCallback(() => {
     dirtyRef.current = true
@@ -238,20 +308,39 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
     const composer = new ComposerScene(canvas)
     sceneRef.current = composer
     composer.onSelect = id => setSelectedId(id)
+    composer.onJointSelect = joint => setSelectedJoint(joint)
+    composer.onGizmoModeChange = mode => setGizmoModeState(mode)
     composer.onTransformChange = () => {
       markDirty()
       setTransformTick(t => t + 1)
+    }
+    composer.onPoseReadout = readout => {
+      if (readoutTimer.current) clearTimeout(readoutTimer.current)
+      readoutTimer.current = null
+      if (readout) setPoseReadout(readout)
+      else readoutTimer.current = setTimeout(() => setPoseReadout(null), 2500)
     }
     composer.onCameraManualChange = () => {
       markDirty()
       setTransformTick(t => t + 1)
       setFraming(f => (f.camera_mode === 'manual' ? f : { ...f, camera_mode: 'manual' }))
     }
+    composer.onDragStateChange = dragging => {
+      const history = historyRef.current
+      if (!history) return
+      if (dragging) history.begin()
+      else {
+        history.end(composer.serialize(framingRef.current, cameraMoveRef.current, shot.duration_seconds, moveIntensityRef.current))
+        setHistoryTick(t => t + 1)
+      }
+    }
 
     // Hydrate from the saved composition, or seed from the shot's cast.
     if (shot.composition && shot.composition.objects.length > 0) {
       composer.hydrate(shot.composition)
+      framingTracker.current.loaded(shot.composition.framing)
       setCameraMove(shot.composition.camera_move)
+      setMoveIntensity(shot.composition.move_intensity ?? 1)
       setFraming(shot.composition.framing)
     } else {
       shot.characters.forEach((shotCharacter, index) => {
@@ -263,10 +352,13 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
       })
       if (shot.characters.length === 0) composer.addObject(newObject('figure', 'Character 1'))
       composer.applyFraming(shot.framing)
+      framingTracker.current.loaded(shot.framing)
     }
     setObjects(composer.snapshotObjects())
     dirtyRef.current = false
     setDirty(false)
+    historyRef.current = new CompositionHistory<CompositionScene>(composer.serialize(shot.framing, shot.camera_move, shot.duration_seconds, shot.composition?.move_intensity ?? 1), 100)
+    setHistoryTick(t => t + 1)
 
     const resize = () => {
       const rect = container.getBoundingClientRect()
@@ -283,9 +375,18 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [shot.id])
 
-  // Re-solve the camera whenever framing presets change (manual mode keeps the camera).
+  // Re-solve the camera when the user changes the framing (manual mode keeps
+  // the camera). A framing the scene was loaded or restored with is already in
+  // place - re-applying it would wipe the camera keyframes. A change is an edit:
+  // marked unsaved and recorded for undo.
   useEffect(() => {
-    sceneRef.current?.applyFraming(framing)
+    const composer = sceneRef.current
+    if (!composer || !framingTracker.current.changed(framing)) return
+    composer.applyFraming(framing)
+    if (cameraMoveRef.current !== 'static') composer.applyCameraMove(cameraMoveRef.current, shot.duration_seconds, moveIntensityRef.current)
+    markDirty()
+    setTransformTick(t => t + 1)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [framing])
 
   // Sync joint sliders when the selection or joint changes.
@@ -293,7 +394,8 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
     if (!selectedId || selectedId === SHOT_CAMERA_ID) return
     const pose = sceneRef.current?.readPoseOf(selectedId) ?? {}
     setJointEuler(pose[selectedJoint] ?? [0, 0, 0])
-  }, [selectedId, selectedJoint])
+    // Also after every edit: a gizmo rotation in pose mode moves the sliders.
+  }, [selectedId, selectedJoint, transformTick])
 
   // Motion preview scrubber drives the camera + keyframed objects.
   useEffect(() => {
@@ -307,6 +409,96 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
     }
   }, [motionPreviewOn, previewT, shot.duration_seconds, transformTick])
 
+  // Reference underlay in the viewfinder: the analysed frame for a shot that
+  // came from a video, else the shot's capture (a reproduced image).
+  useEffect(() => {
+    const composer = sceneRef.current
+    const source = underlaySource(shot)
+    if (!composer) return
+    if (!underlayOn || !source) {
+      composer.underlay.clear()
+      setUnderlayReady(false)
+      return
+    }
+    let active = true
+    void (async () => {
+      try {
+        let url = ''
+        if (source.kind === 'analysis') {
+          const analysis = await videoAnalysisApi.get(source.analysisId)
+          const analysed = analysis.shots.find(s => s.id === source.shotId)
+          const frame = analysed?.frames.find(f => f.role === 'start') ?? analysed?.frames[0]
+          if (!frame || !active) return
+          url = await analysisFrameUrl(source.analysisId, frame.path)
+        } else {
+          url = await filmMediaUrl(projectId, source.path)
+        }
+        if (!active) return
+        await composer.underlay.load(url)
+        if (active) setUnderlayReady(true)
+      } catch (e) {
+        logger.warn(`Underlay unavailable: ${e}`)
+        if (active) setUnderlayReady(false)
+      }
+    })()
+    return () => { active = false }
+  }, [underlayOn, shot.source_ref, shot.capture_path, shot.id, projectId])
+
+  useEffect(() => {
+    const composer = sceneRef.current
+    if (composer) composer.underlay.opacity = underlayOpacity
+  }, [underlayOpacity])
+
+  // The prompt follows the 3D scene: camera words are re-derived on every edit (debounced).
+  useEffect(() => {
+    const composer = sceneRef.current
+    if (!composer) return
+    const timer = window.setTimeout(() => {
+      const layout = layoutFromComposition(composer.serialize(framing, cameraMove, shot.duration_seconds, moveIntensityRef.current))
+      sceneApi.describe(layout).then(r => setCameraWords(r.camera_sentence)).catch(() => undefined)
+    }, 350)
+    return () => window.clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [transformTick, objects.length])
+
+  // Undo history: one step per edit outside a drag (drags are grouped by the gizmo callbacks).
+  useEffect(() => {
+    const composer = sceneRef.current
+    const history = historyRef.current
+    if (!composer || !history || transformTick === 0) return
+    if (restoringRef.current) {
+      restoringRef.current = false
+      return
+    }
+    history.commit(composer.serialize(framing, cameraMove, shot.duration_seconds, moveIntensityRef.current))
+    setHistoryTick(t => t + 1)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [transformTick])
+
+  const restoreSnapshot = useCallback((snapshot: CompositionScene | null) => {
+    const composer = sceneRef.current
+    if (!composer || !snapshot) return
+    composer.hydrate(snapshot)
+    // Undo/redo keep your place: the same object (and joint, posing) stays selected.
+    if (selectedId && snapshot.objects.some(o => o.id === selectedId)) {
+      const isFigure = snapshot.objects.some(o => o.id === selectedId && o.type === 'figure')
+      if (gizmoMode === 'pose' && isFigure) composer.selectJoint(selectedId, selectedJoint as JointName)
+      else composer.select(selectedId)
+    }
+    setCameraMove(snapshot.camera_move)
+    setMoveIntensity(snapshot.move_intensity ?? 1)
+    framingTracker.current.loaded(snapshot.framing)
+    setFraming(snapshot.framing)
+    syncObjects()
+    markDirty()
+    setHistoryTick(t => t + 1)
+    restoringRef.current = true
+    setTransformTick(t => t + 1)
+  }, [syncObjects, markDirty, selectedId, selectedJoint, gizmoMode])
+
+  const undo = useCallback(() => restoreSnapshot(historyRef.current?.undo() ?? null), [restoreSnapshot])
+  const redo = useCallback(() => restoreSnapshot(historyRef.current?.redo() ?? null), [restoreSnapshot])
+
   // Keyboard: W/E/R gizmo modes, Delete removes, Escape deselects.
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -314,9 +506,24 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT')) return
       const composer = sceneRef.current
       if (!composer) return
-      if (event.key === 'w' || event.key === 'W') setGizmoMode('translate')
+      if ((event.ctrlKey || event.metaKey) && (event.key === 'z' || event.key === 'Z')) {
+        event.preventDefault()
+        if (event.shiftKey) redo()
+        else undo()
+        return
+      }
+      if ((event.ctrlKey || event.metaKey) && (event.key === 'y' || event.key === 'Y')) {
+        event.preventDefault()
+        redo()
+        return
+      }
+      // Posing, W / E switch between the arrows and the rings on the body part.
+      if (gizmoMode === 'pose' && (event.key === 'w' || event.key === 'W')) setPoseTool('move')
+      else if (gizmoMode === 'pose' && (event.key === 'e' || event.key === 'E')) setPoseTool('rotate')
+      else if (event.key === 'w' || event.key === 'W') setGizmoMode('translate')
       else if (event.key === 'e' || event.key === 'E') setGizmoMode('rotate')
       else if (event.key === 'r' || event.key === 'R') setGizmoMode('scale')
+      else if (event.key === 't' || event.key === 'T') setGizmoMode('pose')
       else if (event.key === 'Escape') composer.select(null)
       else if ((event.key === 'Delete' || event.key === 'Backspace') && selectedId && selectedId !== SHOT_CAMERA_ID) {
         removeObject(selectedId)
@@ -325,7 +532,7 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedId])
+  }, [selectedId, undo, redo, gizmoMode])
 
   // Playable URLs for completed versions.
   useEffect(() => {
@@ -347,6 +554,11 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
   const setGizmoMode = useCallback((mode: GizmoMode) => {
     sceneRef.current?.setGizmoMode(mode)
     setGizmoModeState(mode)
+  }, [])
+
+  const setPoseTool = useCallback((tool: PoseTool) => {
+    sceneRef.current?.setPoseTool(tool)
+    setPoseToolState(tool)
   }, [])
 
   // ---- Object actions ---------------------------------------------------
@@ -462,6 +674,14 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
     [selectedId, selectedJoint],
   )
 
+  const endSliderDrag = useCallback(() => {
+    const composer = sceneRef.current
+    const history = historyRef.current
+    if (!composer || !history) return
+    history.end(composer.serialize(framing, cameraMove, shot.duration_seconds, moveIntensityRef.current))
+    setHistoryTick(t => t + 1)
+  }, [framing, cameraMove, shot.duration_seconds])
+
   const updateJoint = useCallback(
     (axis: 0 | 1 | 2, value: number) => {
       if (!selectedId) return
@@ -506,6 +726,7 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
   const cameraKeyframes = sceneRef.current?.cameraKeyframes ?? []
   const objectTracks = sceneRef.current?.objectKeyframes() ?? []
   void transformTick
+  void historyTick
 
   const updateSelectedTransform = useCallback(
     (patch: { x?: number; y?: number; z?: number; yawDeg?: number; scale?: number }) => {
@@ -541,15 +762,21 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
     if (cameraMove !== 'static' && composer.cameraKeyframes.length < 2) {
       composer.applyCameraMove(cameraMove, shot.duration_seconds, moveIntensity)
     }
-    return composer.serialize(framing, cameraMove, shot.duration_seconds)
+    return composer.serialize(framing, cameraMove, shot.duration_seconds, moveIntensity)
   }, [framing, cameraMove, moveIntensity, shot.duration_seconds])
 
   const saveComposition = useCallback(async (): Promise<boolean> => {
     const composition = serialize()
     if (!composition) return false
+    const invalid = validateKeyframes(composition.camera?.keyframes ?? [], shot.duration_seconds)
+    if (invalid.length) {
+      setStatusNote(`Fix the keyframes first: ${invalid[0].message}`)
+      return false
+    }
     setBusy('save')
     try {
-      await filmApi.updateShot(projectId, scene.id, shot.id, { composition })
+      if (studio) await studio.onSave(composition)
+      else await filmApi.updateShot(projectId, scene.id, shot.id, { composition })
       await refresh()
       dirtyRef.current = false
       setDirty(false)
@@ -562,7 +789,37 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
     } finally {
       setBusy(null)
     }
-  }, [serialize, projectId, scene.id, shot.id, refresh])
+  }, [serialize, projectId, scene.id, shot.id, refresh, studio])
+
+  // Multi-angle shots of a character for consistency / LoRA training: the
+  // posed figure is rendered from every chosen angle (pose, camera, framing)
+  // and each render guides an image of the asset's person from that angle.
+  // A multi-angle set needs a figure linked to a character asset (QA 2026-10-01:
+  // a prop's studio offered it, and it could only ever fail).
+  const hasAngleFigure = objects.some(o => o.type === 'figure' && !!o.asset_id)
+  const generateAngles = useCallback(async () => {
+    const composer = sceneRef.current
+    const figure = objects.find(o => o.type === 'figure' && o.id === selectedId && o.asset_id) ?? objects.find(o => o.type === 'figure' && o.asset_id)
+    if (!composer || !figure?.asset_id) {
+      setStatusNote('Add a figure linked to a character asset first')
+      return
+    }
+    const views = LORA_ANGLES.filter(v => angleChoice.has(v.name))
+    if (!views.length) return
+    setBusy('angles')
+    try {
+      const shots = views.map(v => ({ name: v.name, view: v.words, guide_base64: composer.captureAngle(figure.id, v) ?? '' }))
+      setStatusNote(`Rendering ${shots.length} angles of ${figure.name} (about ${Math.max(1, Math.round((shots.length * 9) / 60))} min)…`)
+      const result = await filmApi.angleSet(projectId, figure.asset_id, { shots })
+      setAngleResults(result.reference_paths)
+      await refresh()
+      setStatusNote(`Added ${result.reference_paths.length} angles to ${result.asset.name}'s references${faceSummary(result.face_scores)}`)
+    } catch (e) {
+      setStatusNote(`Multi-angle set failed: ${e instanceof Error ? e.message : e}`)
+    } finally {
+      setBusy(null)
+    }
+  }, [objects, selectedId, angleChoice, projectId, refresh])
 
   const captureShot = useCallback(async (): Promise<boolean> => {
     const composer = sceneRef.current
@@ -586,6 +843,73 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
       setBusy(null)
     }
   }, [serialize, projectId, scene.id, shot.id, refresh])
+
+  /** Keyframes are checked before anything leaves the composer (Blocking-Room rules). */
+  const keyframeIssues = useCallback((): string[] => {
+    const composer = sceneRef.current
+    if (!composer) return []
+    const issues = validateKeyframes(composer.cameraKeyframes, shot.duration_seconds)
+    for (const track of composer.objectKeyframes()) issues.push(...validateKeyframes(track.keyframes, shot.duration_seconds))
+    return issues.map(i => i.message)
+  }, [shot.duration_seconds])
+
+  /** Fold the 3D scene back into the analysed shot's ShotSpec so the prompt follows it. */
+  const applyToSpec = useCallback(async () => {
+    const ref = shot.source_ref
+    const composition = serialize()
+    if (!ref?.analysis_id || !composition) return
+    setBusy('save')
+    try {
+      await sceneApi.updateShotSpec(ref.analysis_id, ref.analysis_shot_id, { composition, locks: { layout3d: true } })
+      await filmApi.updateShot(projectId, scene.id, shot.id, { composition })
+      await refresh()
+      dirtyRef.current = false
+      setDirty(false)
+      setStatusNote('3D layout written to the shot spec — the prompt now follows this scene')
+    } catch (e) {
+      setStatusNote(`Apply failed: ${e instanceof Error ? e.message : e}`)
+    } finally {
+      setBusy(null)
+    }
+  }, [serialize, shot.source_ref, shot.id, projectId, scene.id, refresh])
+
+  const deliver = useCallback(async () => {
+    const composer = sceneRef.current
+    const composition = serialize()
+    if (!composer || !composition) return
+    const issues = keyframeIssues()
+    if (issues.length) {
+      setStatusNote(`Fix the keyframes first: ${issues[0]}`)
+      return
+    }
+    setBusy('save')
+    setDeliverResult(null)
+    const width = deliverSize === '1280' ? 1280 : 640
+    const height = Math.round((width * 9) / 16)
+    const fps = shot.generation.fps || 24
+    try {
+      const frames = await renderDeliver(
+        { seek: t => { previewSecondsRef.current = t }, renderPass: (pass, w, h) => composer.renderPassAt(previewSecondsRef.current, pass, w, h) },
+        { durationSeconds: shot.duration_seconds, fps, width, height, passes: deliverPasses, onProgress: (done, total) => setDeliverProgress({ done, total }) },
+      )
+      composer.setPreviewTime(null)
+      const result = await filmApi.deliverShot(projectId, scene.id, shot.id, {
+        ...frames,
+        prompt: shot.visual_prompt,
+        metadata: { camera_words: cameraWords, keyframes: composition.camera?.keyframes.length ?? 0, camera_move: cameraMove, duration_seconds: shot.duration_seconds, passes: deliverPasses },
+        composition,
+      })
+      setDeliverResult({ control_video: result.control_video, depth_video: result.depth_video, package_dir: result.package_dir })
+      await refresh()
+      setStatusNote('Deliver package written — reference and depth passes are the next render’s control signals')
+    } catch (e) {
+      logger.error(`Deliver failed: ${e}`)
+      setStatusNote(`Deliver failed: ${e instanceof Error ? e.message : e}`)
+    } finally {
+      setDeliverProgress(null)
+      setBusy(null)
+    }
+  }, [serialize, keyframeIssues, deliverSize, deliverPasses, shot.generation.fps, shot.duration_seconds, shot.visual_prompt, projectId, scene.id, shot.id, cameraWords, cameraMove, refresh])
 
   const closeComposer = useCallback(async () => {
     if (dirtyRef.current && busy === null) {
@@ -640,7 +964,7 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
         <Aperture className="h-4 w-4 text-violet-400" />
         <div className="flex-1 min-w-0">
           <div className="text-sm font-semibold text-white truncate">
-            Shot Composer — {scene.title} · {shot.title || `Shot ${shot.order + 1}`}
+            {studio ? `Asset studio — ${studio.title}` : <>Shot Composer — {scene.title} · {shot.title || `Shot ${shot.order + 1}`}</>}
             {dirty && <span className="ml-2 text-[10px] font-normal text-amber-300">unsaved</span>}
           </div>
           <div className="text-[11px] text-zinc-500">
@@ -653,11 +977,13 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
               ['translate', Move, 'Move (W)'],
               ['rotate', RotateCw, 'Rotate (E)'],
               ['scale', Maximize2, 'Scale (R)'],
+              ['pose', PersonStanding, 'Pose (T): click a body part, drag it or its arrows'],
             ] as const
           ).map(([mode, Icon, title]) => (
             <button
               key={mode}
               title={title}
+              aria-label={title}
               aria-pressed={gizmoMode === mode}
               onClick={() => setGizmoMode(mode)}
               className={`p-1.5 ${gizmoMode === mode ? 'bg-violet-600/70 text-white' : 'text-zinc-400 hover:bg-zinc-800'}`}
@@ -671,14 +997,21 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
             {statusNote || workflow.note}
           </span>
         )}
+        <div className="flex items-center rounded-lg border border-zinc-700 overflow-hidden" role="group" aria-label="History">
+          <button onClick={undo} disabled={!historyRef.current?.canUndo} aria-label="Undo (Ctrl+Z)" title="Undo (Ctrl+Z)" className="p-1.5 text-zinc-400 hover:bg-zinc-800 disabled:opacity-40"><Undo2 className="h-3.5 w-3.5" /></button>
+          <button onClick={redo} disabled={!historyRef.current?.canRedo} aria-label="Redo (Ctrl+Y)" title="Redo (Ctrl+Y or Ctrl+Shift+Z)" className="p-1.5 text-zinc-400 hover:bg-zinc-800 disabled:opacity-40"><Redo2 className="h-3.5 w-3.5" /></button>
+        </div>
+        {cameraWords && <span className="hidden lg:inline text-[11px] text-violet-300 truncate max-w-[18rem]" data-testid="composer-camera-words" title="Camera language derived from the 3D scene">{cameraWords}</span>}
         <Button size="sm" variant="secondary" onClick={() => void saveComposition()} disabled={anyBusy} className="gap-1.5">
           {busy === 'save' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
           Save
         </Button>
-        <Button size="sm" onClick={() => void captureShot()} disabled={anyBusy} className="gap-1.5">
-          {busy === 'capture' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Camera className="h-3.5 w-3.5" />}
-          Capture Shot
-        </Button>
+        {!studio && (
+          <Button size="sm" onClick={() => void captureShot()} disabled={anyBusy} className="gap-1.5">
+            {busy === 'capture' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Camera className="h-3.5 w-3.5" />}
+            Capture Shot
+          </Button>
+        )}
         <button
           onClick={() => void closeComposer()}
           aria-label="Close composer"
@@ -716,6 +1049,7 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
                   setRenameDraft(object.name)
                 }}
               >
+                <span className="h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-black/40" style={{ background: object.color }} aria-hidden data-testid="object-swatch" />
                 {objectIcon(object.type)}
                 {renamingId === object.id ? (
                   <input
@@ -818,6 +1152,25 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
         {/* Center: viewport */}
         <div ref={containerRef} className="flex-1 relative min-w-0">
           <canvas ref={canvasRef} className="absolute inset-0 w-full h-full" />
+          {poseReadout && (
+            <div
+              role="status"
+              data-testid="pose-readout"
+              className={`absolute top-3 left-1/2 -translate-x-1/2 z-10 max-w-[70%] truncate rounded-full px-3 py-1 text-[11px] font-medium shadow-lg pointer-events-none ${
+                poseReadout.tone === 'blocked' ? 'bg-red-950/90 text-red-200 border border-red-700/60' : poseReadout.tone === 'hint' ? 'bg-zinc-900/90 text-zinc-200 border border-zinc-700' : 'bg-violet-950/90 text-violet-100 border border-violet-600/60'
+              }`}
+            >
+              {poseReadout.text}
+            </div>
+          )}
+          <PosePreviewPanel
+            projectId={projectId}
+            shot={shot}
+            film={film}
+            getComposer={() => sceneRef.current}
+            editTick={transformTick}
+            prompt={shot.visual_prompt || shot.description}
+          />
           {selectedObject && selectedTransform && (
             <div className="absolute top-3 left-3 bg-zinc-900/85 rounded-lg px-2.5 py-2 border border-zinc-700 space-y-1.5">
               <div className="flex items-center gap-2 text-[11px] text-zinc-300">
@@ -849,7 +1202,7 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
               <div className="flex items-center gap-2">
                 <NumberField label="Yaw" value={toDeg(selectedTransform.rotation[1])} step={5} onChange={yawDeg => updateSelectedTransform({ yawDeg })} disabled={selectedObject.locked} />
                 <NumberField label="Sc" value={selectedTransform.scale[1]} step={0.05} min={0.05} max={20} onChange={scale => updateSelectedTransform({ scale })} disabled={selectedObject.locked} />
-                <div className="flex items-center gap-0.5">
+                <div className="flex items-center gap-0.5" data-testid="yaw-steps">
                   {[-45, -15, 15, 45].map(deg => (
                     <button
                       key={deg}
@@ -862,6 +1215,51 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
                   ))}
                 </div>
               </div>
+              {gizmoMode !== 'pose' && selectedObject.type === 'figure' && (
+                <button onClick={() => setGizmoMode('pose')} className="w-full text-left text-[10px] text-violet-300 hover:text-violet-200" data-testid="pose-entry-hint">
+                  Double-click a limb or press T to pose · drag hands and feet into place
+                </button>
+              )}
+              {gizmoMode === 'pose' && selectedObject.type === 'figure' && (
+                <div className="border-t border-zinc-700 pt-1.5 space-y-1" data-testid="joint-panel">
+                  <div className="flex items-center gap-2 text-[11px]">
+                    <PersonStanding className="h-3.5 w-3.5 text-violet-300" />
+                    <span className="font-medium text-violet-200" data-testid="joint-name">{JOINT_LABELS[selectedJoint as JointName] ?? selectedJoint}</span>
+                    <button
+                      onClick={() => {
+                        if (!selectedId) return
+                        sceneRef.current?.resetJoint(selectedId, selectedJoint as JointName)
+                        // The body may not let the joint go all the way back: show where it is.
+                        setJointEuler(sceneRef.current?.readPoseOf(selectedId)[selectedJoint] ?? [0, 0, 0])
+                      }}
+                      disabled={selectedObject.locked}
+                      className="ml-auto px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 disabled:opacity-40 text-[10px] text-zinc-200"
+                    >
+                      Reset joint
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {(['X', 'Y', 'Z'] as const).map((axis, index) => (
+                      <NumberField key={axis} label={`${axis}°`} value={jointEuler[index as 0 | 1 | 2]} step={5} min={-180} max={180} onChange={value => updateJoint(index as 0 | 1 | 2, value)} disabled={selectedObject.locked} />
+                    ))}
+                  </div>
+                  <div className="flex items-center gap-1" role="group" aria-label="Pose handles">
+                    {([['move', 'Arrows (W)', 'Arrows move the part along the figure: up / down, forward / back, left / right'], ['rotate', 'Rings (E)', 'Rings turn the joint']] as const).map(([tool, label, title]) => (
+                      <button
+                        key={tool}
+                        onClick={() => setPoseTool(tool)}
+                        title={title}
+                        aria-pressed={poseTool === tool}
+                        data-testid={`pose-tool-${tool}`}
+                        className={`flex-1 px-1.5 py-0.5 rounded text-[10px] ${poseTool === tool ? 'bg-violet-600/70 text-white' : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700'}`}
+                      >
+                        {label}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-[10px] text-zinc-500" data-testid="pose-drag-hint">Drag the arrows, or the hand, foot or limb itself · joints bend only as a body does, and limbs stop at the body · Ctrl+Z / Ctrl+Y</p>
+                </div>
+              )}
             </div>
           )}
           {cameraSelected && (
@@ -909,7 +1307,8 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
             </div>
           )}
           {queueInfo.active && (
-            <div className="absolute bottom-3 left-3 flex items-center gap-2 bg-zinc-900/90 rounded-lg px-3 py-2 border border-violet-800 text-[11px] text-violet-200">
+            // Bottom-right: the pose preview owns bottom-left (QA 2026-10-01: they overlapped).
+            <div className="absolute bottom-3 right-3 z-20 flex items-center gap-2 bg-zinc-900/90 rounded-lg px-3 py-2 border border-violet-800 text-[11px] text-violet-200" data-testid="composer-rendering">
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
               Rendering this shot{queueInfo.progress != null ? ` · ${Math.round(queueInfo.progress)}%` : ''}
               {queueInfo.phase ? ` · ${queueInfo.phase}` : ''}
@@ -997,6 +1396,39 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
             </div>
           </Section>
 
+          <Section title="3D scene" defaultOpen badge={shot.source_ref?.analysis_id ? 'from video' : undefined}>
+            <div className="space-y-2" data-testid="composer-3d-scene">
+              {underlay && (
+                <>
+                  <label className="flex items-center gap-2 text-[11px] text-zinc-400">
+                    <input type="checkbox" checked={underlayOn} onChange={event => setUnderlayOn(event.target.checked)} data-testid="composer-underlay" />
+                    {underlay.kind === 'capture' ? 'Shot image' : 'Reference frame'} in the viewfinder{underlayReady ? '' : underlayOn ? ' (loading…)' : ''}
+                  </label>
+                  {underlayOn && (
+                    <label className="block text-[11px] text-zinc-400">
+                      Underlay opacity — {(underlayOpacity * 100).toFixed(0)}%
+                      <input type="range" min={0} max={1} step={0.05} value={underlayOpacity} onChange={event => setUnderlayOpacity(Number(event.target.value))} className="w-full mt-1" aria-label="Underlay opacity" />
+                    </label>
+                  )}
+                </>
+              )}
+              {shot.source_ref?.analysis_id ? (
+                <>
+                  <Button size="sm" variant="secondary" disabled={anyBusy} onClick={() => void applyToSpec()} className="w-full gap-1.5">
+                    <Layers className="h-3.5 w-3.5" /> Apply 3D layout to the shot spec
+                  </Button>
+                  <p className="text-[10px] text-zinc-600">Locks the layout on the analysed shot and rewrites its camera language, so Reproduce renders follow this scene.</p>
+                </>
+              ) : (
+                <p className="text-[11px] text-zinc-600">Shots built from an analysed video open here pre-seeded with figures, props and the solved camera, with the source frame as an underlay.</p>
+              )}
+              <div className="text-[11px] text-zinc-400">
+                <span className="text-[10px] text-zinc-500 uppercase tracking-wide">Camera reads as</span>
+                <div className="text-violet-300">{cameraWords || '—'}</div>
+              </div>
+            </div>
+          </Section>
+
           <Section title="Camera" badge={framing.camera_mode === 'manual' ? 'manual' : 'preset'}>
             <label className="block text-[11px] text-zinc-400">
               Field of view — {framing.fov_deg.toFixed(0)}° (≈{Math.round(1039 / framing.fov_deg)}mm)
@@ -1032,6 +1464,10 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
           <Section title="Pose">
             {selectedObject && sceneRef.current?.getEntity(selectedObject.id)?.rig ? (
               <div className="space-y-2">
+                <p className="text-[10px] text-zinc-500" data-testid="pose-hint">
+                  <button onClick={() => setGizmoMode('pose')} className={`underline ${gizmoMode === 'pose' ? 'text-violet-300' : 'text-zinc-300'}`}>Pose mode (T)</button>: click a limb in the
+                  viewport, then drag the rings to bend it. Ctrl+Z undoes, Ctrl+Y redoes.
+                </p>
                 <div className="flex flex-wrap gap-1">
                   {poseLibrary.map(entry => (
                     <button
@@ -1070,7 +1506,10 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
                 <div className="border-t border-zinc-800 pt-2 space-y-1">
                   <select
                     value={selectedJoint}
-                    onChange={event => setSelectedJoint(event.target.value)}
+                    onChange={event => {
+                      setSelectedJoint(event.target.value)
+                      sceneRef.current?.setPoseJoint(event.target.value as JointName)
+                    }}
                     className="w-full bg-zinc-800 border border-zinc-700 rounded px-1.5 py-1 text-xs text-zinc-200"
                     aria-label="Joint"
                   >
@@ -1085,11 +1524,15 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
                       <span className="w-3">{axis}</span>
                       <input
                         type="range"
-                        min={-160}
-                        max={160}
+                        min={-180}
+                        max={180}
                         step={1}
                         value={jointEuler[index as 0 | 1 | 2]}
                         onChange={event => updateJoint(index as 0 | 1 | 2, Number(event.target.value))}
+                        // One undo step per slider drag, not one per pixel.
+                        onPointerDown={() => historyRef.current?.begin()}
+                        onPointerUp={endSliderDrag}
+                        aria-label={`${JOINT_LABELS[selectedJoint as JointName] ?? selectedJoint} ${axis}`}
                         className="flex-1"
                       />
                       <span className="w-8 text-right tabular-nums">{jointEuler[index as 0 | 1 | 2].toFixed(0)}°</span>
@@ -1118,6 +1561,51 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
             )}
           </Section>
 
+          <Section title="Multi-angle set" badge="LoRA" defaultOpen={Boolean(studio) && hasAngleFigure}>
+            <div className="space-y-2" data-testid="composer-angle-set">
+              {!hasAngleFigure && (
+                <p className="text-[11px] text-amber-300" data-testid="angle-set-needs-figure">
+                  A multi-angle set is rendered of a character: add a figure linked to a character asset (props and locations have none).
+                </p>
+              )}
+              <p className="text-[11px] text-zinc-400">
+                Pose the figure, pick angles, and each angle is rendered from the 3D camera and turned into an image of the character’s asset — consistent shots to train a LoRA.
+              </p>
+              <div className="flex gap-1 text-[10px]">
+                <button onClick={() => setAngleChoice(new Set(LORA_ANGLES.map(v => v.name)))} className="px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300">All</button>
+                <button onClick={() => setAngleChoice(new Set(LORA_ANGLES.filter(v => v.size === 'full').map(v => v.name)))} className="px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300">Full body</button>
+                <button onClick={() => setAngleChoice(new Set())} className="px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300">None</button>
+                <span className="ml-auto text-zinc-500">{angleChoice.size} angles</span>
+              </div>
+              <div className="grid grid-cols-2 gap-x-2 gap-y-0.5">
+                {LORA_ANGLES.map(v => (
+                  <label key={v.name} className="flex items-center gap-1 text-[11px] text-zinc-300">
+                    <input
+                      type="checkbox"
+                      checked={angleChoice.has(v.name)}
+                      onChange={event => setAngleChoice(prev => {
+                        const next = new Set(prev)
+                        if (event.target.checked) next.add(v.name)
+                        else next.delete(v.name)
+                        return next
+                      })}
+                    />
+                    {v.label}
+                  </label>
+                ))}
+              </div>
+              <Button size="sm" disabled={anyBusy || angleChoice.size === 0 || !hasAngleFigure} onClick={() => void generateAngles()} className="w-full gap-1.5" data-testid="composer-generate-angles">
+                {busy === 'angles' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Camera className="h-3.5 w-3.5" />}
+                {busy === 'angles' ? 'Rendering angles…' : `Generate ${angleChoice.size} angle shots`}
+              </Button>
+              {angleResults.length > 0 && (
+                <div className="grid grid-cols-4 gap-1" data-testid="composer-angle-results">
+                  {angleResults.map(path => <AngleThumb key={path} projectId={projectId} path={path} />)}
+                </div>
+              )}
+            </div>
+          </Section>
+
           <Section title="Motion" badge={cameraMove !== 'static' ? cameraMove.replace('_', ' ') : undefined}>
             <div className="space-y-2">
               <PresetGrid
@@ -1132,6 +1620,34 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
                   setTransformTick(t => t + 1)
                 }}
               />
+              <label className="block text-[11px] text-zinc-400">
+                Move library (Blockout)
+                <select
+                  aria-label="Move library"
+                  value={libraryPreset}
+                  onChange={event => {
+                    const id = event.target.value
+                    setLibraryPreset(id)
+                    if (!id) return
+                    if (sceneRef.current?.applyLibraryMove(id, shot.duration_seconds)) {
+                      setMotionPreviewOn(true)
+                      setPreviewT(0)
+                      markDirty()
+                      setTransformTick(t => t + 1)
+                    }
+                  }}
+                  className="mt-0.5 w-full bg-zinc-800 border border-zinc-700 rounded px-1.5 py-1 text-xs text-zinc-200"
+                >
+                  <option value="">Choose a classic move…</option>
+                  {libraryCategories().map(group => (
+                    <optgroup key={group.category} label={group.category}>
+                      {group.presets.map(preset => (
+                        <option key={preset.id} value={preset.id} title={preset.description}>{preset.name}</option>
+                      ))}
+                    </optgroup>
+                  ))}
+                </select>
+              </label>
               {cameraMove !== 'static' && (
                 <label className="block text-[11px] text-zinc-400">
                   Intensity — {moveIntensity.toFixed(1)}×
@@ -1234,9 +1750,37 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
                   />
                 ))}
                 <p className="text-[10px] text-zinc-600">
-                  Keyframes drive the composer preview and the capture; the video model receives the camera move as prompt language.
+                  Keyframes drive the preview, the capture and the Deliver passes; Deliver’s reference and depth passes reach the video model as control signals, not just prompt language.
                 </p>
               </div>
+            </div>
+          </Section>
+
+          {!studio && (<>
+          <Section title="Deliver" badge={deliverResult ? 'delivered' : shot.generation.control_video ? 'control on file' : undefined}>
+            <div className="space-y-2" data-testid="composer-deliver">
+              <p className="text-[11px] text-zinc-400">Render this scene at the shot’s fps as clean / depth / normal passes. The clean and depth passes become the next render’s control signals.</p>
+              <div className="flex gap-3 text-[11px] text-zinc-300">
+                {(['clean', 'depth', 'normal'] as DeliverPass[]).map(pass => (
+                  <label key={pass} className="flex items-center gap-1 capitalize">
+                    <input type="checkbox" checked={deliverPasses[pass]} onChange={event => setDeliverPasses(p => ({ ...p, [pass]: event.target.checked }))} /> {pass}
+                  </label>
+                ))}
+                <select value={deliverSize} onChange={event => setDeliverSize(event.target.value as '640' | '1280')} aria-label="Deliver size" className="ml-auto bg-zinc-800 border border-zinc-700 rounded px-1 text-[11px]">
+                  <option value="640">640×360</option>
+                  <option value="1280">1280×720</option>
+                </select>
+              </div>
+              <Button size="sm" variant="secondary" disabled={anyBusy || !Object.values(deliverPasses).some(Boolean)} onClick={() => void deliver()} className="w-full gap-1.5">
+                {deliverProgress ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Film className="h-3.5 w-3.5" />}
+                {deliverProgress ? `Rendering ${deliverProgress.done}/${deliverProgress.total}` : 'Deliver passes'}
+              </Button>
+              {(deliverResult || shot.generation.control_video) && (
+                <div className="text-[10px] text-zinc-500 space-y-0.5" data-testid="composer-deliver-result">
+                  <div>Reference: <span className="text-zinc-300">{deliverResult?.control_video || shot.generation.control_video || '—'}</span></div>
+                  <div>Depth: <span className="text-zinc-300">{deliverResult?.depth_video || shot.generation.depth_video || '—'}</span></div>
+                </div>
+              )}
             </div>
           </Section>
 
@@ -1389,6 +1933,7 @@ export function ShotComposer({ projectId, scene, shot, onClose }: ShotComposerPr
               )}
             </div>
           </Section>
+          </>)}
         </aside>
       </div>
     </div>

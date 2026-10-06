@@ -40,10 +40,11 @@ class TestTargetResolution:
         for model, expected in [
             ("ltxv-13b-098-dev", "ltx"),
             ("lightricks/ltx-video", "ltx"),
-            ("wavespeed-ai/wan-2.2/t2v-480p", "wan"),
+            ("wavespeed-ai/wan-2.2/t2v-480p", "wan22"),
+            ("wavespeed-ai/wan-2.1/t2v-480p", "wan"),
             ("hunyuan-video", "hunyuan"),
             ("fal-ai/flux/dev", "flux"),
-            ("z_image", "sdxl"),
+            ("z_image", "z_image"),
             ("fal-ai/kling-video", "veo"),
         ]:
             target, matched = resolve_target(model)

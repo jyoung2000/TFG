@@ -354,6 +354,21 @@ class TestAssetReferenceGeneration:
         media = client.get(f"/api/film/projects/{PROJECT}/media", params={"path": payload["reference_path"]})
         assert media.status_code == 200 and media.content.startswith(b"\x89PNG")
 
+    def test_a_regenerated_sheet_view_is_named_after_its_view(self, client, test_state):
+        """QA 2026-10-01 (asset wizard): "regenerate" on a sheet tile saved the
+        new image as "<name>-ai", but tiles find their image by the view in
+        the file name ("-front-view"), so the tile never changed."""
+        client.post("/api/settings", json={"falApiKey": FAKE_KEY, "mediaProvider": "fal", "defaultImageModel": "fal-ai/flux/schnell"})
+        asset = client.post(f"/api/film/projects/{PROJECT}/assets", json={"kind": "character", "name": "Mara"}).json()["asset"]
+        http = test_state.http
+        http.queue("post", FakeResponse(status_code=200, json_payload={"request_id": "r", "status_url": "https://q/s", "response_url": "https://q/r"}))
+        http.queue("get", FakeResponse(status_code=200, json_payload={"status": "COMPLETED"}))
+        http.queue("get", FakeResponse(status_code=200, json_payload={"images": [{"url": "https://cdn/ref.png"}]}))
+        http.queue("get", FakeResponse(status_code=200, content=_png_bytes()))
+        response = client.post(f"/api/film/projects/{PROJECT}/assets/{asset['id']}/generate-reference", json={"prompt": "front view", "view": "front view"})
+        assert response.status_code == 200, response.text
+        assert "front-view" in response.json()["reference_path"]
+
     def test_missing_key_is_reported_before_any_call(self, client):
         client.post("/api/settings", json={"mediaProvider": "wavespeed"})
         asset = client.post(f"/api/film/projects/{PROJECT}/assets", json={"kind": "prop", "name": "Lamp"}).json()["asset"]

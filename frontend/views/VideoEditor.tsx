@@ -23,6 +23,8 @@ import { logger } from '../lib/logger'
 import { Tooltip } from '../components/ui/tooltip'
 import { ExportModal } from '../components/ExportModal'
 import { MenuBar, type MenuDefinition } from '../components/MenuBar'
+import { hasNativeMenu, useNativeMenu } from '../lib/nativeMenu'
+import { mergeExternalClips } from './editor/timelineSync'
 import { ImportTimelineModal } from '../components/ImportTimelineModal'
 import { ClipWaveform } from '../components/AudioWaveform'
 // IC-LORA HIDDEN - import { ICLoraPanel } from '../components/ICLoraPanel'
@@ -82,6 +84,7 @@ export function VideoEditor() {
     setActiveTimeline, updateTimeline, getActiveTimeline,
     setCurrentTab, setGenSpaceEditImageUrl, setGenSpaceEditMode, setGenSpaceAudioUrl,
     setGenSpaceRetakeSource, pendingRetakeUpdate, setPendingRetakeUpdate,
+    currentTab,
   } = useProjects()
   const { focusShot } = useFilm()
 
@@ -358,6 +361,8 @@ export function VideoEditor() {
   
   // Track which timeline is loaded locally so we can detect switches
   const loadedTimelineIdRef = useRef<string | null>(null)
+  /** The clips array this editor last loaded from or saved to the timeline (see timelineSync). */
+  const lastSyncedClipsRef = useRef<TimelineClip[]>([])
   
   // --- Resizable panel drag handlers ---
   const handleResizeDragStart = useCallback((type: 'left' | 'right' | 'timeline' | 'assets', e: React.MouseEvent) => {
@@ -781,6 +786,7 @@ export function VideoEditor() {
     }
     
     // Load new timeline (migrate old clips without new effect fields)
+    lastSyncedClipsRef.current = activeTimeline.clips || []
     setClips((activeTimeline.clips || []).map(migrateClip))
     setTracks(migrateTracks(activeTimeline.tracks?.length > 0 ? activeTimeline.tracks : DEFAULT_TRACKS.map(t => ({ ...t }))))
     setSubtitles(activeTimeline.subtitles || [])
@@ -794,12 +800,27 @@ export function VideoEditor() {
     loadedTimelineIdRef.current = activeTimeline.id
   }, [activeTimeline?.id])
   
+  // Clips another part of the app put on this timeline (the storyboard's Send
+  // to Timeline / Replace timeline clip) come into the editor, merged with any
+  // edits not saved yet (MEASURED r44: a sent clip never showed here, and the
+  // next auto-save would have written the stale clips back over it).
+  useEffect(() => {
+    if (!activeTimeline || loadedTimelineIdRef.current !== activeTimeline.id) return
+    const external = activeTimeline.clips || []
+    const merged = mergeExternalClips(clips, external, lastSyncedClipsRef.current)
+    if (!merged) return
+    lastSyncedClipsRef.current = external
+    setClips(merged.map(migrateClip))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTimeline?.clips])
+
   // Debounced auto-save: when clips, tracks, or subtitles change, schedule a save
   useEffect(() => {
     if (!currentProjectId || !loadedTimelineIdRef.current) return
     
     if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current)
     autoSaveTimerRef.current = setTimeout(() => {
+      lastSyncedClipsRef.current = clips
       updateTimeline(currentProjectId, loadedTimelineIdRef.current!, { clips, tracks, subtitles })
     }, AUTOSAVE_DELAY)
     
@@ -1389,7 +1410,8 @@ export function VideoEditor() {
   
   const handleDuplicateTimeline = (timelineId: string) => {
     if (!currentProjectId) return
-    const dup = duplicateTimeline(currentProjectId, timelineId)
+    // The open timeline is copied as it is on screen, unsaved edits included.
+    const dup = duplicateTimeline(currentProjectId, timelineId, timelineId === loadedTimelineIdRef.current ? { clips, tracks, subtitles } : undefined)
     // Auto-open the duplicated timeline tab
     if (dup?.id) {
       setOpenTimelineIds(prev => { const next = new Set(prev); next.add(dup.id); return next })
@@ -1402,7 +1424,7 @@ export function VideoEditor() {
     // Force-save current timeline before switching
     if (loadedTimelineIdRef.current) {
       if (autoSaveTimerRef.current) clearTimeout(autoSaveTimerRef.current)
-      updateTimeline(currentProjectId, loadedTimelineIdRef.current, { clips, tracks })
+      updateTimeline(currentProjectId, loadedTimelineIdRef.current, { clips, tracks, subtitles })
     }
     loadedTimelineIdRef.current = null // Reset so the useEffect picks up the new one
     setActiveTimeline(currentProjectId, timelineId)
@@ -1686,7 +1708,9 @@ export function VideoEditor() {
 
 
   // Menu bar definitions (extracted)
-  const menuDefinitions: MenuDefinition[] = useMemo(() => buildMenuDefinitions({
+  // Rebuilt every render, so a command always acts on the current playhead and
+  // selection (QA 2026-10-01: the memoised menu split at an old playhead).
+  const menuDefinitions: MenuDefinition[] = buildMenuDefinitions({
     selectedClip, selectedClipIds, clips, tracks, subtitles, snapEnabled,
     showEffectsBrowser, showSourceMonitor, showPropertiesPanel, showICLoraPanel: _showICLoraPanel, // IC-LORA HIDDEN
     sourceAsset, activeTool, activeTimeline, timelines, kbLayout,
@@ -1694,21 +1718,42 @@ export function VideoEditor() {
     setShowImportTimelineModal, setShowExportModal, handleExportTimelineXml, handleExportSrt,
     undoRef, redoRef, cutRef, copyRef, pasteRef,
     setSelectedClipIds, handleInsertEdit, handleOverwriteEdit, matchFrameRef, setKbEditorOpen,
-    splitClipAtPlayhead, duplicateClip, pushUndo, setClips, updateClip, setTracks,
+    splitClipAtPlayhead, duplicateClip, pushUndo, setClips, updateClip, setTracks, addTrack, pushTrackUndo, minZoom: getMinZoom(),
     addTextClip, addSubtitleTrack, createAdjustmentLayerAsset, setSnapEnabled, fitToViewRef, setZoom,
     setShowSourceMonitor, setShowEffectsBrowser, setShowPropertiesPanel,
     setShowICLoraPanel: _setShowICLoraPanel, setIcLoraSourceClipId: _setIcLoraSourceClipId, // IC-LORA HIDDEN
     setActiveTool, setLastTrimTool,
     handleAddTimeline, handleDuplicateTimeline, handleResetLayout,
-  }), [selectedClip, selectedClipIds, clips, tracks, subtitles, snapEnabled, showEffectsBrowser, showSourceMonitor, showPropertiesPanel, _showICLoraPanel, sourceAsset, activeTool, activeTimeline, timelines, handleInsertEdit, handleOverwriteEdit, kbLayout])
+  })
 
+
+  // The window's own menu bar carries the editor's menus while it is open
+  // (asked 2026-10-01: File / Edit were repeated - Electron's default menu
+  // above this one); in a plain browser the in-page menu bar stays.
+  const nativeMenu = hasNativeMenu()
+  useNativeMenu(menuDefinitions, currentTab === 'video-editor')
+
+  // The File menu shows Ctrl+I / Ctrl+E; they had no key behind them (QA 2026-10-01).
+  useEffect(() => {
+    if (currentTab !== 'video-editor') return
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey) return
+      const t = e.target
+      if (t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement || t instanceof HTMLSelectElement || (t instanceof HTMLElement && t.isContentEditable)) return
+      const key = e.key.toLowerCase()
+      if (key === 'i') { e.preventDefault(); fileInputRef.current?.click() }
+      else if (key === 'e') { e.preventDefault(); setShowExportModal(true) }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [currentTab])
 
   // --- Render ---
   
   return (
     <div className="h-full flex flex-col overflow-hidden">
       {/* Menu Bar */}
-      <MenuBar menus={menuDefinitions} rightContent={
+      <MenuBar menus={nativeMenu ? [] : menuDefinitions} rightContent={
         <div ref={layoutMenuRef} className="relative">
           <button
             onClick={() => setShowLayoutMenu(v => !v)}
@@ -2667,11 +2712,8 @@ export function VideoEditor() {
                             <Tooltip content="Delete track" side="right">
                               <button
                                 onClick={() => {
-                                  if (confirm(`Delete subtitle track "${track.name}"?`)) {
-                                    pushTrackUndo()
-                                    setTracks(tracks.filter((_, i) => i !== realIndex))
-                                    setSubtitles(prev => prev.filter(s => s.trackIndex !== realIndex))
-                                  }
+                                  // The shared delete shifts clips on later tracks too (QA 2026-10-01).
+                                  if (confirm(`Delete subtitle track "${track.name}"?`)) deleteTrack(realIndex)
                                 }}
                                 className="p-0.5 rounded text-zinc-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity"
                               >

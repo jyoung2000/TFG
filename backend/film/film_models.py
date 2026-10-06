@@ -172,6 +172,14 @@ class FilmAsset(BaseModel):
     reference_images: list[str] = Field(default_factory=list[str])  # relative paths
     # AI-powered style guide filled from a reference image.
     style_guide: FilmAssetStyleGuide | None = None
+    #: Consistency Kit (phase 7): a registry LoRA every shot with this asset
+    #: inherits (with its trigger word), and a seed the renders lock to.
+    lora_id: str = ""
+    lora_trigger: str = ""
+    lora_multiplier: float = 1.0
+    seed_lock: int | None = None
+    #: The asset's 3D studio scene (posed figure, camera) from the composer.
+    composition: CompositionScene | None = None
     created_at: int = Field(default_factory=now_ms)
     updated_at: int = Field(default_factory=now_ms)
 
@@ -258,7 +266,13 @@ class CompositionScene(BaseModel):
     camera: CompositionObject | None = None
     framing: ShotFraming = Field(default_factory=ShotFraming)
     camera_move: CameraMove = "static"
+    #: The Motion intensity slider (x the preset move) the keyframes were built with.
+    move_intensity: float = Field(default=1.0, ge=0.1, le=5.0)
     duration_seconds: float = 3.0
+    #: "v<seed version>:<fingerprint>" when the app seeded this scene from an
+    #: analysis; the fingerprint stops matching once anyone edits it, so only
+    #: an untouched, older seed is ever replaced ("" = not app-seeded).
+    seed: str = ""
 
 
 class FilmPose(BaseModel):
@@ -309,6 +323,10 @@ class ShotGenerationSettings(BaseModel):
     # "project" inherits FilmProjectSettings.default_quality_preset; an explicit
     # model/resolution on the shot always wins (treated as custom).
     quality_preset: Literal["project", "fast_preview", "balanced", "quality", "custom"] = "project"
+    #: Project-relative Deliver passes used as control signals (phase 6): the
+    #: clean reference render and the depth pass. "" = none.
+    control_video: str = ""
+    depth_video: str = ""
 
 
 class ShotVersion(BaseModel):
@@ -323,6 +341,9 @@ class ShotVersion(BaseModel):
     duration_seconds: float = 0.0
     seed: int | None = None
     capture_path: str = ""  # relative capture used as reference ('' = none)
+    end_capture_path: str = ""  # relative last frame ('' = none)
+    control_video_path: str = ""  # relative raw control video ('' = none)
+    control_strength: float | None = None
     output_path: str = ""  # absolute path of the generated media
     error: str = ""
     # Wardrobe text per character asset at generation time, for continuity
@@ -337,6 +358,9 @@ class ShotVersion(BaseModel):
     gpu_name: str = ""
     peak_vram_gb: float | None = None
     execution_mode: str = ""
+    #: The model that actually rendered this take (e.g. "vace_1.3B" for a
+    #: guided fast render), which `model` - the app's tier - does not say.
+    render_model: str = ""
     created_at: int = Field(default_factory=now_ms)
     #: Set when this take was deleted. The rest of the record — prompt, model,
     #: seed, snapshot — is kept, so a deleted take can still be explained and
@@ -396,6 +420,17 @@ class FilmShot(BaseModel):
 
     composition: CompositionScene | None = None
     capture_path: str = ""  # relative path of captured reference PNG ('' = none)
+    #: Relative path of the isometric blockout thumbnail written by a 3D storyboard build ('' = none).
+    blockout_path: str = ""
+    #: Storyboard frame: a still of what the shot describes ('' = none). Kept
+    #: apart from `capture_path`, which the video model uses as a start frame.
+    frame_path: str = ""
+    #: The end of the shot composed from the same cast ('' = none): the video's
+    #: end frame when it starts on `frame_path` (2026-10-04, style-guide shots).
+    end_frame_path: str = ""
+    #: The original this shot remakes ('' = none): an image reproduce job's
+    #: source photo, shown above the AI result in the storyboard.
+    reference_path: str = ""
 
     generation: ShotGenerationSettings = Field(default_factory=ShotGenerationSettings)
     versions: list[ShotVersion] = Field(default_factory=list[ShotVersion])

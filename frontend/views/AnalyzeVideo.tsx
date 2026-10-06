@@ -8,6 +8,7 @@ import {
   Scissors,
   Sparkles,
   Trash2,
+  Video,
   Wand2,
   X,
 } from 'lucide-react'
@@ -17,6 +18,10 @@ import { useAppSettings } from '../contexts/AppSettingsContext'
 import { filmApi } from '../lib/film-api'
 import type { FilmModelCapability } from '../types/film'
 import { analysisFrameUrl, videoAnalysisApi } from '../lib/video-analysis-api'
+import { videoReproduceApi } from '../lib/video-reproduce-api'
+import { sceneApi } from '../lib/scene-api'
+import type { VideoReproduceJob } from '../types/video-reproduce'
+import { VideoReproducePanel } from './reproduce/VideoReproduce'
 import { logger } from '../lib/logger'
 import {
   DETECTION_METHOD_META,
@@ -38,7 +43,7 @@ import {
  * with no provider at all, so the first three steps never wait on a key.
  */
 export function AnalyzeVideo() {
-  const { setCurrentView, openProject } = useProjects()
+  const { setCurrentView, openProject, pendingAnalysis, clearPendingAnalysis } = useProjects()
   const { setCurrentProjectId } = useProjects()
   const { refresh } = useFilm()
   const { settings } = useAppSettings()
@@ -50,12 +55,28 @@ export function AnalyzeVideo() {
   }, [])
 
   const [analyses, setAnalyses] = useState<VideoAnalysis[]>([])
-  const [current, setCurrent] = useState<VideoAnalysis | null>(null)
-  const [selectedShotId, setSelectedShotId] = useState<string | null>(null)
-  const [busy, setBusy] = useState<string>('')
-  const [error, setError] = useState('')
+    const [current, setCurrent] = useState<VideoAnalysis | null>(null)
+    const [selectedShotId, setSelectedShotId] = useState<string | null>(null)
+    const [busy, setBusy] = useState<string>('')
+    const [error, setError] = useState('')
+  
+    // Video Reproduce v2: the backend document for the current analysis.
+    const [recreating, setRecreating] = useState(false)
+    const [reproduce, setReproduce] = useState<VideoReproduceJob | null>(null)
+    const [recreationCandidates, setRecreationCandidates] = useState(2)
+    // No round cap: each shot keeps rendering until it reaches the target.
+    const [recreationRounds] = useState<number | null>(null)
+    useEffect(() => {
+      setReproduce(null)
+      if (!current) return
+      let active = true
+      videoReproduceApi.get(current.id)
+        .then(job => { if (active && job.status !== 'idle') setReproduce(job) })
+        .catch(() => undefined)
+      return () => { active = false }
+    }, [current?.id])  // eslint-disable-line react-hooks/exhaustive-deps
 
-  const [depth, setDepth] = useState<AnalysisDepth>('standard')
+    const [depth, setDepth] = useState<AnalysisDepth>('standard')
   const [sensitivity, setSensitivity] = useState(0.5)
   const [minShot, setMinShot] = useState(0.6)
   const [analyzeAudio, setAnalyzeAudio] = useState(false)
@@ -72,6 +93,14 @@ export function AnalyzeVideo() {
   useEffect(() => {
     void loadList()
   }, [loadList])
+
+  // Opened from History with a specific analysis: load it, then forget the request.
+  useEffect(() => {
+    if (!pendingAnalysis || pendingAnalysis.kind !== 'video') return
+    const id = pendingAnalysis.id
+    clearPendingAnalysis()
+    void videoAnalysisApi.get(id).then(setCurrent).catch(e => logger.warn(`Could not open analysis ${id}: ${e}`))
+  }, [pendingAnalysis, clearPendingAnalysis])
 
   // While a stage is running the backend owns the truth, so poll it rather
   // than guessing progress on this side.
@@ -130,24 +159,62 @@ export function AnalyzeVideo() {
   }, [analyzeAudio, analyzeText, depth, minShot, run, sensitivity])
 
   const createStoryboard = useCallback(async () => {
-    if (!current) return
-    setBusy('reconstruct')
-    setError('')
-    try {
-      const project = await videoAnalysisApi.reconstruct(current.id, {
-        name: current.title ? `${current.title} (from video)` : '',
-      })
-      setCurrentProjectId(project.id)
-      await refresh()
-      openProject(project.id, 'storyboard')
-    } catch (e) {
-      setError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setBusy('')
-    }
-  }, [current, openProject, refresh, setCurrentProjectId])
+      if (!current) return
+      setBusy('reconstruct')
+      setError('')
+      try {
+        const project = await videoAnalysisApi.reconstruct(current.id, {
+          name: current.title ? `${current.title} (from video)` : '',
+        })
+        setCurrentProjectId(project.id)
+        await refresh()
+        openProject(project.id, 'storyboard')
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e))
+      } finally {
+        setBusy('')
+      }
+    }, [current, openProject, refresh, setCurrentProjectId])
 
-  const selected = useMemo(
+    const buildStoryboard3d = useCallback(async () => {
+      if (!current) return
+      setBusy('storyboard3d')
+      setError('')
+      try {
+        const project = await sceneApi.storyboard3d(current.id, { name: current.title ? `${current.title} (3D storyboard)` : '' })
+        setCurrentProjectId(project.id)
+        await refresh()
+        openProject(project.id, 'storyboard')
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e))
+      } finally {
+        setBusy('')
+      }
+    }, [current, openProject, refresh, setCurrentProjectId])
+
+    // The storyboard a reproduce run builds as it goes (one shot per original
+    // shot, 3D composition, cast, chosen take).
+    const openStoryboard = useCallback(async (projectId: string) => {
+      setCurrentProjectId(projectId)
+      await refresh()
+      openProject(projectId, 'storyboard')
+    }, [openProject, refresh, setCurrentProjectId])
+
+    const recreateVideo = useCallback(async () => {
+      if (!current) return
+      setRecreating(true)
+      setError('')
+      try {
+        await videoReproduceApi.start(current.id, { candidates: recreationCandidates, rounds: recreationRounds, target_score: 0.95, shot_ids: [] })
+        setReproduce(await videoReproduceApi.get(current.id))
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e))
+      } finally {
+        setRecreating(false)
+      }
+    }, [current, recreationCandidates, recreationRounds])
+
+    const selected = useMemo(
     () => current?.shots.find(shot => shot.id === selectedShotId) ?? current?.shots[0] ?? null,
     [current, selectedShotId],
   )
@@ -163,7 +230,7 @@ export function AnalyzeVideo() {
           <ArrowLeft className="h-4 w-4" />
         </button>
         <FileVideo className="h-4 w-4 text-violet-400" />
-        <h1 className="text-sm font-semibold text-white">Analyse video</h1>
+        <h1 className="text-sm font-semibold text-white">Reproduce video</h1>
         {current && (
           <>
             <span className="text-xs text-zinc-500 truncate max-w-[24rem]">{current.source.file_name}</span>
@@ -255,35 +322,56 @@ export function AnalyzeVideo() {
             <section className="flex-1 min-w-0 overflow-y-auto p-4 space-y-4">
               <SourceSummary analysis={current} />
               <div className="flex flex-wrap items-center gap-2">
-                <button
-                  onClick={() => void run('detect', () => videoAnalysisApi.detect(current.id))}
-                  disabled={busy !== '' || stage?.busy}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 border border-zinc-700 text-xs hover:bg-zinc-700 disabled:opacity-40"
-                >
-                  {busy === 'detect' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Scissors className="h-3.5 w-3.5" />}
-                  {current.shots.length ? 'Detect again' : 'Detect shots'}
-                </button>
-                <button
-                  onClick={() => void run('analyze', () => videoAnalysisApi.analyze(current.id))}
-                  disabled={busy !== '' || stage?.busy || current.shots.length === 0}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-violet-600 text-white text-xs hover:bg-violet-500 disabled:bg-zinc-700 disabled:text-zinc-500"
-                >
-                  {busy === 'analyze' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-                  Analyse shots
-                </button>
-                <button
-                  onClick={() => void createStoryboard()}
-                  disabled={busy !== '' || current.shots.length === 0}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 border border-zinc-700 text-xs hover:bg-zinc-700 disabled:opacity-40"
-                >
-                  {busy === 'reconstruct' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Clapperboard className="h-3.5 w-3.5" />}
-                  Create storyboard
-                </button>
-                <span className="text-[11px] text-zinc-400" data-testid="video-model-recommendation">
-                  Vision: {settings.directorProvider === 'openai_compatible' && settings.openaiCompatibleModel ? settings.openaiCompatibleModel : 'connect qwen2.5vl:7b (recommended) in Settings'}
-                  {' · '}Recommended render model: {videoModels.find(m => m.is_active)?.label || videoModels[0]?.label || 'no local video model detected'}
-                </span>
-              </div>
+                              <button
+                                onClick={() => void run('detect', () => videoAnalysisApi.detect(current.id))}
+                                disabled={busy !== '' || stage?.busy}
+                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 border border-zinc-700 text-xs hover:bg-zinc-700 disabled:opacity-40"
+                              >
+                                {busy === 'detect' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Scissors className="h-3.5 w-3.5" />}
+                                {current.shots.length ? 'Detect again' : 'Detect shots'}
+                              </button>
+                              <button
+                                onClick={() => void run('analyze', () => videoAnalysisApi.analyze(current.id))}
+                                disabled={busy !== '' || stage?.busy || current.shots.length === 0}
+                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-violet-600 text-white text-xs hover:bg-violet-500 disabled:bg-zinc-700 disabled:text-zinc-500"
+                              >
+                                {busy === 'analyze' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+                                Analyse shots
+                              </button>
+                              <label className="flex items-center gap-1 text-[11px] text-zinc-400">
+                                Candidates
+                                <input type="number" min={1} max={6} value={recreationCandidates} onChange={e => setRecreationCandidates(Math.max(1, Math.min(6, Number(e.target.value) || 1)))} aria-label="Candidates per shot" className="select-chip w-14" />
+                              </label>
+                              <button
+                                onClick={() => void recreateVideo()}
+                                disabled={busy !== '' || recreating || reproduce?.status === 'running' || current.shots.length === 0}
+                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs hover:bg-emerald-500 disabled:bg-zinc-700 disabled:text-zinc-500"
+                              >
+                                {recreating ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Video className="h-3.5 w-3.5" />}
+                                Recreate video
+                              </button>
+                              <button
+                                onClick={() => void createStoryboard()}
+                                disabled={busy !== '' || current.shots.length === 0}
+                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 border border-zinc-700 text-xs hover:bg-zinc-700 disabled:opacity-40"
+                              >
+                                {busy === 'reconstruct' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Clapperboard className="h-3.5 w-3.5" />}
+                                Create storyboard
+                              </button>
+                              <button
+                                onClick={() => void buildStoryboard3d()}
+                                disabled={busy !== '' || current.shots.length === 0 || current.stage !== 'complete'}
+                                title="A film project whose shot cards carry 3D blockouts and open the composer pre-seeded from the analysis"
+                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-zinc-800 border border-zinc-700 text-xs hover:bg-zinc-700 disabled:opacity-40"
+                              >
+                                {busy === 'storyboard3d' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Clapperboard className="h-3.5 w-3.5" />}
+                                Build 3D storyboard
+                              </button>
+                              <span className="text-[11px] text-zinc-400" data-testid="video-model-recommendation">
+                                Vision: {settings.directorProvider === 'openai_compatible' && settings.openaiCompatibleModel ? settings.openaiCompatibleModel : 'connect qwen2.5vl:7b (recommended) in Settings'}
+                                {' · '}Recommended render model: {videoModels.find(m => m.is_active)?.label || videoModels[0]?.label || 'no local video model detected'}
+                              </span>
+                            </div>
 
               <ShotStrip
                 analysis={current}
@@ -293,17 +381,21 @@ export function AnalyzeVideo() {
             </section>
 
             {selected && (
-              <ShotInspector
-                analysis={current}
-                shot={selected}
-                busy={busy}
-                onSplit={at => void run('split', () => videoAnalysisApi.split(current.id, selected.id, at))}
-                onMerge={() => void run('merge', () => videoAnalysisApi.merge(current.id, selected.id))}
-                onEditPrompts={prompts => void run('prompts', () => videoAnalysisApi.editPrompts(current.id, selected.id, prompts))}
-              />
-            )}
-          </>
-        )}
+                          <ShotInspector
+                            analysis={current}
+                            shot={selected}
+                            busy={busy}
+                            onSplit={at => void run('split', () => videoAnalysisApi.split(current.id, selected.id, at))}
+                            onMerge={() => void run('merge', () => videoAnalysisApi.merge(current.id, selected.id))}
+                            onEditPrompts={prompts => void run('prompts', () => videoAnalysisApi.editPrompts(current.id, selected.id, prompts))}
+                          />
+                        )}
+            
+                        {reproduce && (
+                          <VideoReproducePanel analysis={current} job={reproduce} onJob={setReproduce} onClose={() => setReproduce(null)} onOpenStoryboard={id => void openStoryboard(id)} />
+                        )}
+                      </>
+                    )}
       </div>
     </div>
   )
@@ -616,6 +708,7 @@ function ShotInspector({
         inferred={inferred}
         rows={[
           ['Movement', shot.cinematography.camera_movement],
+          ['Measured motion', shot.motion?.analyzed ? `${shot.motion.pacing} · magnitude ${shot.motion.magnitude.toFixed(3)}${shot.motion.handheld ? ' · handheld' : ''} (${shot.motion.model})` : 'not measured'],
           ['Static', shot.cinematography.is_static ? 'yes' : 'no'],
           ['Screen direction', shot.cinematography.screen_direction],
         ]}

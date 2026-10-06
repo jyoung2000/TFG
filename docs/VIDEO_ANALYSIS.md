@@ -60,8 +60,11 @@ Each shot gets a storyboard prompt, a video prompt, and cinematography,
 environment, character, motion and negative prompts. Edit any of them and it
 is marked as yours — re-analysing will not overwrite it.
 
-> `model_specific` is defined in the schema but not yet populated. Per-model
-> prompt compilation is not implemented; see `docs/RELEASE_MATRIX.json`.
+`model_specific` carries the prompt compiled for each model the user could
+render with (`docs/PROMPT_COMPILER.md`). Every shot also carries a fused
+`spec` (`ShotSpec`) and a measured `motion` block from optical flow; the
+camera move in prompts comes from flow, not from a guess at stills — see
+`docs/VIDEO_REPRODUCE.md`.
 
 ## The reconstructed project
 
@@ -69,6 +72,11 @@ Not a special kind of project — the same `FilmProject` the storyboard authors,
 so the composer, queue, continuity, versions and export all work on it. Each
 shot carries `source_ref` back to the analysis and the exact span of the
 source, so evidence stays reachable after reconstruction.
+
+## Recreate video
+
+Reproduces the analysed shots through the film queue, scores each candidate
+against the source and stitches the picks: `docs/VIDEO_REPRODUCE.md`.
 
 ## Security
 
@@ -81,6 +89,6 @@ from a video is data for the schema and never reaches a tool-calling loop.
 ## API
 
 `/api/video-analysis` — `import`, `detect`, `analyze`, `cancel`,
-`shots/{id}/split|merge|boundary|prompts`, `reconstruct`, `frame`, and
-list/get/delete. Request and response shapes mirror
+`shots/{id}/split|merge|boundary|prompts`, `reconstruct`, `recreate`,
+`frame`, and list/get/delete. Request and response shapes mirror
 `frontend/types/video-analysis.ts`.

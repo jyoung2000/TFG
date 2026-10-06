@@ -23,6 +23,12 @@ from app_handler import AppHandler
 router = APIRouter(prefix="/api/film", tags=["film-generation"])
 
 
+@router.get("/multi-angle/status")
+def route_multi_angle_status(handler: AppHandler = Depends(get_state_service)) -> dict[str, object]:
+    """Which model renders angles for characters and for objects, and the choices Settings offers."""
+    return handler.film_generation.multi_angle_status()
+
+
 @router.post(
     "/projects/{project_id}/scenes/{scene_id}/shots/{shot_id}/generate",
     response_model=QueueShotResponse,
@@ -101,9 +107,10 @@ def route_film_output(
     path: str = Query(min_length=1),
     handler: AppHandler = Depends(get_state_service),
 ) -> FileResponse:
-    """Serve a generated output strictly from within the outputs directory."""
+    """Serve a generated output strictly from within the outputs directory - or a
+    LoRA training run's samples, which History previews (2026-10-02)."""
     try:
-        candidate = require_within_any(path, [handler.config.outputs_dir], what="output path")
+        candidate = require_within_any(path, [handler.config.outputs_dir, handler.training.media_root(), handler.training.preview_root()], what="output path")
     except PathPolicyError as exc:
         raise HTTPError(400, str(exc)) from exc
     if not candidate.is_file():

@@ -20,7 +20,7 @@ router = APIRouter(prefix="/api/models/library", tags=["model-library"])
 @router.get("", response_model=ModelSearchResponse)
 def route_search_models(
     query: str = "",
-    task: str = Query(default="all", pattern="^(all|video|image|text)$"),
+    task: str = Query(default="all", pattern="^(all|video|image|text|vision)$"),
     source: str = Query(default="all", pattern="^(all|local|hosted)$"),
     only_compatible: bool = False,
     refresh: bool = False,

@@ -11,6 +11,7 @@ import type {
   ProjectContinuity,
 } from '../types/film'
 import { useProjects } from './ProjectContext'
+import { withLiveRenders } from './filmUndo'
 
 /** A request from elsewhere in the app (editor, Gen Space) to open a shot in the storyboard. */
 export interface ShotFocusRequest {
@@ -202,7 +203,9 @@ export function FilmProvider({ children }: { children: React.ReactNode }) {
       restoringRef.current = true
       loadEpochRef.current++ // in-flight polls are stale from here on
       try {
-        const project = await filmApi.replaceProject(projectId, snapshot)
+        // Undo restores what the user authored; renders and reviews made since stay.
+        const live = lastSeenRef.current?.projectId === projectId ? lastSeenRef.current.project : null
+        const project = await filmApi.replaceProject(projectId, live ? withLiveRenders(snapshot, live) : snapshot)
         loadEpochRef.current++
         setFilmState(project)
         lastSeenRef.current = { projectId, project, signature: structuralSignature(project) }

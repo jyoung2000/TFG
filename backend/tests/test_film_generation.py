@@ -200,6 +200,23 @@ class TestQueueShot:
         )
         assert response.status_code == 409
 
+    def test_a_batch_says_which_shots_it_skipped_and_why(self, client, test_state, create_fake_model_files):
+        """QA 2026-10-01: Generate all / Generate scene skipped shots refused
+        by strict continuity without a word - "0 queued" and no reason."""
+        _enable_local(test_state, create_fake_model_files)
+        scene_id, shot_id = _setup_shot(client, capture=False)
+        _add_location_mismatch(client, scene_id, shot_id)
+        client.put(
+            f"/api/film/projects/{PROJECT}/settings",
+            json={"settings": {"default_model": "", "default_resolution": "", "style_prompt": "", "default_negative_prompt": "", "inter_shot_gap_seconds": 0.0, "strict_continuity": True, "preview_resolution": "540p", "preview_max_seconds": 4.0}},
+        )
+        response = client.post(f"/api/film/projects/{PROJECT}/generate/batch", json={"kind": "preview", "scene_id": scene_id})
+        assert response.status_code == 200
+        body = response.json()
+        assert body["queued"] == []
+        assert [s["shot_id"] for s in body["skipped"]] == [shot_id]
+        assert body["skipped"][0]["reason"]
+
     def test_non_strict_returns_warnings_but_generates(
         self, client, test_state, create_fake_model_files
     ):

@@ -17,6 +17,7 @@ from film.film_models import (
     CompositionScene,
     FilmAsset,
     FilmAssetKind,
+    FilmAssetStyleGuide,
     FilmPose,
     FilmProject,
     FilmProjectSettings,
@@ -65,6 +66,11 @@ class CreateAssetRequest(BaseModel):
 
 class UpdateAssetRequest(BaseModel):
     name: str | None = None
+    lora_id: str | None = None
+    lora_trigger: str | None = None
+    lora_multiplier: float | None = None
+    seed_lock: int | None = None
+    clear_seed_lock: bool = False
     description: str | None = None
     appearance: str | None = None
     wardrobe: str | None = None
@@ -76,6 +82,10 @@ class UpdateAssetRequest(BaseModel):
     prop_details: str | None = None
     style_prompt: str | None = None
     continuity_notes: str | None = None
+    #: Manual style-guide edits (traits/palette/mood/prompt) persist too.
+    style_guide: FilmAssetStyleGuide | None = None
+    #: The asset's 3D studio scene from the composer.
+    composition: CompositionScene | None = None
 
 
 class AssetResponse(BaseModel):
@@ -87,6 +97,9 @@ class GenerateAssetReferenceRequest(BaseModel):
     project's image model. An empty prompt is synthesized from the asset."""
 
     prompt: str = ""
+    #: A reference-sheet view this image replaces ("front view"...): the file is
+    #: named after it so the sheet shows it in that view's place.
+    view: str = ""
 
 
 class GenerateAssetReferenceResponse(BaseModel):
@@ -95,6 +108,88 @@ class GenerateAssetReferenceResponse(BaseModel):
     provider: str
     model: str
     reference_path: str
+
+
+class ReferenceSheetRequest(BaseModel):
+    """Multi-angle reference sheet: one image per view, same seed, the asset's LoRA."""
+
+    views: list[str] = Field(default_factory=lambda: ["front view", "three-quarter view", "profile view", "back view"])
+    seed: int | None = None
+
+
+class PreviewRenderRequest(BaseModel):
+    """A live preview of an edited pose: the composer's viewfinder (the posed
+    mannequin, at the photo's shape) and the original photo it should keep."""
+
+    guide_base64: str
+    #: Project-relative path of the original photo (a capture or an asset image).
+    reference_path: str = ""
+    #: Or the original's pixels, when it is not a project file (a video
+    #: analysis frame on a shot with no cast image).
+    reference_base64: str = ""
+    prompt: str = ""
+    #: The edit in words ("the person's left arm ... raised straight up above
+    #: the head"): the image model follows words, not the mannequin alone.
+    pose: str = ""
+    width: int = 576
+    height: int = 1024
+    seed: int | None = None
+
+
+class PreviewRenderResponse(BaseModel):
+    #: The preview as a data URL (throwaway: not saved to the project).
+    image: str
+    seconds: float
+    model: str
+
+
+class FramesRequest(BaseModel):
+    """Storyboard frames for the whole project: only shots with no picture yet
+    (no frame, capture or finished render) unless `missing_only` is False."""
+
+    missing_only: bool = True
+
+
+class FramesResponse(BaseModel):
+    generated: int
+    skipped: int
+    failed: list[str] = Field(default_factory=list[str])
+
+
+class AngleShot(BaseModel):
+    """One camera angle of a multi-angle set: its name, the view in words and,
+    from the composer, the posed mannequin seen from that angle (PNG)."""
+
+    name: str
+    view: str
+    guide_base64: str = ""
+
+
+class AssetDatasetRequest(BaseModel):
+    """A LoRA dataset from an asset's images. `angles`: first render the angles a
+    LoRA needs that the asset lacks (Qwen for characters, Zero123++ for objects)."""
+
+    angles: bool = False
+
+
+class AngleSetRequest(BaseModel):
+    """Multi-angle shots of a character for consistency and LoRA training,
+    each composed from the asset's reference image (and the angle's guide)."""
+
+    shots: list[AngleShot] = Field(default_factory=list[AngleShot])
+    seed: int | None = None
+    #: Which of the asset's reference images is the identity ("" = the first).
+    identity_path: str = ""
+
+
+class ReferenceSheetResponse(BaseModel):
+    asset: FilmAsset
+    prompts: list[str]
+    seed: int | None
+    reference_paths: list[str]
+    #: Face match of each kept image to the identity photo (OpenCV SFace cosine;
+    #: 0.363 = same person), None when no face was seen or no matcher is installed.
+    face_scores: list[float | None] = Field(default_factory=list[float | None])
 
 
 class AddAssetReferenceRequest(BaseModel):
@@ -231,6 +326,32 @@ class ShotCaptureRequest(BaseModel):
     composition: CompositionScene
 
 
+class DeliverRequest(BaseModel):
+    """A Deliver export from the Shot Composer: rendered PNG frames per pass
+    (base64, in order, all the same size) plus the prompt and metadata the
+    composer wrote. Passes without frames are skipped."""
+
+    fps: int = 24
+    width: int = 0
+    height: int = 0
+    clean: list[str] = Field(default_factory=list[str])
+    depth: list[str] = Field(default_factory=list[str])
+    normal: list[str] = Field(default_factory=list[str])
+    stills: list[str] = Field(default_factory=list[str])
+    prompt: str = ""
+    metadata: dict[str, object] = Field(default_factory=dict[str, object])
+    composition: CompositionScene | None = None
+
+
+class DeliverResponse(BaseModel):
+    package_dir: str
+    #: Project-relative paths of what was written.
+    files: list[str] = Field(default_factory=list[str])
+    control_video: str = ""
+    depth_video: str = ""
+    shot: FilmShot
+
+
 class SavePoseRequest(BaseModel):
     name: str
     category: str = "custom"
@@ -243,6 +364,18 @@ class PoseResponse(BaseModel):
 
 class GenerateShotRequest(BaseModel):
     kind: VersionKind = "preview"
+    #: Explicit render length (already snapped by the caller); None = derive from the shot.
+    duration_seconds: float | None = None
+    #: Project-relative start frame for image-to-video; "" = the shot's own capture rule.
+    capture_path: str = ""
+    #: Pin the seed for this version; None = the shot's generation setting.
+    seed: int | None = None
+    #: Project-relative last frame: renders start+end conditioned ("" = none).
+    end_capture_path: str = ""
+    #: Project-relative clip used as a raw control video ("" = none).
+    control_video_path: str = ""
+    #: Control video strength (LTX-2: higher = closer to the control video).
+    control_strength: float | None = None
 
 
 class BatchGenerateRequest(BaseModel):
@@ -276,9 +409,18 @@ class QueueShotResponse(BaseModel):
     warnings: list[ContinuityWarning] = Field(default_factory=list[ContinuityWarning])
 
 
+class SkippedShot(BaseModel):
+    """A shot a batch did not queue, and why (already rendering, strict continuity)."""
+
+    shot_id: str
+    reason: str
+
+
 class BatchGenerateResponse(BaseModel):
     status: str
     queued: list[QueuedJob]
+    #: Shots refused (QA 2026-10-01: they were dropped without a word).
+    skipped: list[SkippedShot] = Field(default_factory=list[SkippedShot])
 
 
 class DeleteVersionResponse(BaseModel):
@@ -669,3 +811,28 @@ class VisualReviewResponse(BaseModel):
     previous_frame_path: str = ""
     current_frame_path: str = ""
     context: DirectorContextDetails | None = None
+
+
+class ApplyStyleRequest(BaseModel):
+    """Redraw a picture in a saved style asset's art style (film/style_transfer.py).
+    The picture is a shot's storyboard frame (`shot_id`; its end frame too) or a
+    project image (`image_path`, relative to the project)."""
+
+    shot_id: str = ""
+    image_path: str = ""
+    #: What the picture shows, for the prompt ("" = keep whatever it shows).
+    subject: str = ""
+    #: Add the result to this asset's reference images (e.g. a character drawn in the style).
+    target_asset_id: str = ""
+    seed: int | None = None
+
+
+class ApplyStyleResponse(BaseModel):
+    #: The restyled picture, relative to the project.
+    image_path: str
+    #: The image model that drew it (FLUX.1 USO Dev, else FLUX.2 Klein).
+    model: str
+    #: The style's pictures it was given (graded-up first, graded-down never).
+    style_images: list[str] = Field(default_factory=list[str])
+    shot: FilmShot | None = None
+    asset: FilmAsset | None = None

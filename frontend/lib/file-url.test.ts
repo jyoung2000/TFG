@@ -19,4 +19,12 @@ describe('toFileUrl', () => {
   it('treats a relative path as relative', () => {
     expect(toFileUrl('outputs/clip.mp4')).toBe('file:///outputs/clip.mp4')
   })
+
+  it('percent-encodes characters that break a file URL', () => {
+    expect(toFileUrl('C:\\My Videos\\#1 take 100%.mp4')).toBe('file:///C:/My%20Videos/%231%20take%20100%25.mp4')
+  })
+
+  it('leaves an already-safe path untouched', () => {
+    expect(toFileUrl('/srv/out/clip_01.mp4')).toBe('file:///srv/out/clip_01.mp4')
+  })
 })

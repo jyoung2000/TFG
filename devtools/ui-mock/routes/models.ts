@@ -228,6 +228,7 @@ function libraryModel(
     description: '',
     state: 'available',
     installed: false,
+    capabilities: [],
     downloadable: provider === 'wangp' || provider === 'ollama',
     size_gb: null,
     estimated_min_vram_gb: null,

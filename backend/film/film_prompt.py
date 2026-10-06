@@ -29,7 +29,8 @@ from film.shot_vocabulary import (
 
 
 def _describe_character(asset: FilmAsset, emotion: str, pose_name: str) -> str:
-    parts = [asset.name]
+    # A bound LoRA's trigger word leads the description so the model recognises the character.
+    parts = [f"{asset.lora_trigger.strip()} {asset.name}".strip() if asset.lora_trigger.strip() else asset.name]
     details = ", ".join(p for p in (asset.description, asset.appearance, asset.wardrobe,
         asset.style_guide.recommended_prompt if asset.style_guide else "") if p)
     if details:

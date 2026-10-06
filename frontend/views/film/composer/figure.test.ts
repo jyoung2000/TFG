@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { FIGURE_HEIGHTS, JOINT_NAMES, applyPose, buildFigure, mirrorPose, readPose } from './figure'
+import * as THREE from 'three'
+import { FIGURE_HEIGHTS, JOINT_NAMES, applyPose, buildFigure, jointForObject, mirrorPose, readPose, sectionMeshes, tintMeshes } from './figure'
 
 describe('mirrorPose', () => {
   it('swaps left/right limbs and flips yaw/roll', () => {
@@ -38,5 +39,62 @@ describe('buildFigure', () => {
     applyPose(rig, {})
     expect(readPose(rig)).toEqual({})
     rig.dispose()
+  })
+})
+
+/* Asked 2026-10-01: poses must be easy to edit. In Pose mode a click on a
+ * limb picks the joint that limb hangs from, and the rotate gizmo goes there. */
+describe('jointForObject', () => {
+  it('maps every limb mesh to the joint it hangs from', () => {
+    const rig = buildFigure('female', '#e4572e')
+    for (const name of JOINT_NAMES) {
+      const group = rig.joints[name]
+      // Its own meshes, and those in the unnamed segment wrapper a limb hangs in (not child joints).
+      const meshes = group.children.flatMap(child => (child.type === 'Mesh' ? [child] : child.name === '' ? child.children.filter(c => c.type === 'Mesh') : []))
+      for (const mesh of meshes) expect(jointForObject(mesh)).toBe(name)
+    }
+  })
+
+  it('a forearm click is the elbow, an upper-arm click the shoulder', () => {
+    const rig = buildFigure('male', '#29b6f6')
+    const upper = rig.joints.l_arm.children[0].children.find(c => c.type === 'Mesh')!
+    const lower = rig.joints.l_elbow.children[0].children.find(c => c.type === 'Mesh')!
+    expect(jointForObject(upper)).toBe('l_arm')
+    expect(jointForObject(lower)).toBe('l_elbow')
+  })
+
+  it('the pelvis belongs to no joint: clicking it moves the whole figure', () => {
+    const rig = buildFigure('male', '#29b6f6')
+    const pelvisMesh = rig.root.children[0].children.find(c => c.type === 'Mesh')!
+    expect(jointForObject(pelvisMesh)).toBeNull()
+  })
+})
+
+/* Asked 2026-10-01: edit joints and individual sections easily in the
+ * viewport. The section under the cursor / being edited is tinted - only
+ * that section, although every limb of a figure shares one material. */
+describe('sections', () => {
+  it("a joint's section is its own limb, not the limbs hanging below it", () => {
+    const rig = buildFigure('male', '#29b6f6')
+    const forearm = sectionMeshes(rig, 'l_elbow')
+    expect(forearm).toHaveLength(1)
+    expect(forearm.every(m => jointForObject(m) === 'l_elbow')).toBe(true)
+    expect(sectionMeshes(rig, 'torso').every(m => jointForObject(m) === 'torso')).toBe(true)
+    for (const name of JOINT_NAMES) expect(sectionMeshes(rig, name).length).toBeGreaterThan(0)
+  })
+
+  it('tinting a section leaves the rest of the figure alone and untinting restores it', () => {
+    const rig = buildFigure('male', '#29b6f6')
+    const forearm = sectionMeshes(rig, 'l_elbow')
+    const upper = sectionMeshes(rig, 'l_arm')[0]
+    const shared = forearm[0].material
+    tintMeshes(forearm, '#fde047')
+    const tinted = forearm[0].material as THREE.MeshStandardMaterial
+    expect(tinted).not.toBe(shared)
+    expect(tinted.emissive.getHexString()).toBe('fde047')
+    expect(upper.material).not.toBe(tinted)
+    expect((upper.material as THREE.MeshStandardMaterial).emissive.getHexString()).toBe('000000')
+    tintMeshes(forearm, null)
+    expect(forearm[0].material).toBe(shared)
   })
 })

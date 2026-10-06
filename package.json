@@ -1,6 +1,6 @@
 {
   "name": "ltx-desktop",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "LTX-2 Video Generation - Desktop App",
   "type": "module",
   "main": "dist-electron/main.js",
@@ -23,6 +23,10 @@
     "build:mac": "bash scripts/local-build.sh --platform mac",
     "build:win": "powershell -ExecutionPolicy Bypass -File scripts/local-build.ps1",
     "build:win:wangp": "powershell -ExecutionPolicy Bypass -File scripts/local-build.ps1 -Config electron-builder-wangp.yml",
+    "wangp:build": "powershell -ExecutionPolicy Bypass -File scripts/wangp-release.ps1 -Stage build",
+    "wangp:install": "powershell -ExecutionPolicy Bypass -File scripts/wangp-release.ps1 -Stage install",
+    "wangp:verify": "powershell -ExecutionPolicy Bypass -File scripts/wangp-release.ps1 -Stage verify",
+    "wangp:ship": "powershell -ExecutionPolicy Bypass -File scripts/wangp-release.ps1 -Stage ship",
     "build:mac:skip-python": "bash scripts/local-build.sh --platform mac --skip-python",
     "build:win:skip-python": "powershell -ExecutionPolicy Bypass -File scripts/local-build.ps1 -SkipPython",
     "build:fast:mac": "bash scripts/local-build.sh --platform mac --unpack --skip-python",
@@ -33,7 +37,13 @@
     "start:unpacked:mac": "open release/mac-arm64/LTX\\ Desktop.app",
     "start:unpacked:win": "powershell -Command \"& '.\\release\\win-unpacked\\LTX Desktop.exe'\"",
     "test:frontend": "vitest run",
-    "test": "pnpm run test:frontend && pnpm run backend:test"
+    "e2e": "playwright test",
+    "e2e:ui": "playwright test --ui",
+    "test": "pnpm run test:frontend && pnpm run backend:test",
+    "agent:mcp": "cross-env PYTHONPATH= VIRTUAL_ENV= PYTHONHOME= uv --directory backend run python tfg_mcp.py",
+    "deploy:config": "docker compose -f deploy/docker-compose.yml --env-file deploy/.env config",
+    "backend:dev": "bash scripts/start-backend.sh",
+    "backend:dev:win": "powershell -ExecutionPolicy Bypass -File scripts/start-backend.ps1"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.0",
@@ -48,6 +58,7 @@
     "three": "0.170.0"
   },
   "devDependencies": {
+    "@playwright/test": "1.63.0",
     "@resvg/resvg-js": "^2.6.2",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^20.14.0",

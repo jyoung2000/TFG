@@ -36,6 +36,30 @@ const standalone = isUiStandalone()
 const uiOnly = isUiMockEnabled() || standalone
 
 export default defineConfig({
+  // `python-embed/` is the prepared Python runtime (gitignored) and `Wan2GP/` is a
+  // third-party checkout. Neither is part of the renderer, but Vite's dependency
+  // scanner crawls outward from the config file and descends into them: on a
+  // machine that has run `pnpm prepare:python:win` it tries to pre-bundle gradio's
+  // bundled Svelte app out of `python-embed/Lib/site-packages`, fails on imports it
+  // cannot resolve, and the dev server never becomes ready — so `pnpm dev:ui` and
+  // therefore `pnpm e2e` die with "Timed out waiting ... from config.webServer".
+  //
+  // `optimizeDeps.exclude` only accepts package names, so it cannot say "never scan
+  // this directory"; pinning `entries` to the renderer's own sources is what keeps
+  // the scan honest, and `server.fs.deny` additionally refuses to serve those trees.
+  //
+  // Setting `fs.deny` REPLACES Vite's defaults (`server.fs?.deny || [...]`), so they
+  // are restated here — dropping them would let the dev server hand out `.env` files
+  // and certificates. A pattern without `/` only matches a path named exactly that,
+  // so the directories need `/**` to cover their contents.
+  optimizeDeps: {
+    entries: ['frontend/**/*.{ts,tsx}', 'devtools/ui-mock/**/*.ts'],
+  },
+  server: {
+    fs: {
+      deny: ['.env', '.env.*', '*.{crt,pem}', '**/python-embed/**', '**/Wan2GP/**'],
+    },
+  },
   plugins: [
     react(),
     {
@@ -134,6 +158,17 @@ export default defineConfig({
         },
       }
     : {
-        outDir: 'dist'
+        outDir: 'dist',
+        // Vendor code in its own chunks so the main (app shell) chunk stays small
+        // and cacheable; views are lazy (see App.tsx) and three.js rides with the composer.
+        rollupOptions: {
+          output: {
+            manualChunks(id: string) {
+              if (id.includes('node_modules/react') || id.includes('node_modules/scheduler')) return 'react-vendor'
+              if (id.includes('node_modules/lucide-react')) return 'icons'
+              return undefined
+            },
+          },
+        },
       }
 })

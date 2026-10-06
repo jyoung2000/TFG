@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 
 from api_types import DownloadProgressResponse
 from handlers.base import StateHandlerBase, with_state_lock
+from handlers.jobs_handler import JobsHandler
 from handlers.models_handler import ModelsHandler
 from runtime_config.model_download_specs import MODEL_FILE_ORDER, resolve_required_model_types
 from services.interfaces import ModelDownloader, TaskRunner
@@ -31,8 +32,11 @@ class DownloadHandler(StateHandlerBase):
         model_downloader: ModelDownloader,
         task_runner: TaskRunner,
         config: RuntimeConfig,
+        jobs: JobsHandler | None = None,
     ) -> None:
         super().__init__(state, lock)
+        self._jobs = jobs
+        self._file_jobs: dict[str, str] = {}
         self._models_handler = models_handler
         self._model_downloader = model_downloader
         self._task_runner = task_runner
@@ -105,6 +109,9 @@ class DownloadHandler(StateHandlerBase):
             elapsed = time.monotonic() - start_time
             speed_mbps = (downloaded / elapsed / (1024 * 1024)) if elapsed > 0 else 0.0
             self.update_file_progress(file_type, downloaded, total, speed_mbps)
+            job_id = self._file_jobs.get(file_type, "")
+            if job_id and self._jobs is not None and total > 0:
+                self._jobs.progress(job_id, downloaded / total * 100, f"{downloaded // (1024 * 1024)} / {total // (1024 * 1024)} MB")
             if total <= 0:
                 return
             percent = int((downloaded / total) * 100)
@@ -224,6 +231,14 @@ class DownloadHandler(StateHandlerBase):
             spec = self._config.spec_for(file_type)
             logger.info("Downloading %s from %s", target_name, spec.repo_id)
             progress_cb = self._make_progress_callback(file_type)
+            if self._jobs is not None:
+                self._file_jobs[file_type] = self._jobs.start(
+                    "download",
+                    title=target_name,
+                    model=spec.repo_id,
+                    provider="huggingface",
+                    params={"file_type": file_type, "expected_size_bytes": expected_size},
+                ).id
 
             try:
                 self._config.downloading_dir.mkdir(parents=True, exist_ok=True)
@@ -243,12 +258,18 @@ class DownloadHandler(StateHandlerBase):
                     )
 
                 self._move_to_final(file_type)
-            except Exception:
+            except Exception as exc:
                 self.cleanup_downloading_dir()
+                job_id = self._file_jobs.pop(file_type, "")
+                if job_id and self._jobs is not None:
+                    self._jobs.fail(job_id, str(exc))
                 raise
 
             self.update_file_progress(file_type, expected_size, expected_size, 0)
             self.complete_file(file_type)
+            job_id = self._file_jobs.pop(file_type, "")
+            if job_id and self._jobs is not None:
+                self._jobs.complete(job_id, [str(self._config.model_path(file_type))])
             logger.info("Finished downloading %s", target_name)
 
         self._models_handler.refresh_available_files()

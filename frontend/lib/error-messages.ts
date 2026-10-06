@@ -111,6 +111,6 @@ export function describeError(raw: unknown): FriendlyError {
 }
 
 /** Ask the app shell to open Settings on a tab (handled in App.tsx). */
-export function requestSettings(tab: 'apiKeys' | 'general' | 'inference' | 'about' = 'apiKeys'): void {
+export function requestSettings(tab: 'apiKeys' | 'general' | 'inference' | 'vision' | 'about' = 'apiKeys'): void {
   window.dispatchEvent(new CustomEvent('open-settings', { detail: { tab } }))
 }

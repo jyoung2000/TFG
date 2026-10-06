@@ -1,4 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
+import { APP_NAME } from '../lib/brand'
+import { toFileUrl } from '../lib/file-url'
 
 interface PythonSetupProps {
   onReady: () => void
@@ -46,7 +48,7 @@ export function PythonSetup({ onReady }: PythonSetupProps) {
       try {
         const resourcePath = await window.electronAPI.getResourcePath?.()
         if (resourcePath) {
-          setVideoPath(`file://${resourcePath}/app.asar.unpacked/dist/splash/splash.mp4`)
+          setVideoPath(toFileUrl(`${resourcePath}/app.asar.unpacked/dist/splash/splash.mp4`))
         }
       } catch {
         // Dev mode: use relative path
@@ -107,7 +109,7 @@ export function PythonSetup({ onReady }: PythonSetupProps) {
         // @ts-expect-error - Electron-specific CSS property
         WebkitAppRegion: 'drag'
       }}>
-        <span style={{ fontSize: 13, color: '#a0a0a0' }}>LTX Desktop</span>
+        <span style={{ fontSize: 13, color: '#a0a0a0' }}>{APP_NAME}</span>
       </div>
 
       {/* Main Container */}
