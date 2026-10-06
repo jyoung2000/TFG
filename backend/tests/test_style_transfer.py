@@ -15,7 +15,8 @@ from pathlib import Path
 
 from film.film_models import FilmAsset, FilmAssetStyleGuide
 from film.llm_providers import LLMReply
-from film.style_transfer import USO_MODEL, USO_STEPS, pick_style_images, style_text, transfer_mode, transfer_prompt
+from film.multi_angle import QWEN_EDIT_2511
+from film.style_transfer import QWEN_RESTYLER, USO_MODEL, USO_STEPS, pick_style_images, restyle_model, style_text, transfer_mode, transfer_prompt
 from services.wangp_bridge import WanGPBridge
 from tests.test_asset_angles import FLUX2, _image_params, _png
 from tests.test_styleguide_shots import _find_shot, _install_qwen, _raven, _shot
@@ -62,6 +63,14 @@ def test_uso_takes_the_picture_then_two_styles_klein_one() -> None:
     assert uso == "a girl on a pier. Art style: pastel watercolor."
 
 
+def test_the_restyler_is_qwen_only_with_lightning_then_uso() -> None:
+    installed = {QWEN_RESTYLER, USO_MODEL, "flux2_klein_4b"}
+    assert restyle_model(installed.__contains__, fast_qwen=True) == QWEN_RESTYLER
+    assert restyle_model(installed.__contains__, fast_qwen=False) == USO_MODEL, "30-step Qwen is unaffordable"
+    assert restyle_model({"flux2_klein_4b"}.__contains__, fast_qwen=True) == "flux2_klein_4b"
+    assert restyle_model(frozenset().__contains__, fast_qwen=True) is None
+
+
 def test_graded_style_pictures_lead_and_rejected_ones_never_go() -> None:
     picked = pick_style_images(["a", "b", "c"], rejected=lambda p: p == "a", liked=lambda p: p == "c", count=2)
     assert picked == ["c", "b"]
@@ -90,7 +99,7 @@ def test_the_bridge_finds_weights_in_the_configs_other_checkpoint_folders(tmp_pa
 # ---- restyling a picture ---------------------------------------------------
 
 
-def test_a_picture_is_redrawn_in_the_style_by_uso_from_its_pictures(client, test_state, fake_services, create_fake_model_files):
+def test_a_picture_is_redrawn_in_the_style_by_uso_when_qwen_is_missing(client, test_state, fake_services, create_fake_model_files):
     create_fake_model_files(include_zit=True)
     _local(client, test_state, fake_services, FLUX2, USO)
     style = _style(client)
@@ -150,6 +159,8 @@ def test_only_a_style_asset_restyles_and_only_with_a_model(client, test_state, f
 
 
 def test_a_mentioned_style_draws_the_shot_frame_in_it(client, test_state, fake_services, create_fake_model_files):
+    """With Qwen-Edit + Lightning installed the frames are redrawn by it: the
+    cast keeps its faces (USO drifted them: SFace 0.282 live, 2026-10-06)."""
     create_fake_model_files(include_zit=True)
     raven = _raven(client, test_state, fake_services)
     _install_qwen(test_state, fake_services)
@@ -163,8 +174,10 @@ def test_a_mentioned_style_draws_the_shot_frame_in_it(client, test_state, fake_s
     assert "photorealistic" not in start["prompt"] and "art style: soft watercolor" in start["prompt"]
     assert Path(start["image_refs"][0]).name == Path(raven["reference_images"][0]).name
     for restyle, frame in ((restyle_start, "-frame.png"), (restyle_end, "-frame-end.png")):
-        assert restyle["model_type"] == USO_MODEL and Path(restyle["image_refs"][0]).name.endswith(frame)
+        assert restyle["model_type"] == QWEN_EDIT_2511 and Path(restyle["image_refs"][0]).name.endswith(frame)
         assert [Path(p).name for p in restyle["image_refs"][1:]] == [Path(style["reference_images"][0]).name]
+        assert "Repaint picture 1" in restyle["prompt"] and "exactly the same faces" in restyle["prompt"]
+        assert any("Lightning" in Path(p).name for p in restyle["activated_loras"])
     assert _find_shot(client, shot_id)["frame_path"].endswith("-frame.png")
 
 

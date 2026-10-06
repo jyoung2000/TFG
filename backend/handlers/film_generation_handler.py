@@ -79,7 +79,7 @@ from film.film_models import (
     now_ms,
 )
 from film.asset_mentions import mentioned_styles, with_mentions
-from film.style_transfer import STYLE_TRANSFER_MODELS, USO_MODEL, USO_STEPS, pick_style_images, style_slots, style_text, transfer_mode, transfer_prompt
+from film.style_transfer import QWEN_RESTYLER, USO_MODEL, USO_STEPS, pick_style_images, restyle_model, style_slots, style_text, transfer_mode, transfer_prompt
 from film.film_prompt import synthesize_negative_prompt, synthesize_prompt
 from handlers.base import StateHandlerBase
 from handlers.film_handler import FilmHandler
@@ -1238,6 +1238,20 @@ class FilmGenerationHandler(StateHandlerBase):
             controlStrength=version.control_strength if version.control_video_path else None,
         )
         model_type = self._video_generation.render_model_for(request)
+        if model_type.startswith("ltx2") and control_video is None and depth_video is None:
+            # LTX2's Ingredients pass: the cast's identity images ride INTO the render
+            # as references (WanGP auto-loads ic-lora-ingredients for "I" refs,
+            # models/ltx2/ltx2.py), so identity holds through the whole clip, not
+            # only the first frame. Not with a control video: the engine's gate
+            # turns ingredients off next to any control letters.
+            cast = [project.asset(c.asset_id) for c in cast_shot.characters] + [project.asset(p) for p in cast_shot.prop_ids]
+            ingredients: list[str] = []
+            for asset in cast:
+                image = self._identity_image(job.project_id, asset, "") if asset is not None else None
+                if image is not None:
+                    ingredients.append(str(image))
+            if ingredients:
+                request = request.model_copy(update={"referenceImagePaths": ingredients[:4]})
         if image_path is None and "i2v" in model_type.lower():
             # An image-to-video model takes its people from the first frame: compose
             # one from the style guide first (and keep it on the storyboard).
@@ -1749,10 +1763,11 @@ class FilmGenerationHandler(StateHandlerBase):
         if styles and styles[0].reference_images:
             # Then redrawn in the style from its pictures (USO, else Klein): the words
             # alone gave a photo whatever the style said.
-            model = self._style_model()
-            if model is not None:
+            chosen = self._style_model()
+            if chosen is not None:
+                model, style_loras = chosen
                 for file in [frame_file, *([captures / f"{shot.id}-frame-end.png"] if end_relative else [])]:
-                    out, _ = self._restyle(handler, model, project_id, styles[0], file)
+                    out, _ = self._restyle(handler, model, project_id, styles[0], file, loras=style_loras)
                     file.write_bytes(out.read_bytes())
         with self.lock:
             project = self._film.store.load(project_id)
@@ -1810,12 +1825,18 @@ class FilmGenerationHandler(StateHandlerBase):
             raise HTTPError(502, "The image model did not return a frame")
         return Path(paths[0])
 
-    def _style_model(self) -> str | None:
-        """The installed style-transfer model, best first (film/style_transfer.py)."""
+    def _style_model(self) -> tuple[str, list[LoraUse]] | None:
+        """The installed model that redraws a picture keeping its subject, and the
+        LoRAs it needs (film/style_transfer.py): Qwen-Edit-2511 with Lightning,
+        else USO, else Klein."""
         handler = self._image_generation
         if handler is None:
             return None
-        return next((m for m in STYLE_TRANSFER_MODELS if handler.model_installed(m)), None)
+        composer = self._style_composer()
+        model = restyle_model(handler.model_installed, fast_qwen=composer is not None)
+        if model is None:
+            return None
+        return model, (composer or []) if model == QWEN_RESTYLER else []
 
     def _style_images(self, project_id: str, style: FilmAsset, count: int) -> list[str]:
         """`count` of the style's pictures on disk, the user's grades deciding which."""
@@ -1836,7 +1857,7 @@ class FilmGenerationHandler(StateHandlerBase):
 
     def _restyle(
         self, handler: ImageGenerationHandler, model: str, project_id: str, style: FilmAsset, source: Path,
-        *, subject: str = "", seed: int | None = None,
+        *, subject: str = "", seed: int | None = None, loras: list[LoraUse] | None = None,
     ) -> tuple[Path, list[str]]:
         """`source` redrawn in `style` by `model`: the picture first, then the style's."""
         images = self._style_images(project_id, style, style_slots(model))
@@ -1849,7 +1870,7 @@ class FilmGenerationHandler(StateHandlerBase):
         request = GenerateImageRequest(
             prompt=transfer_prompt(model, style_text(style), subject=subject, styles=len(images)),
             width=width, height=height, numImages=1, model=model, faceLock=False, outfitLock=False,
-            numSteps=USO_STEPS if model == USO_MODEL else 4,
+            numSteps=USO_STEPS if model == USO_MODEL else 4, loras=loras or [],
         )
         response = handler.generate(
             request, seed=seed, reference_images=[str(source), *images], reference_mode=transfer_mode(model, has_content=True),
@@ -1871,9 +1892,10 @@ class FilmGenerationHandler(StateHandlerBase):
             raise HTTPError(404, f"Asset not found: {style_id}")
         if style.kind != "style":
             raise HTTPError(400, f"{style.name} is a {style.kind}, not a style")
-        model = self._style_model()
-        if model is None:
+        chosen = self._style_model()
+        if chosen is None:
             raise HTTPError(400, "No style-transfer model is installed: download FLUX.1 USO Dev or FLUX.2 Klein in the Models tab")
+        model, style_loras = chosen
         relatives: list[str] = []
         if req.shot_id:
             found = project.find_shot(req.shot_id)
@@ -1900,7 +1922,7 @@ class FilmGenerationHandler(StateHandlerBase):
                 raise HTTPError(400, f"Image not found: {relative}") from exc
             if not source.is_file():
                 raise HTTPError(400, f"Image not found: {relative}")
-            out, used = self._restyle(handler, model, project_id, style, source, subject=req.subject, seed=req.seed)
+            out, used = self._restyle(handler, model, project_id, style, source, subject=req.subject, seed=req.seed, loras=style_loras)
             name = f"{Path(relative).stem}-{slug}-{now_ms()}.png"
             (captures / name).write_bytes(out.read_bytes())
             made.append(f"captures/{name}")

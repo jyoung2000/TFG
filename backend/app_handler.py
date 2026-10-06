@@ -39,6 +39,7 @@ from handlers.reproduce_handler import ReproduceHandler
 from handlers.video_reproduce_handler import VideoReproduceHandler
 from handlers.scene_handler import SceneHandler
 from handlers.training_handler import TrainingHandler
+from film.multi_angle import ANGLES_LORA_FOLDER, LIGHTNING_LORA_FILE
 from handlers.style_library_handler import StyleLibraryHandler
 from handlers.taste_handler import TasteHandler
 from handlers.wangp_server_handler import WanGPServerHandler
@@ -558,6 +559,7 @@ class AppHandler:
             analysis_root=config.outputs_dir / "video_analyses",
         )
         self.film_generation.attach_training(self.training, self.vision, self._face_matcher)
+        self.styles.attach_lightning(self.training.lora_root() / ANGLES_LORA_FOLDER / LIGHTNING_LORA_FILE)
         # Settings → Models: what is installed, uninstall, where it is stored.
         training = self.training
         self.model_store = ModelStoreHandler(

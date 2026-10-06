@@ -26,8 +26,16 @@ from film.film_models import FilmAsset
 
 #: FLUX.1 USO Dev: WanGP's style-transfer model (defaults/flux_dev_uso.json).
 USO_MODEL = "flux_dev_uso"
-#: Transfer models, best first. Klein is the installed fallback (4 steps, Apache 2.0).
+#: Qwen-Image-Edit-2511 (film/multi_angle.py QWEN_EDIT_2511): the instruction editor
+#: that keeps a picture's subject while changing how it is drawn.
+QWEN_RESTYLER = "qwen_image_edit_plus2_20B"
+#: Models that draw NEW pictures in a style, best first (USO reads style pictures).
 STYLE_TRANSFER_MODELS: tuple[str, ...] = (USO_MODEL, "flux2_klein_9b", "flux2_klein_4b")
+#: Models that REDRAW an existing picture in a style, identity first.
+#: MEASURED (RTX 4070, 2026-10-06, live_identity.py: a photo restyled to watercolor,
+#: SFace vs the photo, 0.363 = same person): Qwen-Edit-2511 + the style picture kept
+#: the face at 0.714; words-only Qwen 0.497; USO 0.282 (a different person).
+RESTYLE_MODELS: tuple[str, ...] = (QWEN_RESTYLER, USO_MODEL, "flux2_klein_9b", "flux2_klein_4b")
 #: FLUX.1 Dev is not a few-step model: 4 steps is noise; ~28 is its usual count.
 USO_STEPS = 28
 
@@ -47,6 +55,17 @@ def style_text(style: FilmAsset) -> str:
         if guide.mood.strip():
             bits.append(f"mood: {guide.mood.strip()}")
     return "; ".join(bits) or style.name.strip()
+
+
+def restyle_model(installed: Callable[[str], bool], *, fast_qwen: bool) -> str | None:
+    """The installed model that redraws a picture keeping its subject. Qwen only
+    with its Lightning LoRA (8 steps; 30 undistilled steps took ~10 min, 2026-10-04)."""
+    for model in RESTYLE_MODELS:
+        if model == QWEN_RESTYLER and not fast_qwen:
+            continue
+        if installed(model):
+            return model
+    return None
 
 
 def style_slots(model: str, *, has_content: bool = True) -> int:
@@ -70,8 +89,24 @@ def transfer_mode(model: str, *, has_content: bool) -> str:
     return "KI" if has_content else "I"
 
 
+def restyle_prompt(style: str, *, subject: str = "", styles: int = 1) -> str:
+    """Qwen-Edit-2511's instruction: repaint, change nothing but the rendering."""
+    style = style.strip().rstrip(".")
+    pictures = "picture 2" if styles == 1 else f"pictures 2 to {styles + 1}"
+    content = f", showing {subject.strip().rstrip('.')}" if subject.strip() else ""
+    return (
+        f"Repaint picture 1 entirely in the art style of {pictures}"
+        + (f": {style}" if style else "")
+        + f". Keep picture 1's content{content}: the same people with exactly the same faces, identities, hair colours and hairstyles, "
+        "outfits, poses and framing, the same objects and the same background layout. "
+        "Change only how it is drawn, like a frame of an animated film."
+    )
+
+
 def transfer_prompt(model: str, style: str, *, subject: str = "", styles: int = 1) -> str:
     """The prompt of a transfer of `subject` (or the content picture) into `style`."""
+    if model == QWEN_RESTYLER:
+        return restyle_prompt(style, subject=subject, styles=styles)
     style = style.strip().rstrip(".")
     if model == USO_MODEL:
         # USO reads the style from its style pictures; the prompt names the content.

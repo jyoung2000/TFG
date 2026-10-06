@@ -27,7 +27,8 @@ from api_types import GenerateImageRequest, GenerateImageResponse, GenerateVideo
 from film.film_models import FilmAsset, FilmAssetStyleGuide, new_id, now_ms
 from film.llm_providers import LLMProvider
 from film.style_extraction import StyleReadError, read_style, style_prompt_of
-from film.style_transfer import STYLE_TRANSFER_MODELS, USO_MODEL, USO_STEPS, pick_style_images, style_slots, style_text, transfer_mode, transfer_prompt
+from api_types import LoraUse
+from film.style_transfer import QWEN_RESTYLER, STYLE_TRANSFER_MODELS, USO_MODEL, USO_STEPS, pick_style_images, restyle_model, style_slots, style_text, transfer_mode, transfer_prompt
 from handlers.image_generation_handler import ImageGenerationHandler
 from handlers.taste_handler import TasteHandler
 
@@ -50,7 +51,13 @@ class StyleLibraryHandler:
         self._root = root
         self._images = image_generation
         self._taste = taste
+        #: Qwen-Edit-2511's Lightning LoRA (wired in app_handler): without it the
+        #: identity-keeping restyler is unaffordable (30 steps) and USO is used.
+        self._lightning: Path | None = None
         self._lock = threading.Lock()
+
+    def attach_lightning(self, lora: Path) -> None:
+        self._lightning = lora
 
     # ---- store ---------------------------------------------------------------
 
@@ -149,6 +156,15 @@ class StyleLibraryHandler:
     def _transfer_model(self) -> str | None:
         return next((m for m in STYLE_TRANSFER_MODELS if self._images.model_installed(m)), None)
 
+    def _restyle_model(self) -> tuple[str, list[LoraUse]] | None:
+        """The installed model that redraws a picture keeping its subject, with its LoRAs."""
+        fast = self._lightning is not None and self._lightning.is_file()
+        model = restyle_model(self._images.model_installed, fast_qwen=fast)
+        if model is None:
+            return None
+        loras = [LoraUse(name=str(self._lightning), multiplier=1.0)] if model == QWEN_RESTYLER and self._lightning else []
+        return model, loras
+
     def generate_image(self, req: GenerateImageRequest) -> GenerateImageResponse:
         """`req` drawn in its saved style: USO from the style's pictures in one pass,
         else the request's own model, each image then redrawn by Klein."""
@@ -164,12 +180,17 @@ class StyleLibraryHandler:
         response = self._images.generate(styled)
         if model is None or response.status != "complete" or not response.image_paths:
             return response
-        response.image_paths = [str(self.restyle(style, Path(p), model=model, subject=req.prompt)) for p in response.image_paths]
+        response.image_paths = [str(self.restyle(style, Path(p), subject=req.prompt)) for p in response.image_paths]
         return response
 
     def restyle(self, style: SavedStyle, source: Path, *, model: str | None = None, subject: str = "") -> Path:
-        """`source` redrawn in `style` (the picture first, then the style's)."""
-        model = model or self._transfer_model()
+        """`source` redrawn in `style` (the picture first, then the style's), by the
+        model that keeps the subject (film/style_transfer.py RESTYLE_MODELS)."""
+        loras: list[LoraUse] = []
+        if model is None:
+            chosen = self._restyle_model()
+            if chosen is not None:
+                model, loras = chosen
         if model is None:
             raise HTTPError(400, "No style-transfer model is installed: download FLUX.1 USO Dev or FLUX.2 Klein in the Models tab")
         pictures = self._pictures(style, style_slots(model))
@@ -183,6 +204,7 @@ class StyleLibraryHandler:
                 prompt=transfer_prompt(model, style_text(self._asset(style)), subject=subject, styles=len(pictures)),
                 width=max(256, int(width * scale) // 16 * 16), height=max(256, int(height * scale) // 16 * 16),
                 numImages=1, model=model, numSteps=USO_STEPS if model == USO_MODEL else 4, faceLock=False, outfitLock=False,
+                loras=loras,
             ),
             reference_images=[str(source), *pictures], reference_mode=transfer_mode(model, has_content=True),
         )
