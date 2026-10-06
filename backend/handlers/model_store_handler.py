@@ -383,7 +383,9 @@ class ModelStoreHandler:
             if _is_junction(path):
                 os.rmdir(path)  # removes the link, not the files
             path.parent.mkdir(parents=True, exist_ok=True)
-            _winapi.CreateJunction(str(target), str(path))
+            # Windows only (move_area refuses elsewhere): not in the typeshed stub for Linux.
+            create_junction = cast(Callable[[str, str], None], getattr(_winapi, "CreateJunction"))
+            create_junction(str(target), str(path))
             with self._lock:
                 self._move.copied_bytes = self._move.total_bytes
         except Exception as exc:  # noqa: BLE001 - reported to the Settings screen

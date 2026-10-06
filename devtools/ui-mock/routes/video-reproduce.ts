@@ -171,7 +171,8 @@ export function registerVideoReproduceRoutes(router: Router, store: Store, clipU
     const job = find(store.data, req.params.id)
     const path = req.query.get('path') ?? ''
     const clips = new Set(job.shots.flatMap(s => s.candidates.map(c => c.path)).filter(Boolean))
-    if (path === job.stitched_path || clips.has(path)) {
+    // "source" is the analysed original (backend video_reproduce_handler), shown beside the takes.
+    if (path === 'source' || path === job.stitched_path || clips.has(path)) {
       if (!clipUrl) throw new MockHttpError(404, 'No sample clip configured')
       return new RawResponse(302, { location: clipUrl }, null)
     }
